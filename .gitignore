@@ -1,0 +1,186 @@
+# ============================================================================
+# Dependencies
+# ============================================================================
+node_modules/
+.pnpm-store/
+jspm_packages/
+
+# ============================================================================
+# Build outputs
+# ============================================================================
+dist/
+build/
+out/
+*.tsbuildinfo
+.turbo/
+.next/
+.nuxt/
+.cache/
+.parcel-cache/
+
+# ============================================================================
+# Test coverage
+# ============================================================================
+coverage/
+*.lcov
+.nyc_output/
+
+# ============================================================================
+# Logs
+# ============================================================================
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# ============================================================================
+# Environment / secrets
+# ============================================================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+.secret
+secrets/
+
+# ============================================================================
+# Claude Code / AI workspaces (per-user, not project)
+# ============================================================================
+CLAUDE.md
+.claude/
+.claude-code/
+.anthropic/
+.aider*
+.cursor/
+.cursor-rules
+.continue/
+.copilot/
+.github-copilot/
+
+# ============================================================================
+# IDE / editors
+# ============================================================================
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains (IntelliJ, WebStorm, PyCharm, etc.)
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*.swn
+.*.swp
+.*.swo
+Session.vim
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+.\#*
+.dir-locals.el
+auto-save-list/
+tramp
+
+# Zed
+.zed/
+
+# Helix
+.helix/
+
+# TextMate
+*.tmproj
+*.tmproject
+tmtags
+
+# Nano
+*.save
+
+# Fleet
+.fleet/
+
+# ============================================================================
+# OS — macOS
+# ============================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.DocumentRevisions-V100
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+Icon
+
+# ============================================================================
+# OS — Windows
+# ============================================================================
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.stackdump
+[Dd]esktop.ini
+
+# ============================================================================
+# OS — Linux
+# ============================================================================
+.directory
+.Trash-*
+.nfs*
+.fuse_hidden*
+
+# ============================================================================
+# Temp / backup files
+# ============================================================================
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+.tmp/
+tmp/
+
+# ============================================================================
+# Loom runtime artefacts (dev / fixture projects)
+# ============================================================================
+state.db
+state.db-wal
+state.db-shm
+metrics.db
+metrics.db-wal
+metrics.db-shm
+ledger-blobs/
+*.sqlite
+*.sqlite-journal
+
+# ============================================================================
+# Misc package managers (we use pnpm — fail loud if others appear)
+# ============================================================================
+# (intentionally NOT ignoring package-lock.json / yarn.lock — if they appear,
+# we want to see and remove them, not silently coexist)

@@ -8,6 +8,6 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "test": "tsc && node --test dist/test/*.js"
+    "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   }
 }

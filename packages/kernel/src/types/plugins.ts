@@ -26,6 +26,13 @@ export interface PluginMeta {
 // bundles extend via `Bundle.extends_vocab.output_kinds` per the
 // kernel-additive enum convention. Runtime validation refuses values
 // outside `KernelVocabularies.output_kinds.all`.
+//
+// `nonreview` is kernel-baseline because the agent-result builder
+// reads it in a structural switch: an output flagged `nonreview` skips
+// the JSON-fence / findings-parsing branches and returns the bare
+// agent result. Removing the literal would force every downstream
+// caller that exercises that switch to declare a bundle-extension
+// just to opt into kernel-shipped persistence behavior.
 export type AgentOutputKind =
   | "reviewer"
   | "validator"

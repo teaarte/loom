@@ -27,6 +27,7 @@ describe("claudeCodeShuttleProvider", () => {
     assert.equal(capabilities.reports_usage, false);
     assert.deepEqual(capabilities.features, []);
     assert.deepEqual(capabilities.models, []);
+    assert.equal(capabilities.honors_mcp_whitelist, true);
   });
 
   it("returns a shuttle-typed ProviderResult", async () => {

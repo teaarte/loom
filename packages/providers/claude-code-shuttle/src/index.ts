@@ -25,7 +25,7 @@ export const claudeCodeShuttleProvider: LLMProvider = {
     reports_usage: false,
     features: [],
     models: [],
-    // honors_mcp_whitelist: true — wire when the loader contract grows the field.
+    honors_mcp_whitelist: true,
   },
   spawn(req: ProviderSpawnRequest): Promise<ProviderResult> {
     const intent: ProviderShuttleIntent = {

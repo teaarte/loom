@@ -93,7 +93,7 @@ function buildProvider(getClient: () => OpenRouterClientLike): LLMProvider {
       reports_usage: true,
       features: [],
       models: [],
-      // honors_mcp_whitelist: true — wire when the loader contract grows the field.
+      honors_mcp_whitelist: true,
     },
     agent_tools: [],
     async spawn(req: ProviderSpawnRequest): Promise<ProviderResult> {

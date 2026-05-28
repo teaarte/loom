@@ -36,7 +36,17 @@ export interface Registry {
 }
 
 export interface ProviderRegistry {
-  resolve(agent: string, state: PipelineState): LLMProvider;
+  // `phase` is optional so callers that do not have phase context
+  // (e.g. the spawn-resolver in `ctx.resolve_provider(agent)`)
+  // continue to compile. The router consults phase_routing only
+  // when the caller supplies the third argument.
+  resolve(agent: string, state: PipelineState, phase?: string): LLMProvider;
+  // Sibling lookup the spawn caller may use to obtain the routed
+  // model name without duplicating the cascade. Optional on the
+  // interface — registry stubs in tests and the legacy MVP shape
+  // do not implement it; the production router that ships from
+  // `createProviderRouter` always does.
+  resolveModel?(agent: string, state: PipelineState, phase?: string): string | null;
   all: LLMProvider[];
   health_check_all: Promise<{ name: string; healthy: boolean; reason?: string }[]>;
 }

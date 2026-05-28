@@ -15,7 +15,11 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  packages/bundles/code: {}
+  packages/bundles/code:
+    dependencies:
+      '@loom/kernel':
+        specifier: workspace:*
+        version: link:../../kernel
 
   packages/cli: {}
 

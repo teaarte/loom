@@ -61,6 +61,7 @@ describe("createAnthropicSdkProvider", () => {
     assert.equal(provider.capabilities.reports_usage, true);
     assert.deepEqual(provider.capabilities.features, ["prompt_caching"]);
     assert.deepEqual(provider.capabilities.models, []);
+    assert.equal(provider.capabilities.honors_mcp_whitelist, true);
     assert.deepEqual(provider.agent_tools, []);
   });
 

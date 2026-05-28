@@ -359,10 +359,44 @@ function makeBundleScratchTx(
   return {
     read: {
       pipeline_state: () => state,
-      findings: () => [],
-      agent_records: () => [],
-      audit: () => [],
-      bundle_table: () => [],
+      // The four heavy read accessors fail loud rather than returning
+      // an empty collection. An empty array could be read as "no rows
+      // exist" when in fact no SELECT ran; the throw routes that
+      // ambiguity to a typed refusal until pre-materialization wires
+      // through this surface. `pipeline_state` stays real — the
+      // snapshot is already on hand.
+      findings: () => {
+        throw new KernelError({
+          code: "READ_NOT_WIRED",
+          message:
+            "BundleScratchTx.read.findings is not wired — pre-materialization for the bundle-facing read surface has not landed",
+          detail: { accessor: "findings" },
+        });
+      },
+      agent_records: () => {
+        throw new KernelError({
+          code: "READ_NOT_WIRED",
+          message:
+            "BundleScratchTx.read.agent_records is not wired — pre-materialization for the bundle-facing read surface has not landed",
+          detail: { accessor: "agent_records" },
+        });
+      },
+      audit: () => {
+        throw new KernelError({
+          code: "READ_NOT_WIRED",
+          message:
+            "BundleScratchTx.read.audit is not wired — pre-materialization for the bundle-facing read surface has not landed",
+          detail: { accessor: "audit" },
+        });
+      },
+      bundle_table: () => {
+        throw new KernelError({
+          code: "READ_NOT_WIRED",
+          message:
+            "BundleScratchTx.read.bundle_table is not wired — pre-materialization for the bundle-facing read surface has not landed",
+          detail: { accessor: "bundle_table" },
+        });
+      },
     },
     set_decision(key: string, value: unknown) {
       ops.push({ op: "set_decision", key, value });

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   captureNow,
@@ -519,6 +520,53 @@ describe("reconcileExtensions — load_error path", () => {
 // ============================================================================
 // reconcileExtensions — re-enable after a fix in a follow-up sweep
 // ============================================================================
+
+// Walk up from this test file until pnpm-workspace.yaml is found. The
+// kernel package and its dist/test layout are nested several levels
+// deep from the repo root; computing the walk inline avoids hard-
+// coding a count of `..` that would silently break if the layout
+// shifts.
+function findWorkspaceRoot(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
+    const parent = resolve(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error("could not locate workspace root from " + fileURLToPath(import.meta.url));
+}
+
+describe("discoverExtensions — real workspace integration", () => {
+  let projectDir: string;
+  beforeEach(() => { projectDir = freshProject(); });
+  afterEach(() => cleanup(projectDir));
+
+  it("finds the four curated manifests shipped at the package roots", async () => {
+    const workspaceRoot = findWorkspaceRoot();
+    const report = await discoverExtensions({
+      workspace_root: workspaceRoot,
+      project_dir: projectDir,
+      now: captureNow(),
+    });
+
+    const installedSet = new Set(report.installed);
+    const expected = [
+      "bundle:code",
+      "provider:anthropic-sdk",
+      "provider:claude-code-shuttle",
+      "provider:openrouter",
+    ];
+    for (const id of expected) {
+      assert.ok(
+        installedSet.has(id),
+        `expected ${id} in report.installed; got ${[...installedSet].join(", ")}` +
+          ` (failed=${JSON.stringify(report.failed)})`,
+      );
+    }
+    assert.deepEqual(report.failed, []);
+  });
+});
 
 describe("reconcileExtensions — failed → enabled transition", () => {
   let projectDir: string;

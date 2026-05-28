@@ -9,6 +9,6 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "lint:no-ambient-clock": "node scripts/no-ambient-clock.mjs",
-    "test": "tsc && pnpm lint:no-ambient-clock && node --experimental-sqlite --no-warnings --test dist/test/*.js"
+    "test": "tsc && pnpm lint:no-ambient-clock && node --experimental-sqlite --experimental-strip-types --no-warnings --test dist/test/*.js"
   }
 }

@@ -90,7 +90,7 @@ function buildProvider(getClient: () => AnthropicSdkClientLike): LLMProvider {
       reports_usage: true,
       features: ["prompt_caching"],
       models: [],
-      // honors_mcp_whitelist: true — wire when the loader contract grows the field.
+      honors_mcp_whitelist: true,
     },
     agent_tools: [],
     async spawn(req: ProviderSpawnRequest): Promise<ProviderResult> {

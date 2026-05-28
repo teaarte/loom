@@ -42,6 +42,15 @@ export type {
   ExtensionId,
   ReconciliationReport,
 } from "./extension-loader.js";
-export { loadBundle } from "./bundle-loader.js";
-export type { LoadBundleOptions } from "./bundle-loader.js";
+export { loadBundle } from "./bundle-loader/index.js";
+export type { LoadBundleOptions } from "./bundle-loader/index.js";
 export { buildVocabularies } from "./vocabularies.js";
+export { createProviderRouter } from "./provider-router.js";
+export type {
+  ProvidersConfig,
+  ProviderRoute,
+  ProviderRouterOptions,
+  ProviderOverride,
+  TierAlias,
+  ModelOverride,
+} from "./provider-router.js";

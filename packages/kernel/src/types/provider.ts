@@ -87,6 +87,12 @@ export interface LLMProvider extends PluginMeta {
     streaming_resume?: "from_state" | "restart" | "fail";
     features?: string[];
     models?: string[];
+    // Provider attests it honors the bundle's MCP tool whitelist when
+    // spawning agents. Optional so providers that have not yet wired
+    // the gate can still type-check; the loader gains a refusal when a
+    // provider declaring `agent_tools` that contains a Bash tool ships
+    // without setting this to `true`.
+    honors_mcp_whitelist?: boolean;
   };
   spawn(request: ProviderSpawnRequest): Promise<ProviderResult>;
   agent_tools?: ToolDefinition[];

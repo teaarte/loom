@@ -542,7 +542,7 @@ describe("discoverExtensions — real workspace integration", () => {
   beforeEach(() => { projectDir = freshProject(); });
   afterEach(() => cleanup(projectDir));
 
-  it("finds the four curated manifests shipped at the package roots", async () => {
+  it("finds the five curated manifests shipped at the package roots", async () => {
     const workspaceRoot = findWorkspaceRoot();
     const report = await discoverExtensions({
       workspace_root: workspaceRoot,
@@ -555,6 +555,7 @@ describe("discoverExtensions — real workspace integration", () => {
       "bundle:code",
       "provider:anthropic-sdk",
       "provider:claude-code-shuttle",
+      "provider:ollama",
       "provider:openrouter",
     ];
     for (const id of expected) {

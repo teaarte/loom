@@ -41,7 +41,7 @@ function isoDate(now?: NowToken): string {
   // NowToken is an ISO-8601 string by construction (see types.ts).
   // Replay paths thread it through; mint-time fallback reads the wall
   // clock directly — the only place this is allowed.
-  const iso = now ?? (new Date().toISOString() as NowToken);
+  const iso = now ?? (new Date().toISOString() as NowToken); // allow-ambient-clock: mint-time fallback for ID generators (documented exception in types/now.ts)
   // Slice the YYYY-MM-DD prefix. ISO format guarantees `[10]` is "T".
   return iso.slice(0, 10);
 }

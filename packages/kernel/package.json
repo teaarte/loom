@@ -8,6 +8,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
+    "lint:no-ambient-clock": "node scripts/no-ambient-clock.mjs",
+    "test": "tsc && pnpm lint:no-ambient-clock && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   }
 }

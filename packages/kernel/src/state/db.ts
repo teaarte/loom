@@ -51,7 +51,7 @@ export class KernelError extends Error {
 // The returned token is ISO-8601 UTC by construction and matches the
 // NowToken brand.
 export function captureNow(): NowToken {
-  return new Date().toISOString() as NowToken;
+  return new Date().toISOString() as NowToken; // allow-ambient-clock: documented mint-time clock read; every other timestamp reads tx.now
 }
 
 // ============================================================================
@@ -161,7 +161,7 @@ function runMigrations(db: DatabaseSync): void {
       // Migration apply runs at process start, before any FSM tick
       // has captured a NowToken — the applied_at stamp is documented
       // as an ambient-clock allowance alongside captureNow() and ids.ts.
-      const appliedAt = new Date().toISOString();
+      const appliedAt = new Date().toISOString(); // allow-ambient-clock: migration apply runs before any FSM tick has captured a NowToken
       db.prepare("INSERT INTO kernel_schema_versions VALUES (?, ?, ?)").run(
         component,
         KERNEL_SCHEMA_VERSION,

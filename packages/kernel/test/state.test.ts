@@ -320,10 +320,19 @@ describe("loadState — rich snapshot materialization", () => {
 
       // Phases referenced by agent_verdicts must exist via the FK on
       // agent_records — verdicts themselves don't FK, but a realistic
-      // snapshot has both, so we seed both.
+      // snapshot has both, so we seed both. `allow_empty` on the
+      // completed phase declares it's legitimately agent-record-free
+      // so the kernel completion-coverage invariant passes.
       await tx.exec(
-        "INSERT INTO phases (name, status, updated_at) VALUES (?, 'completed', ?), (?, 'in_progress', ?)",
-        ["context", seedNow, "planning", seedNow],
+        "INSERT INTO phases (name, status, phase_extension, updated_at) " +
+          "VALUES (?, 'completed', ?, ?), (?, 'in_progress', NULL, ?)",
+        [
+          "context",
+          JSON.stringify({ allow_empty: true }),
+          seedNow,
+          "planning",
+          seedNow,
+        ],
       );
 
       await tx.exec(
@@ -427,6 +436,43 @@ describe("loadState — rich snapshot materialization", () => {
       assert.equal(state.pending_agents[0]?.agent_run_id, "ar-fixture-0001");
       assert.equal(state.pending_agents[0]?.phase, "planning");
       assert.equal(state.pending_agents[0]?.model, "balanced");
+    });
+  });
+});
+
+describe("withStateTransaction — invariant rollback", () => {
+  let projectDir: string;
+  beforeEach(() => { projectDir = freshProject(); });
+  afterEach(() => cleanup(projectDir));
+
+  it("violation thrown by runInvariants rolls back the in-flight write", async () => {
+    await seedBaseline(projectDir);
+
+    // Insert a skipped phase without a skipped_reason — the kernel
+    // shape invariant for skipped phases trips on this exact case.
+    await assert.rejects(
+      withStateTransaction(projectDir, captureNow(), async (tx) => {
+        await tx.exec(
+          "INSERT INTO phases (name, status, updated_at) VALUES (?, ?, ?)",
+          ["planning", "skipped", captureNow()],
+        );
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError, `expected KernelError, got ${err}`);
+        assert.equal((err as KernelError).code, "INVARIANT_VIOLATION");
+        const detail = (err as KernelError).detail;
+        assert.ok(detail !== undefined, "violation detail should be attached");
+        return true;
+      },
+    );
+
+    // The attempted write must be absent after the rollback —
+    // loadState should still see zero phases.
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      const row = await tx.queryRow<{ c: number }>(
+        "SELECT COUNT(*) AS c FROM phases",
+      );
+      assert.equal(Number(row?.c), 0);
     });
   });
 });

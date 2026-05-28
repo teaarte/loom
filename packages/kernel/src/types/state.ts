@@ -98,11 +98,6 @@ export interface BundleStateView {
   now: NowToken;
 }
 
-export declare function narrowStateForBundle(
-  state: PipelineState,
-  now: NowToken,
-): BundleStateView;
-
 // Returned by pipeline_state_get — shape varies by `format` param.
 export type PipelineStateView =
   | { format: "summary"; summary: Record<string, unknown> }

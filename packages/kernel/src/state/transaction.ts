@@ -3,12 +3,13 @@
 // `TransactionImpl` implements the kernel-internal Transaction interface
 // over a node:sqlite DatabaseSync handle. `withStateTransaction` opens
 // BEGIN IMMEDIATE, hands the wrapped handle to the caller's fn, runs
-// pre-commit hooks (validateState + runInvariants stubs), then commits
-// — or rolls back on any throw. STATE_BUSY is translated once at this
+// pre-commit hooks (validateState + runInvariants), then commits — or
+// rolls back on any throw. STATE_BUSY is translated once at this
 // boundary so callers never see a raw driver code.
 
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 
+import { runInvariants } from "../invariants.js";
 import type { NowToken } from "../types/now.js";
 import type { Transaction } from "../types/transaction.js";
 import {
@@ -85,18 +86,6 @@ function toBindings(params: unknown[]): SQLInputValue[] {
 // surface.
 async function validateState(_tx: Transaction): Promise<void> {
   // intentionally empty
-}
-
-interface Violation {
-  code: string;
-  message: string;
-}
-
-// Pre-commit invariant runner. Bodies of the kernel invariants land in
-// a later session; the call site exists so the rollback-on-violation
-// path is exercised end-to-end already.
-async function runInvariants(_tx: Transaction): Promise<Violation[]> {
-  return [];
 }
 
 // ============================================================================

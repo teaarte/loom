@@ -14,7 +14,7 @@
 // without changing call sites; the contract is just "produce a
 // BundleOp[] buffer the kernel applies".
 
-import { applyBundleOps } from "../fsm.js";
+import { applyBundleOps } from "./apply-bundle-ops.js";
 import type { BundleOp, StageContext } from "../types/context.js";
 import type { HookEvent, StepStage } from "../types/plugins.js";
 import type { Transaction } from "../types/transaction.js";

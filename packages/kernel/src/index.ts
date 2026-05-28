@@ -6,6 +6,8 @@ export * from "./invariants.js";
 export * from "./guards.js";
 export * from "./fsm.js";
 export * from "./hook-runner.js";
+export * from "./lib/apply-bundle-ops.js";
+export * from "./lib/access-snapshots.js";
 export * from "./lib/dispatch-event-steps.js";
 export * from "./lib/persist-agent-result.js";
 export * from "./lib/build-agent-result.js";

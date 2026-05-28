@@ -198,10 +198,19 @@ describe("spawnGuard", () => {
     // `Date.now() - window`. Without this, a delayed replay would
     // produce a different verdict than the original commit — the
     // very thing the NowToken contract is supposed to prevent.
+    //
+    // Every timestamp anchors to `captureNow()` so the seed row stays
+    // fresh against the zombie-pending invariant (INV_015, 50-min
+    // threshold). An absolute fixture timestamp would rot under a
+    // delayed run — the duplicate-window verdict is the only thing
+    // this test asserts.
     await seedPipelineState(projectDir, null);
 
-    // Insert a pending row dated 2026-05-28T12:00:00Z.
-    const stampedAt = "2026-05-28T12:00:00.000Z" as NowToken;
+    const anchor = Date.parse(captureNow());
+    const stampedAt = new Date(anchor - 2 * 60 * 1000).toISOString() as NowToken; // allow-ambient-clock: derives from a parsed NowToken string only; never reads the host clock
+    const insideWindow = new Date(anchor).toISOString() as NowToken; // allow-ambient-clock: derives from a parsed NowToken string only
+    const outsideWindow = new Date(anchor + 8 * 60 * 1000).toISOString() as NowToken; // allow-ambient-clock: derives from a parsed NowToken string only
+
     await withStateTransaction(projectDir, captureNow(), async (tx) => {
       await tx.exec(
         "INSERT INTO pending_agents (agent_run_id, agent, phase, started_at) " +
@@ -211,7 +220,6 @@ describe("spawnGuard", () => {
     });
 
     // tx.now = 2 minutes after stampedAt → within 5-min window → refused.
-    const insideWindow = "2026-05-28T12:02:00.000Z" as NowToken;
     await assert.rejects(
       withStateTransaction(projectDir, insideWindow, async (tx) => {
         await spawnGuard(tx, "planner", "planning");
@@ -224,7 +232,6 @@ describe("spawnGuard", () => {
     );
 
     // tx.now = 10 minutes after stampedAt → past 5-min window → allowed.
-    const outsideWindow = "2026-05-28T12:10:00.000Z" as NowToken;
     await withStateTransaction(projectDir, outsideWindow, async (tx) => {
       await spawnGuard(tx, "planner", "planning");
     });

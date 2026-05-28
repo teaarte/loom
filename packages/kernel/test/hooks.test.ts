@@ -668,9 +668,9 @@ describe("HookRunner.fire", () => {
   });
 
   it("function-predicate filter receives the ctx and gates execution", async () => {
-    // K5 contract: when `filter` is a function, it's called with
-    // the full HookContext. Round-trip the contract through fire()
-    // and assert the predicate's verdict actually controls dispatch.
+    // When `filter` is a function, it receives the full HookContext.
+    // Round-trip the contract through fire() and assert the
+    // predicate's verdict actually controls dispatch.
     let received: HookContext | null = null;
     const h: Hook = {
       name: "fn-filter",

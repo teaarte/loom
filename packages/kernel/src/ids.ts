@@ -33,6 +33,14 @@ export const DRIVER_STATE_ID_PATTERN =
 export const GATE_EVENT_ID_PATTERN =
   /^gev-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+// Recovery action identifier: rec-<uuid>. Server-issued: the recover
+// handler mints one on the first call and returns it; a retried call
+// passes it back to key the idempotency-ledger replay, while omitting it
+// issues a fresh recovery action. Closes the transport-flake-double-
+// recover hole (a retried network call must not double-apply a recovery).
+export const RECOVERY_ID_PATTERN =
+  /^rec-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 // ============================================================================
 // Internal helpers
 // ============================================================================
@@ -90,4 +98,8 @@ export function makeDriverStateId(): string {
 
 export function makeGateEventId(): string {
   return `gev-${randomUUID()}`;
+}
+
+export function makeRecoveryId(): string {
+  return `rec-${randomUUID()}`;
 }

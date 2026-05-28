@@ -13,12 +13,20 @@ export { createRunTaskTool } from "./tools/run-task.js";
 export type { RunTaskDeps } from "./tools/run-task.js";
 export { createContinueTaskTool } from "./tools/continue-task.js";
 export type { ContinueTaskDeps } from "./tools/continue-task.js";
+export { createRecoverTool } from "./tools/recover.js";
+export type { RecoverDeps } from "./tools/recover.js";
+export { createBackupTool } from "./tools/backup.js";
+export type { BackupDeps } from "./tools/backup.js";
+export { createRestoreTool } from "./tools/restore.js";
+export type { RestoreDeps } from "./tools/restore.js";
 
 export { createTransportAdapter, shape } from "./transport-adapter.js";
 
 export { FLAG_TO_PRESET, parseTaskArgs } from "./lib/parse-task-args.js";
 
 export type {
+  BackupInput,
+  BackupResponse,
   ClientCapabilities,
   ContinueTaskRequestInput,
   ContinueTaskResponse,
@@ -34,6 +42,11 @@ export type {
   ParsedTaskArgs,
   PipelineMetaResponse,
   PipelineStateView,
+  RecoverTaskInput,
+  RecoverTaskResponse,
+  RecoveryChoiceInput,
+  RestoreInput,
+  RestoreResponse,
   RunTaskInput,
   RunTaskResponse,
   SpawnRequest,

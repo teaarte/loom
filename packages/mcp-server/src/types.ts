@@ -170,6 +170,78 @@ export interface ContinueTaskResponse {
 }
 
 // ---------------------------------------------------------------------
+// pipeline_recover
+// ---------------------------------------------------------------------
+
+export type RecoveryChoiceInput =
+  | "abandon"
+  | "force-close"
+  | "retry"
+  | "retry-failed"
+  | "cancel-pending";
+
+export interface RecoverTaskInput {
+  project_dir: string;
+  driver_state_id: string;
+  choice: RecoveryChoiceInput;
+  // Required only when choice === "retry-failed".
+  agent_run_ids?: string[];
+  // Server-issued idempotency key. Omit on the first call (the kernel
+  // mints one and returns it); pass it back to replay the cached
+  // response; omit it to issue a NEW recovery action.
+  recovery_id?: string;
+  owner_id?: string;
+  // Opaque, unverified caller string — audit only.
+  client_identifier_unverified?: string;
+}
+
+// The wire response plus the always-present server-issued recovery_id (a
+// retry is keyable even when the response is a refusal envelope).
+export interface RecoverTaskResponse {
+  response: TransportResponse;
+  recovery_id: string;
+}
+
+// ---------------------------------------------------------------------
+// pipeline_backup
+// ---------------------------------------------------------------------
+
+export interface BackupInput {
+  project_dir: string;
+  to: string;
+  client_identifier_unverified?: string;
+}
+
+// `bytes_written` / `backup_path` are null on a refusal; `error` carries
+// the typed code. `ts` is the threaded NowToken on both paths.
+export interface BackupResponse {
+  bytes_written: number | null;
+  ts: string;
+  backup_path: string | null;
+  error?: { code: string; message: string };
+}
+
+// ---------------------------------------------------------------------
+// pipeline_restore
+// ---------------------------------------------------------------------
+
+export interface RestoreInput {
+  project_dir: string;
+  from: string;
+  format: "sql" | "binary";
+  confirm?: boolean;
+  client_identifier_unverified?: string;
+}
+
+// `restored` is false on a refusal; `error` carries the typed code
+// (RESTORE_CONFIRM_REQUIRED / RESTORE_REJECTED / PROJECT_DIR_NOT_ALLOWED).
+export interface RestoreResponse {
+  restored: boolean;
+  ts: string;
+  error?: { code: string; message: string };
+}
+
+// ---------------------------------------------------------------------
 // Tool handler primitive — same shape used in the server's `tools` map.
 // Tests construct a handler and call it directly, bypassing MCP wire
 // framing; the SDK's request dispatcher wraps the same callable on the

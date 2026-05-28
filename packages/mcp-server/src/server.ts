@@ -11,18 +11,27 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
+import { createBackupTool } from "./tools/backup.js";
 import { createContinueTaskTool } from "./tools/continue-task.js";
 import { createExtensionsListTool } from "./tools/extensions-list.js";
 import { createMetaTool, type MetaInputWithProject } from "./tools/meta.js";
+import { createRecoverTool } from "./tools/recover.js";
+import { createRestoreTool } from "./tools/restore.js";
 import { createRunTaskTool } from "./tools/run-task.js";
 import { createStateGetTool } from "./tools/state-get.js";
 import type {
+  BackupInput,
+  BackupResponse,
   ContinueTaskRequestInput,
   ContinueTaskResponse,
   ExtensionsListInput,
   ExtensionsListResponse,
   PipelineMetaResponse,
   PipelineStateView,
+  RecoverTaskInput,
+  RecoverTaskResponse,
+  RestoreInput,
+  RestoreResponse,
   RunTaskInput,
   RunTaskResponse,
   StateGetInput,
@@ -49,6 +58,9 @@ export interface ToolRegistry {
   pipeline_extensions_list: ToolHandler<ExtensionsListInput, ExtensionsListResponse>;
   pipeline_run_task: ToolHandler<RunTaskInput, RunTaskResponse>;
   pipeline_continue_task: ToolHandler<ContinueTaskRequestInput, ContinueTaskResponse>;
+  pipeline_recover: ToolHandler<RecoverTaskInput, RecoverTaskResponse>;
+  pipeline_backup: ToolHandler<BackupInput, BackupResponse>;
+  pipeline_restore: ToolHandler<RestoreInput, RestoreResponse>;
 }
 
 export interface CreateServerHandle {
@@ -154,6 +166,66 @@ const TOOL_DESCRIPTORS = [
       required: ["project_dir", "driver_state_id", "input"],
     },
   },
+  {
+    name: "pipeline_recover",
+    description:
+      "Recovers a stuck task. Five choices: abandon | force-close | retry | " +
+      "retry-failed | cancel-pending. recovery_id is server-issued — omit it " +
+      "on the first call (the kernel mints one and returns it), pass it back " +
+      "to replay the cached response, or omit it to issue a new recovery " +
+      "action. agent_run_ids is required for retry-failed.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_dir: { type: "string" },
+        driver_state_id: { type: "string" },
+        choice: {
+          type: "string",
+          enum: ["abandon", "force-close", "retry", "retry-failed", "cancel-pending"],
+        },
+        agent_run_ids: { type: "array", items: { type: "string" } },
+        recovery_id: { type: "string" },
+        owner_id: { type: "string" },
+        client_identifier_unverified: { type: "string" },
+      },
+      required: ["project_dir", "driver_state_id", "choice"],
+    },
+  },
+  {
+    name: "pipeline_backup",
+    description:
+      "Writes a consistent textual SQL snapshot of the project state to " +
+      "`to` (a relative path resolves against project_dir). Returns " +
+      "bytes_written, the threaded timestamp, and the resolved backup_path.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_dir: { type: "string" },
+        to: { type: "string" },
+        client_identifier_unverified: { type: "string" },
+      },
+      required: ["project_dir", "to"],
+    },
+  },
+  {
+    name: "pipeline_restore",
+    description:
+      "Restores project state from a backup. A .sql dump is parsed through a " +
+      "statement allowlist (out-of-allowlist statements surface " +
+      "RESTORE_REJECTED); a binary .db is an operator-explicit file swap. " +
+      "Refuses without confirm:true.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_dir: { type: "string" },
+        from: { type: "string" },
+        format: { type: "string", enum: ["sql", "binary"] },
+        confirm: { type: "boolean" },
+        client_identifier_unverified: { type: "string" },
+      },
+      required: ["project_dir", "from", "format"],
+    },
+  },
 ];
 
 export function createServer(deps: ServerDeps = {}): CreateServerHandle {
@@ -163,6 +235,9 @@ export function createServer(deps: ServerDeps = {}): CreateServerHandle {
     pipeline_extensions_list: createExtensionsListTool(),
     pipeline_run_task: createRunTaskTool(deps),
     pipeline_continue_task: createContinueTaskTool(deps),
+    pipeline_recover: createRecoverTool(deps),
+    pipeline_backup: createBackupTool(deps),
+    pipeline_restore: createRestoreTool(deps),
   };
 
   const server = new Server(
@@ -206,6 +281,15 @@ async function dispatch(
   }
   if (name === "pipeline_continue_task") {
     return await tools.pipeline_continue_task(args as unknown as ContinueTaskRequestInput);
+  }
+  if (name === "pipeline_recover") {
+    return await tools.pipeline_recover(args as unknown as RecoverTaskInput);
+  }
+  if (name === "pipeline_backup") {
+    return await tools.pipeline_backup(args as unknown as BackupInput);
+  }
+  if (name === "pipeline_restore") {
+    return await tools.pipeline_restore(args as unknown as RestoreInput);
   }
   throw new Error(`unknown tool: ${name}`);
 }

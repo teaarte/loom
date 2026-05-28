@@ -9,6 +9,7 @@ import type { Agent, Hook, MCPClientPlugin, Stage } from "./plugins.js";
 import type { Policy, PolicyName } from "./policy.js";
 import type { LLMProvider } from "./provider.js";
 import type { PipelineState } from "./state.js";
+import type { KernelVocabularies } from "./vocabulary.js";
 
 export interface Registry {
   bundle: Bundle;
@@ -19,6 +20,12 @@ export interface Registry {
   invariants: Invariant[];
   mcp_clients: Map<string, MCPClientPlugin>;
   providers: ProviderRegistry;
+  // Materialized merge of kernel-default vocabulary baselines with the
+  // bundle's `extends_vocab` declarations. Insert-time `.has()`
+  // predicates against the open audit/output-kind/error-class columns
+  // read from here; the loader is the single point that constructs the
+  // sets.
+  vocabularies: KernelVocabularies;
   // Materialized at registry-load from the kernel-shipped stock
   // factories (`human`, `on-blockers`, `auto`) plus any
   // bundle-registered ones. The gate interpreter resolves a name via

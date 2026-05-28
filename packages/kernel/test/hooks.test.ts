@@ -16,6 +16,7 @@ import {
   topoSortHooks,
 } from "../src/hooks.js";
 import { _resetInvariantsForTest } from "../src/invariants.js";
+import { buildVocabularies } from "../src/vocabularies.js";
 import {
   KernelError,
   captureNow,
@@ -90,8 +91,9 @@ function buildRegistry(hooks: Hook[]): Registry {
       throw new Error("stub — spawn must not run in this test");
     },
   };
+  const bundle = emptyBundle(hooks);
   return {
-    bundle: emptyBundle(hooks),
+    bundle,
     agents: new Map(),
     stages: new Map(),
     flows: new Map([["default", []]]),
@@ -104,6 +106,7 @@ function buildRegistry(hooks: Hook[]): Registry {
       health_check_all: Promise.resolve([{ name: "stub", healthy: true }]),
     },
     policyFactories: new Map<PolicyName, () => Policy>(),
+    vocabularies: buildVocabularies(bundle),
   };
 }
 

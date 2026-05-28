@@ -6,7 +6,6 @@
 // convention. Frozen after registry load; running code never mutates
 // an instance. Bundle hot-swap (deferred) would rebuild the registry.
 
-import type { Bundle } from "./bundle.js";
 import type { AgentOutputKind } from "./plugins.js";
 import type { GateDecidedBy, GateRole } from "./row-types.js";
 
@@ -40,5 +39,8 @@ export interface KernelVocabularies {
   gate_roles: Vocabulary<GateRole>;
 }
 
-// Construction (kernel-internal, called once at registry load).
-export declare function buildVocabularies(bundle: Bundle): KernelVocabularies;
+// Construction lives in `src/vocabularies.ts` — called once at
+// registry load by the bundle-loader. The type module stays
+// dependency-free so consumers reading `Vocabulary<T>` / `Kernel
+// Vocabularies` don't pull in the builder's transitive imports.
+

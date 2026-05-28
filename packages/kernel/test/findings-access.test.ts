@@ -11,6 +11,7 @@ import {
   closeDb,
   withStateTransaction,
 } from "../src/state.js";
+import { buildVocabularies } from "../src/vocabularies.js";
 import type { Bundle } from "../src/types/bundle.js";
 import type { NowToken } from "../src/types/now.js";
 import type {
@@ -82,6 +83,7 @@ function buildRegistry(): Registry {
       health_check_all: Promise.resolve([{ name: "stub", healthy: true }]),
     },
     policyFactories,
+    vocabularies: buildVocabularies(bundle),
   };
 }
 

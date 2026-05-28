@@ -9,6 +9,7 @@
 // resolved sequence is stable across runs.
 
 import { KernelError } from "./state/db.js";
+import { topoSortHooks as topoSortHooksUnion } from "./hook-topo.js";
 import type { HookContext } from "./types/context.js";
 import type { Hook, HookEvent } from "./types/plugins.js";
 
@@ -21,72 +22,22 @@ export interface HookIndex {
   regExpHooks: Hook[];
 }
 
-// Kahn's algorithm over the `requires` DAG. Walks the input array
-// each round so two hooks that become ready in the same step retain
-// their registration order — the contract the loader relies on.
+// Throws on cycle to match the local-caller (`HookRunner` constructor)
+// contract: a cyclic registry is a load-time bug surfaced synchronously.
+// The lower-level `hook-topo` helper returns the cycle as a tagged
+// union so the bundle-loader can fold the failure into its own refusal
+// cascade alongside other validation rules without catching a throw
+// mid-walk.
 export function topoSortHooks(hooks: Hook[]): Hook[] {
-  const indegree = new Map<string, number>();
-  const byName = new Map<string, Hook>();
-  const dependents = new Map<string, string[]>();
-
-  for (const h of hooks) {
-    if (byName.has(h.name)) {
-      throw new KernelError({
-        code: "HOOK_NAME_DUPLICATE",
-        message: `duplicate hook name '${h.name}'`,
-        detail: { hook: h.name },
-      });
-    }
-    byName.set(h.name, h);
-    indegree.set(h.name, 0);
-  }
-
-  for (const h of hooks) {
-    for (const req of h.requires ?? []) {
-      if (!byName.has(req)) {
-        throw new KernelError({
-          code: "HOOK_REQUIRES_UNKNOWN",
-          message: `hook '${h.name}' requires unknown hook '${req}'`,
-          detail: { hook: h.name, missing: req },
-        });
-      }
-      indegree.set(h.name, (indegree.get(h.name) ?? 0) + 1);
-      const list = dependents.get(req) ?? [];
-      list.push(h.name);
-      dependents.set(req, list);
-    }
-  }
-
-  const sorted: Hook[] = [];
-  const placed = new Set<string>();
-  // Repeated input-order scans keep tie-break stable; with the
-  // registry cap (~100 hooks) the O(N²) bound is negligible against
-  // the SQLite tx cost that surrounds every fire.
-  while (sorted.length < hooks.length) {
-    let progressed = false;
-    for (const h of hooks) {
-      if (placed.has(h.name)) continue;
-      if ((indegree.get(h.name) ?? 0) !== 0) continue;
-      sorted.push(h);
-      placed.add(h.name);
-      for (const depName of dependents.get(h.name) ?? []) {
-        indegree.set(depName, (indegree.get(depName) ?? 0) - 1);
-      }
-      progressed = true;
-    }
-    if (!progressed) break;
-  }
-
-  if (sorted.length !== hooks.length) {
-    const residual = hooks.filter((h) => !placed.has(h.name)).map((h) => h.name);
+  const result = topoSortHooksUnion(hooks);
+  if ("cycle" in result) {
     throw new KernelError({
       code: "HOOK_CYCLE",
-      message: `hook dependency cycle: ${residual.join(", ")}`,
-      detail: { cycle: residual },
+      message: `hook dependency cycle: ${result.cycle.join(", ")}`,
+      detail: { cycle: result.cycle },
     });
   }
-
-  return sorted;
+  return result.sorted;
 }
 
 export function indexHooksByEvent(sorted: Hook[]): HookIndex {

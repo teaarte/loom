@@ -13,6 +13,7 @@ import {
   derivedRolePhase,
   policies,
 } from "../src/policies/index.js";
+import { buildVocabularies } from "../src/vocabularies.js";
 import {
   KernelError,
   captureNow,
@@ -179,6 +180,7 @@ function makeRegistry(bundle: Bundle): Registry {
       health_check_all: Promise.resolve([]),
     },
     policyFactories: buildPolicyFactoryRegistry(bundle),
+    vocabularies: buildVocabularies(bundle),
   };
 }
 
@@ -864,6 +866,7 @@ function buildE2ERegistry(opts: {
       health_check_all: Promise.resolve([{ name: "stub", healthy: true }]),
     },
     policyFactories: buildPolicyFactoryRegistry(bundle),
+    vocabularies: buildVocabularies(bundle),
   };
 }
 

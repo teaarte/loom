@@ -8,6 +8,7 @@ import { runFSM } from "../src/fsm.js";
 import {
   _resetInvariantsForTest,
 } from "../src/invariants.js";
+import { buildVocabularies } from "../src/vocabularies.js";
 import { persistAgentResult } from "../src/lib/persist-agent-result.js";
 import {
   KernelError,
@@ -278,6 +279,7 @@ function buildRegistry(opts: {
       ]),
     },
     policyFactories,
+    vocabularies: buildVocabularies(bundle),
   };
 }
 

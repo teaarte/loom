@@ -3,6 +3,7 @@
 // direct-callable map so tests skip the JSON-RPC framing and exercise
 // the handler bodies in-process.
 
+import type { Registry } from "@loom/kernel";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -10,17 +11,34 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
+import { createContinueTaskTool } from "./tools/continue-task.js";
 import { createExtensionsListTool } from "./tools/extensions-list.js";
 import { createMetaTool, type MetaInputWithProject } from "./tools/meta.js";
+import { createRunTaskTool } from "./tools/run-task.js";
 import { createStateGetTool } from "./tools/state-get.js";
 import type {
+  ContinueTaskRequestInput,
+  ContinueTaskResponse,
   ExtensionsListInput,
   ExtensionsListResponse,
   PipelineMetaResponse,
   PipelineStateView,
+  RunTaskInput,
+  RunTaskResponse,
   StateGetInput,
   ToolHandler,
 } from "./types.js";
+
+// Dependencies the active-task tools need but the read-only surface does
+// not. `resolveRegistry` assembles the FSM registry for a project (the
+// production wiring that imports the active bundle lands separately);
+// `allowlistPath` overrides the project-dir allowlist file (tests point
+// at a tmpfile). Omitted → the mutating tools refuse the active-task
+// path with a structured error envelope.
+export interface ServerDeps {
+  resolveRegistry?: (projectDir: string) => Promise<Registry> | Registry;
+  allowlistPath?: string;
+}
 
 const SERVER_NAME = "@loom/mcp-server";
 const SERVER_VERSION = "0.0.0";
@@ -29,6 +47,8 @@ export interface ToolRegistry {
   pipeline_meta: ToolHandler<MetaInputWithProject, PipelineMetaResponse>;
   pipeline_state_get: ToolHandler<StateGetInput, PipelineStateView>;
   pipeline_extensions_list: ToolHandler<ExtensionsListInput, ExtensionsListResponse>;
+  pipeline_run_task: ToolHandler<RunTaskInput, RunTaskResponse>;
+  pipeline_continue_task: ToolHandler<ContinueTaskRequestInput, ContinueTaskResponse>;
 }
 
 export interface CreateServerHandle {
@@ -92,13 +112,57 @@ const TOOL_DESCRIPTORS = [
       required: ["project_dir"],
     },
   },
+  {
+    name: "pipeline_run_task",
+    description:
+      "Initializes a new task and returns the first directive shaped as a " +
+      "wire response (spawn-agent | spawn-agents-parallel | ask-user | " +
+      "complete | error). client_idempotency_uuid is required; a replay " +
+      "with the same value returns the cached creation response.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_dir: { type: "string" },
+        task: { type: "string" },
+        client_idempotency_uuid: { type: "string" },
+        policy_preset: { type: "string" },
+        gate_policies: { type: "object" },
+        complexity_hint: { type: "string", enum: ["simple", "medium", "complex"] },
+        tests_mode_hint: { type: "string", enum: ["tdd", "regression-only"] },
+        stack: { type: "object" },
+        owner_id: { type: "string" },
+        client_identifier_unverified: { type: "string" },
+      },
+      required: ["project_dir", "task", "client_idempotency_uuid"],
+    },
+  },
+  {
+    name: "pipeline_continue_task",
+    description:
+      "Delivers an agent result, a fanout batch, or a user answer and " +
+      "returns the next directive shaped as a wire response. Idempotent " +
+      "by agent_run_id / gate_event_id — a duplicate delivery returns the " +
+      "cached next-step response.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_dir: { type: "string" },
+        driver_state_id: { type: "string" },
+        input: { type: "object" },
+        client_identifier_unverified: { type: "string" },
+      },
+      required: ["project_dir", "driver_state_id", "input"],
+    },
+  },
 ];
 
-export function createServer(): CreateServerHandle {
+export function createServer(deps: ServerDeps = {}): CreateServerHandle {
   const tools: ToolRegistry = {
     pipeline_meta: createMetaTool(),
     pipeline_state_get: createStateGetTool(),
     pipeline_extensions_list: createExtensionsListTool(),
+    pipeline_run_task: createRunTaskTool(deps),
+    pipeline_continue_task: createContinueTaskTool(deps),
   };
 
   const server = new Server(
@@ -136,6 +200,12 @@ async function dispatch(
   }
   if (name === "pipeline_extensions_list") {
     return await tools.pipeline_extensions_list(args as unknown as ExtensionsListInput);
+  }
+  if (name === "pipeline_run_task") {
+    return await tools.pipeline_run_task(args as unknown as RunTaskInput);
+  }
+  if (name === "pipeline_continue_task") {
+    return await tools.pipeline_continue_task(args as unknown as ContinueTaskRequestInput);
   }
   throw new Error(`unknown tool: ${name}`);
 }

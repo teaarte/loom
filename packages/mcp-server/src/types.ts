@@ -6,9 +6,20 @@
 // transport-types package and shifts these or their richer siblings
 // into it.
 
-import type { ExtensionKind, ExtensionManifest, PipelineStateView } from "@loom/kernel";
+import type {
+  ContinueTaskInput,
+  ExtensionKind,
+  ExtensionManifest,
+  PipelineStateView,
+  StackInfo,
+} from "@loom/kernel";
+import type { SpawnRequest, TransportResponse } from "@loom/transport-types";
 
 export type { PipelineStateView };
+
+// Re-exported for tool authors that want the wire shape without a second
+// import — the mutating handlers return these inside their envelopes.
+export type { ContinueTaskInput, SpawnRequest, TransportResponse };
 
 // ---------------------------------------------------------------------
 // pipeline_meta
@@ -109,6 +120,53 @@ export interface ParsedTaskArgs {
   task: string;
   policy_preset?: string;
   warnings: string[];
+}
+
+// ---------------------------------------------------------------------
+// pipeline_run_task
+// ---------------------------------------------------------------------
+
+export interface RunTaskInput {
+  project_dir: string;
+  task: string;
+  client_idempotency_uuid: string;
+  policy_preset?: string;
+  gate_policies?: Record<string, string>;
+  complexity_hint?: "simple" | "medium" | "complex";
+  tests_mode_hint?: "tdd" | "regression-only";
+  stack?: StackInfo;
+  owner_id?: string;
+  // Opaque, unverified caller string — captured in audit only (see
+  // pipeline_meta). Never an identity claim.
+  client_identifier_unverified?: string;
+}
+
+// The happy-path envelope wraps the shaped wire response plus the task
+// identity. `task_id` / `driver_state_id` are present on success and on
+// replay; a refusal (error-shaped `response`) omits them. `warnings`
+// surfaces `parseTaskArgs` notes so MCP clients can render them — the
+// MVP wire response carries no warnings field, so the wrapper is a
+// tool-specific envelope, not a generic response extension.
+export interface RunTaskResponse {
+  response: TransportResponse;
+  task_id?: string;
+  driver_state_id?: string;
+  warnings?: string[];
+}
+
+// ---------------------------------------------------------------------
+// pipeline_continue_task
+// ---------------------------------------------------------------------
+
+export interface ContinueTaskRequestInput {
+  project_dir: string;
+  driver_state_id: string;
+  input: ContinueTaskInput;
+  client_identifier_unverified?: string;
+}
+
+export interface ContinueTaskResponse {
+  response: TransportResponse;
 }
 
 // ---------------------------------------------------------------------

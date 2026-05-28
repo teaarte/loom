@@ -12,7 +12,7 @@
 //   budget.ts         — three-axis discriminated Budget union
 //   idempotency.ts    — IdempotencyKey + op tag + ledger row
 //   agent-result.ts   — AgentResult / AgentRecord / parse errors
-//   transport.ts      — KernelDirective + TransportResponse + adapter
+//   transport.ts      — KernelDirective (kernel → host seam)
 //   provider.ts       — ProviderResult cluster + LLMProvider forward decl
 //   continue-task.ts  — `pipeline_continue_task` payload variants
 //   tool.ts           — ToolDefinition + output-compression policy

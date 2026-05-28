@@ -2,7 +2,7 @@
 //
 // What an `LLMProvider.spawn()` call returns. Provider-layer types; the
 // transport adapter is the only consumer that knows how to shape a
-// `ProviderShuttleIntent` into a `TransportResponse`. Provider code
+// `ProviderShuttleIntent` into its own wire envelope. Provider code
 // never touches transport types — that is the seam.
 
 import type { ModelName, Phase } from "./row-types.js";
@@ -42,8 +42,8 @@ export interface ToolCall {
 }
 
 // Provider-emitted shuttle descriptor. Transport-neutral — the active
-// transport adapter turns this into a `TransportResponse.spawn-agent`
-// for MCP/stdio, an SSE event for daemon/HTTP, etc.
+// transport adapter turns this into its own wire-envelope spawn intent
+// (an MCP/stdio spawn response, an SSE event for daemon/HTTP, etc.).
 export interface ProviderShuttleIntent {
   agent: string;
   agent_run_id: string;
@@ -55,9 +55,9 @@ export interface ProviderShuttleIntent {
   extras?: Record<string, unknown>;
 }
 
-// Provider-layer spawn request. Distinct from the transport-adapter
-// `SpawnRequest` carried on `TransportResponse.spawn-agent`; the
-// transport adapter is the only consumer that shapes one to the other.
+// Provider-layer spawn request. Distinct from the adapter-set
+// wire-envelope spawn descriptor; the transport adapter is the only
+// consumer that shapes one into the other.
 export interface ProviderSpawnRequest {
   agent: string;
   agent_run_id: string;

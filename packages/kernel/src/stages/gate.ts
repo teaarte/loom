@@ -1,15 +1,12 @@
 // GateStage interpreter.
 //
-// 1. Resolve the gate's role via `bundle.gate_roles[stage.name]`.
-//    Missing → halt with `GATE_ROLE_UNKNOWN` (the bundle-loader
-//    will surface the same error at load when it gains full bundle
-//    validation; the interpreter still checks because the unloaded
-//    surface is the path under test for now).
-// 2. Resolve the active PolicyName: `state.gate_policies[role]`
-//    falls back to "human". Resolve the factory via
-//    `registry.policyFactories.get(name)()`; missing factory →
-//    halt with `POLICY_FACTORY_UNKNOWN`.
-// 3. Call the policy. Synchronous + async both work.
+// 1. Build a `PolicyContext` from the StageContext (binds the pre-
+//    materialized findings / agent-records / latest-verdict accessors).
+// 2. Delegate role resolution + replan-cap enforcement + factory
+//    dispatch to `resolveGatePolicy`. The interpreter does not
+//    re-implement the cascade — adding a fourth factory or tweaking
+//    the cap behavior is one place.
+// 3. Switch on the decision:
 //    - `human-required`: invoke `on_pre_ask` (if defined); if it
 //      returns non-null pass that result through; otherwise emit
 //      an `ask_user` directive carrying the gate's message and
@@ -17,61 +14,26 @@
 //    - `auto-approve` / `auto-reject`: synthesize a `UserAnswer`,
 //      invoke `on_resume`, return whatever it produces.
 
+import { resolveGatePolicy } from "../gate-policy.js";
 import { makeGateEventId } from "../ids.js";
+import { buildPolicyContext } from "../policies/index.js";
 import type { StageContext } from "../types/context.js";
-import type { GatePolicyResult, PolicyContext } from "../types/policy.js";
+import type { GatePolicyResult } from "../types/policy.js";
 import type { GateStage, StageResult } from "../types/plugins.js";
 import type { PipelineState } from "../types/state.js";
 import type { UserAnswer } from "../types/user-answer.js";
 
 export async function interpretGate(
   stage: GateStage,
-  _state: PipelineState,
+  state: PipelineState,
   ctx: StageContext,
 ): Promise<StageResult> {
-  const role = ctx.bundle.gate_roles[stage.name];
-  if (role === undefined) {
-    return {
-      type: "halt",
-      directive: {
-        code: "GATE_ROLE_UNKNOWN",
-        message: `GateStage '${stage.name}' has no role mapping in bundle.gate_roles`,
-        recovery_options: [],
-      },
-    };
-  }
-
-  const policyName = ctx.state.gate_policies[role] ?? "human";
-  const factory = ctx.registry.policyFactories.get(policyName);
-  if (factory === undefined) {
-    return {
-      type: "halt",
-      directive: {
-        code: "POLICY_FACTORY_UNKNOWN",
-        message: `policyFactories has no entry for '${policyName}' (role='${role}')`,
-        recovery_options: [],
-      },
-    };
-  }
-
-  const policyCtx: PolicyContext = {
-    bundle: ctx.bundle,
-    findings: ctx.findings,
-    agents_query: ctx.agents_query,
-    latest_verdict: (_state, agent) => {
-      const matches = ctx.state.agent_verdicts.filter(
-        (v) => v.agent === agent,
-      );
-      return matches.length > 0
-        ? (matches[matches.length - 1] ?? null)
-        : null;
-    },
-    rolePhase: (_role) => null,
-    now: ctx.now,
-  };
-  const policy = factory();
-  const decision: GatePolicyResult = await Promise.resolve(
-    policy(ctx.state, role, policyCtx),
+  const policyCtx = buildPolicyContext(ctx);
+  const decision: GatePolicyResult = await resolveGatePolicy(
+    state,
+    stage.name,
+    policyCtx,
+    ctx.registry,
   );
 
   if (decision.type === "human-required") {
@@ -97,8 +59,8 @@ export async function interpretGate(
   // Auto path: synthesize a UserAnswer the bundle's on_resume can
   // act on. The gate_decision audit + the gate-row write land via
   // the user-answer delivery path (handled out of this interpreter
-  // — landing alongside the answer-delivery surface); the
-  // on_resume return value drives the FSM here.
+  // — alongside the answer-delivery surface); the on_resume return
+  // value drives the FSM here.
   const answer: UserAnswer = decision.type === "auto-approve"
     ? { decision: "accept" }
     : autoRejectAnswer(decision);

@@ -21,3 +21,13 @@ export * from "./gate-policy.js";
 export * from "./policies/index.js";
 export * from "./budgets.js";
 export * from "./policy-presets/index.js";
+export { defineManifest } from "./defineManifest.js";
+export {
+  discoverExtensions,
+  reconcileExtensions,
+} from "./extension-loader.js";
+export type {
+  DiscoveredManifest,
+  ExtensionId,
+  ReconciliationReport,
+} from "./extension-loader.js";

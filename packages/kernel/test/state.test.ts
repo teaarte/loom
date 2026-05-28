@@ -83,6 +83,7 @@ describe("openDb", () => {
         "driver_state",
         "findings",
         "gates",
+        "installed_extensions",
         "kernel_idempotency_ledger",
         "kernel_schema_versions",
         "pending_agents",
@@ -97,11 +98,11 @@ describe("openDb", () => {
   it("records the kernel schema version on first migration", () => {
     const db = openDb(projectDir);
     const rows = db
-      .prepare("SELECT component, version FROM kernel_schema_versions")
+      .prepare("SELECT component, version FROM kernel_schema_versions ORDER BY component")
       .all() as { component: string; version: string }[];
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0]?.component, "001-initial");
-    assert.equal(rows[0]?.version, "3.0.0");
+    const components = rows.map((r) => r.component);
+    assert.deepEqual(components, ["001-initial", "002-installed-extensions"]);
+    for (const r of rows) assert.equal(r.version, "3.0.0");
   });
 
   it("returns the same Database instance across calls (singleton)", () => {
@@ -124,8 +125,8 @@ describe("migration runner — idempotent", () => {
     const rows = db
       .prepare("SELECT component FROM kernel_schema_versions ORDER BY component")
       .all() as { component: string }[];
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0]?.component, "001-initial");
+    const components = rows.map((r) => r.component);
+    assert.deepEqual(components, ["001-initial", "002-installed-extensions"]);
   });
 });
 

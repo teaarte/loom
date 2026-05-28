@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
 import {
-  DEFAULT_SPAWN_DUPLICATE_WINDOW_MS,
   bypassMarkerGuard,
   ownerCheckGuard,
   phaseTransitionGuard,
@@ -151,10 +150,84 @@ describe("spawnGuard", () => {
     });
   });
 
-  it("uses the documented default window when none supplied", () => {
-    // Sanity check: the default constant matches the 5-minute number
-    // the rule talks about.
-    assert.equal(DEFAULT_SPAWN_DUPLICATE_WINDOW_MS, 5 * 60 * 1000);
+  it("honors a custom duplicate_window_ms", async () => {
+    // Insert a pending row 3 minutes old. With a 5-minute default
+    // it would trip the guard; with a custom 1-minute window the
+    // row is past it and the guard should let the new spawn
+    // through. Exercising both verdicts proves the parameter
+    // actually flows into the cutoff computation — not just the
+    // default constant.
+    await seedPipelineState(projectDir, null);
+    const seedNow = captureNow();
+    const threeMinAgoEpoch = Date.parse(seedNow) - 3 * 60 * 1000;
+    const threeMinAgo = new Date(threeMinAgoEpoch).toISOString() as NowToken; // allow-ambient-clock: derives from a parsed NowToken string only; never reads the host clock
+    await withStateTransaction(projectDir, seedNow, async (tx) => {
+      await tx.exec(
+        "INSERT INTO pending_agents (agent_run_id, agent, phase, started_at) " +
+          "VALUES (?, ?, ?, ?)",
+        ["ar-mid-001", "planner", "planning", threeMinAgo],
+      );
+    });
+
+    // Custom window=1min → 3-min-old row is past it → allowed.
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      await spawnGuard(tx, "planner", "planning", {
+        duplicate_window_ms: 60 * 1000,
+      });
+    });
+
+    // Custom window=10min → 3-min-old row is inside it → refused.
+    await assert.rejects(
+      withStateTransaction(projectDir, captureNow(), async (tx) => {
+        await spawnGuard(tx, "planner", "planning", {
+          duplicate_window_ms: 10 * 60 * 1000,
+        });
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError);
+        assert.equal((err as KernelError).code, "DUPLICATE_SPAWN");
+        return true;
+      },
+    );
+  });
+
+  it("reads tx.now (not the host clock) for the duplicate-window cutoff", async () => {
+    // Replay-determinism property at the guard layer: feeding the
+    // same DB-state with two NowTokens N minutes apart should flip
+    // the verdict, proving the cutoff is `tx.now - window` and not
+    // `Date.now() - window`. Without this, a delayed replay would
+    // produce a different verdict than the original commit — the
+    // very thing the NowToken contract is supposed to prevent.
+    await seedPipelineState(projectDir, null);
+
+    // Insert a pending row dated 2026-05-28T12:00:00Z.
+    const stampedAt = "2026-05-28T12:00:00.000Z" as NowToken;
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      await tx.exec(
+        "INSERT INTO pending_agents (agent_run_id, agent, phase, started_at) " +
+          "VALUES (?, ?, ?, ?)",
+        ["ar-clock-001", "planner", "planning", stampedAt],
+      );
+    });
+
+    // tx.now = 2 minutes after stampedAt → within 5-min window → refused.
+    const insideWindow = "2026-05-28T12:02:00.000Z" as NowToken;
+    await assert.rejects(
+      withStateTransaction(projectDir, insideWindow, async (tx) => {
+        await spawnGuard(tx, "planner", "planning");
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError);
+        assert.equal((err as KernelError).code, "DUPLICATE_SPAWN");
+        return true;
+      },
+    );
+
+    // tx.now = 10 minutes after stampedAt → past 5-min window → allowed.
+    const outsideWindow = "2026-05-28T12:10:00.000Z" as NowToken;
+    await withStateTransaction(projectDir, outsideWindow, async (tx) => {
+      await spawnGuard(tx, "planner", "planning");
+    });
   });
 });
 

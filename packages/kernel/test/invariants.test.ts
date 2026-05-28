@@ -467,6 +467,41 @@ describe("inv011", () => {
     });
     assert.equal(inv011(state, emptySnapshots()), null);
   });
+
+  it("skips a prereq whose phase is not in the phase map", () => {
+    // Bundles may declare prereqs that aren't tracked as separate
+    // phase rows (e.g., references to bundle-state preconditions
+    // surfaced via phase_extension). The invariant should not
+    // fire on a missing entry — only on prereqs whose tracked
+    // status is non-terminal.
+    const state = baseState({
+      phases: [
+        makePhase({
+          name: "planning",
+          status: "in_progress",
+          phase_extension: { prereqs: ["nonexistent-phase"] },
+        }),
+      ],
+    });
+    assert.equal(inv011(state, emptySnapshots()), null);
+  });
+
+  it("skips non-string entries in the prereqs array", () => {
+    // Phase extension is `Record<string, unknown>` — a malformed
+    // entry should not crash the invariant; only string prereq
+    // names participate.
+    const state = baseState({
+      phases: [
+        makePhase({ name: "context", status: "completed" }),
+        makePhase({
+          name: "planning",
+          status: "in_progress",
+          phase_extension: { prereqs: [42, "context"] },
+        }),
+      ],
+    });
+    assert.equal(inv011(state, emptySnapshots()), null);
+  });
 });
 
 describe("inv012", () => {
@@ -977,6 +1012,36 @@ describe("runInvariants — real-DB integration", () => {
       );
       assert.equal(row?.task_short, null, "the attempted write must not persist");
     });
+  });
+
+  it("runs kernel invariants first, then registered ones in registration order", async () => {
+    await seedPipelineRow(projectDir);
+    const calls: string[] = [];
+    const probeA: Invariant = Object.assign(
+      (_state: BundleStateView, _snapshots: KernelSnapshots): Violation | null => {
+        calls.push("A");
+        return null;
+      },
+      { reads: ["phases"] },
+    );
+    const probeB: Invariant = Object.assign(
+      (_state: BundleStateView, _snapshots: KernelSnapshots): Violation | null => {
+        calls.push("B");
+        return null;
+      },
+      { reads: ["phases"] },
+    );
+    registerInvariant(probeA);
+    registerInvariant(probeB);
+
+    await withStateTransaction(projectDir, captureNow(), async () => {
+      /* commit triggers runInvariants */
+    });
+    // Each probe runs once per commit; registration order is
+    // preserved (A before B). Kernel invariants ran before the
+    // probes but we don't assert their identities here — that's
+    // the kernelInvariants set test's job.
+    assert.deepEqual(calls, ["A", "B"]);
   });
 
   it("_resetInvariantsForTest clears registered invariants", async () => {

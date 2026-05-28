@@ -25,7 +25,11 @@ importers:
 
   packages/providers/anthropic-sdk: {}
 
-  packages/providers/claude-code-shuttle: {}
+  packages/providers/claude-code-shuttle:
+    dependencies:
+      '@loom/kernel':
+        specifier: workspace:*
+        version: link:../../kernel
 
   packages/providers/openrouter: {}
 

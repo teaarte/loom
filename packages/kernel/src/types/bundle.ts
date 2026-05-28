@@ -29,7 +29,10 @@ export interface Bundle {
   hooks: Hook[];
   invariants: Invariant[];
 
-  gate_roles?: Record<string, GateRole>;
+  // Map gate-stage names → GateRole. Required so the GateStage
+  // interpreter can resolve a role for every gate in the flow; bundles
+  // with no gate stages may ship `{}` rather than omitting the field.
+  gate_roles: Record<string, GateRole>;
   declared_change_kinds?: string[];
 
   extends_vocab?: {

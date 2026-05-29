@@ -8,31 +8,12 @@
 // applies the (deterministic) compression downstream. One audit payload per
 // call; no clock read.
 
-import { readdir, readFile } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { readFile } from "node:fs/promises";
+import { relative, sep } from "node:path";
 
 import { resolveSafePath } from "../sandbox/resolve-safe-path.js";
+import { walkProjectFiles } from "./walk-project-files.js";
 import type { ToolContext, ToolDefinition, ToolResult } from "../types/tool.js";
-
-const SKIP_DIRS = new Set([".git", "node_modules", "dist"]);
-
-async function walk(dir: string, out: string[]): Promise<void> {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const ent of entries) {
-    const full = join(dir, ent.name);
-    if (ent.isDirectory()) {
-      if (SKIP_DIRS.has(ent.name)) continue;
-      await walk(full, out);
-    } else if (ent.isFile()) {
-      out.push(full);
-    }
-  }
-}
 
 export const grepTool: ToolDefinition = {
   name: "grep",
@@ -73,8 +54,7 @@ export const grepTool: ToolDefinition = {
       return { error: `invalid pattern: ${String(err)}` };
     }
 
-    const files: string[] = [];
-    await walk(ctx.project_dir, files);
+    const files = await walkProjectFiles(ctx.project_dir, "absolute");
 
     const hits: { path: string; line: number; text: string }[] = [];
     for (const full of files) {

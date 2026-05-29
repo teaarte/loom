@@ -7,13 +7,11 @@
 // skipped so a glob over a real project doesn't enumerate dependencies.
 // One audit payload per call; no clock read.
 
-import { readdir } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { sep } from "node:path";
 
 import { resolveSafePath } from "../sandbox/resolve-safe-path.js";
+import { walkProjectFiles } from "./walk-project-files.js";
 import type { ToolContext, ToolDefinition, ToolResult } from "../types/tool.js";
-
-const SKIP_DIRS = new Set([".git", "node_modules", "dist"]);
 
 // Translate a glob to an anchored RegExp over POSIX-style relative paths.
 // `**` crosses directory boundaries, `*` and `?` do not.
@@ -47,24 +45,6 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp("^" + re + "$");
 }
 
-async function walk(root: string, dir: string, out: string[]): Promise<void> {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const ent of entries) {
-    const full = join(dir, ent.name);
-    if (ent.isDirectory()) {
-      if (SKIP_DIRS.has(ent.name)) continue;
-      await walk(root, full, out);
-    } else if (ent.isFile()) {
-      out.push(relative(root, full));
-    }
-  }
-}
-
 export const fileGlobTool: ToolDefinition = {
   name: "file_glob",
   description:
@@ -86,8 +66,7 @@ export const fileGlobTool: ToolDefinition = {
     const pattern = typeof input.pattern === "string" ? input.pattern : "";
     const re = globToRegExp(pattern);
 
-    const found: string[] = [];
-    await walk(ctx.project_dir, ctx.project_dir, found);
+    const found = await walkProjectFiles(ctx.project_dir, "relative");
 
     const matches: string[] = [];
     for (const rel of found) {

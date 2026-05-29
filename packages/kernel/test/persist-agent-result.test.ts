@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { buildAgentResult } from "../src/lib/build-agent-result.js";
 import { persistAgentResult } from "../src/lib/persist-agent-result.js";
+import { kernelDefaultVocabularies } from "../src/vocabularies.js";
 import { _resetInvariantsForTest } from "../src/invariants.js";
 import {
   KernelError,
@@ -438,5 +439,71 @@ describe("persistAgentResult — four output_kind paths", () => {
     assert.equal(state.total_tokens_out, 10);
     assert.equal(state.total_tokens_cached, 2);
     assert.equal(state.agents_count, 2);
+  });
+
+  it("refuses an undeclared output_kind with VOCAB_UNKNOWN and lands no row", async () => {
+    await seedBaseline(projectDir);
+    await seedPending(projectDir, "ar-bad-kind", "weird-agent");
+
+    await assert.rejects(
+      withStateTransaction(projectDir, captureNow(), async (tx) => {
+        await persistAgentResult(tx, {
+          result: {
+            agent: "weird-agent",
+            agent_run_id: "ar-bad-kind",
+            output: "x",
+            schema_validation: { ok: true },
+            tokens: { in: 1, out: 1 },
+          },
+          output_kind: "totally-made-up-kind",
+          phase: "p1",
+          model: null,
+          vocabularies: kernelDefaultVocabularies(),
+        });
+      }),
+      (err: unknown) => err instanceof KernelError && err.code === "VOCAB_UNKNOWN",
+    );
+
+    // The refusal fires before any write and rolls the whole delivery
+    // back: no agent_records row, the pending row still stands, counters
+    // untouched. Read through the direct connection (the tx rolled back).
+    const db = openDb(projectDir);
+    const rec = db
+      .prepare("SELECT COUNT(*) AS n FROM agent_records")
+      .get() as { n: number };
+    const pend = db
+      .prepare("SELECT COUNT(*) AS n FROM pending_agents WHERE agent_run_id = 'ar-bad-kind'")
+      .get() as { n: number };
+    const cnt = db
+      .prepare("SELECT agents_count FROM pipeline_counters WHERE id = 1")
+      .get() as { agents_count: number };
+    assert.equal(Number(rec.n), 0);
+    assert.equal(Number(pend.n), 1);
+    assert.equal(Number(cnt.agents_count), 0);
+  });
+
+  it("accepts a kernel-default output_kind when vocabularies are supplied", async () => {
+    await seedBaseline(projectDir);
+    await seedPending(projectDir, "ar-ok-kind", "nr-agent");
+
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      await persistAgentResult(tx, {
+        result: {
+          agent: "nr-agent",
+          agent_run_id: "ar-ok-kind",
+          output: "x",
+          schema_validation: { ok: true },
+          tokens: { in: 4, out: 5 },
+        },
+        output_kind: "nonreview",
+        phase: "p1",
+        model: null,
+        vocabularies: kernelDefaultVocabularies(),
+      });
+    });
+
+    const state = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(state.agents_count, 1);
+    assert.equal(state.pending_agents.length, 0);
   });
 });

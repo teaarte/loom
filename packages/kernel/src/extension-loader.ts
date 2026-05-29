@@ -25,8 +25,16 @@ import { pathToFileURL } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 
 import { KERNEL_SCHEMA_VERSION, withConnection } from "./state/db.js";
+import { assertVocabKnown, kernelDefaultVocabularies } from "./vocabularies.js";
 import type { ExtensionKind, ExtensionManifest } from "./types/extension.js";
 import type { NowToken } from "./types/now.js";
+
+// Reconciliation runs at start-up, before any bundle Registry exists,
+// so the lifecycle audit rows validate against the kernel baseline.
+// The values emitted here are all kernel-owned; the check is the
+// self-consistency guard that a new emit-site was also added to the
+// baseline set.
+const KERNEL_VOCAB = kernelDefaultVocabularies();
 
 // ============================================================================
 // Public types
@@ -232,6 +240,10 @@ function insertAudit(
   payload: AuditPayload,
 ): void {
   const errorClass = type === "extension-load-failed" ? "extension-load-failed" : null;
+  assertVocabKnown(KERNEL_VOCAB.audit_types, type, "audit_types");
+  if (errorClass !== null) {
+    assertVocabKnown(KERNEL_VOCAB.error_classes, errorClass, "error_class");
+  }
   db.prepare(
     "INSERT INTO audit (ts, type, task_id, driver_state_id, payload, verdict, error_class) " +
       "VALUES (?, ?, NULL, NULL, ?, 'ok', ?)",

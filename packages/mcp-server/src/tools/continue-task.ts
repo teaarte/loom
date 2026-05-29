@@ -112,6 +112,7 @@ export function createContinueTaskTool(
           input: input.input,
           driver_state_id: driverStateId,
           resolveOutputKind: (agent) => registry.agents.get(agent)?.output_kind,
+          vocabularies: registry.vocabularies,
         });
         const taskId = await readTaskId(tx);
         await writeAuditRow(tx, "pipeline_continue_task", taskId, driverStateId, {

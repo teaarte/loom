@@ -8,10 +8,13 @@
 // code never mutates an instance, and a bundle hot-swap (deferred)
 // would rebuild the registry, not patch in place.
 //
-// Per-insert `.has()` wiring at every kernel write site is a separate
-// concern — this layer constructs the merged sets and exposes them on
-// the Registry; the consumers (audit insert, finding insert, gate
-// decision recorder, etc.) gain runtime validation in a follow-up.
+// `assertVocabKnown(vocab, value, kind)` is the insert-time predicate
+// every kernel write site that touches a kernel-additive enum column
+// consults before persisting: it refuses an undeclared value with a
+// typed `VOCAB_UNKNOWN` so the enclosing transaction rolls back rather
+// than landing a row outside the merged set. `kernelDefaultVocabularies()`
+// returns the baseline-only set for write sites that emit fixed
+// kernel-owned values before a bundle Registry is in scope.
 //
 // Sunset contradiction is refused here: a value that the bundle both
 // declares in `extends_vocab.<kind>` AND retires via
@@ -134,6 +137,31 @@ function refuseSunsetContradiction(
   }
 }
 
+// Shared assembler — both the bundle-merge path and the
+// baseline-only path land here so the seven `Vocabulary<T>` instances
+// are constructed in exactly one place. `decided_by` / `sandbox_kinds`
+// / `provider_features` take no bundle extensions today (the bundle
+// surface declares none); they are still routed through the assembler
+// so a future extension axis is a one-line change.
+interface VocabExtensions {
+  audit_types: readonly string[];
+  output_kinds: readonly AgentOutputKind[];
+  error_classes: readonly string[];
+  gate_roles_extra: readonly GateRole[];
+}
+
+function assembleVocabularies(ext: VocabExtensions): KernelVocabularies {
+  return {
+    audit_types: makeVocabulary<string>(KERNEL_AUDIT_TYPES, ext.audit_types),
+    output_kinds: makeVocabulary<AgentOutputKind>(KERNEL_OUTPUT_KINDS, ext.output_kinds),
+    decided_by: makeVocabulary<GateDecidedBy>(KERNEL_DECIDED_BY, []),
+    error_classes: makeVocabulary<string>(KERNEL_ERROR_CLASSES, ext.error_classes),
+    sandbox_kinds: makeVocabulary<string>(KERNEL_SANDBOX_KINDS, []),
+    provider_features: makeVocabulary<string>(KERNEL_PROVIDER_FEATURES, []),
+    gate_roles: makeVocabulary<GateRole>(KERNEL_GATE_ROLES, ext.gate_roles_extra),
+  };
+}
+
 export function buildVocabularies(bundle: Bundle): KernelVocabularies {
   const ev = bundle.extends_vocab ?? {};
   const sunset = readSunsetEntries(bundle);
@@ -148,13 +176,45 @@ export function buildVocabularies(bundle: Bundle): KernelVocabularies {
   refuseSunsetContradiction(bundle, "error_classes", errorExt, sunset);
   refuseSunsetContradiction(bundle, "gate_roles_extra", gateExt as readonly string[], sunset);
 
-  return {
-    audit_types: makeVocabulary<string>(KERNEL_AUDIT_TYPES, auditExt),
-    output_kinds: makeVocabulary<AgentOutputKind>(KERNEL_OUTPUT_KINDS, outputExt),
-    decided_by: makeVocabulary<GateDecidedBy>(KERNEL_DECIDED_BY, []),
-    error_classes: makeVocabulary<string>(KERNEL_ERROR_CLASSES, errorExt),
-    sandbox_kinds: makeVocabulary<string>(KERNEL_SANDBOX_KINDS, []),
-    provider_features: makeVocabulary<string>(KERNEL_PROVIDER_FEATURES, []),
-    gate_roles: makeVocabulary<GateRole>(KERNEL_GATE_ROLES, gateExt),
-  };
+  return assembleVocabularies({
+    audit_types: auditExt,
+    output_kinds: outputExt,
+    error_classes: errorExt,
+    gate_roles_extra: gateExt,
+  });
+}
+
+// Baseline-only vocabularies — kernel defaults with no bundle
+// extensions. Write sites that emit fixed kernel-owned enum values
+// before a bundle Registry exists (extension reconciliation at
+// start-up) validate against this set; the values they emit are all
+// kernel baselines, so the guard is a self-consistency check that a
+// new emit-site was added to the baseline too.
+export function kernelDefaultVocabularies(): KernelVocabularies {
+  return assembleVocabularies({
+    audit_types: [],
+    output_kinds: [],
+    error_classes: [],
+    gate_roles_extra: [],
+  });
+}
+
+// Insert-time guard. Every kernel write site that lands a value in a
+// kernel-additive enum column calls this with the matching
+// `Vocabulary<T>` from the Registry in scope: an undeclared value is
+// refused with a typed `VOCAB_UNKNOWN`, rolling the enclosing
+// transaction back rather than silently persisting a row outside the
+// merged kernel-default + bundle-extension set.
+export function assertVocabKnown<T extends string>(
+  vocab: Vocabulary<T>,
+  value: string,
+  kind: string,
+): void {
+  if (!vocab.has(value)) {
+    throw new KernelError({
+      code: "VOCAB_UNKNOWN",
+      message: `'${value}' is not a declared '${kind}' vocabulary value`,
+      detail: { kind, value },
+    });
+  }
 }

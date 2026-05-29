@@ -20,6 +20,7 @@
 // tick latency for hook-heavy bundles.
 
 import { withStateTransaction } from "./state/transaction.js";
+import { assertVocabKnown } from "./vocabularies.js";
 import {
   indexHooksByEvent,
   resolveHooks,
@@ -105,6 +106,11 @@ export class HookRunner {
   }
 }
 
+// Kernel-baseline audit type + error_class for a thrown hook. Shared by
+// the audit row and the ledger's `hook_results_json` so a single
+// vocabulary check covers both.
+const HOOK_FAILURE = "hook-failure";
+
 async function runOne(hook: Hook, ctx: HookContext): Promise<HookMarker> {
   try {
     await hook.run(ctx);
@@ -164,6 +170,13 @@ export class KernelHookLedger implements HookLedger {
     ctx: HookContext,
   ): Promise<void> {
     if (markers.length === 0) return;
+    // The kernel emits a fixed audit type + error_class for a thrown
+    // hook; validate both against the merged vocabulary in scope before
+    // any row lands, so a future emit-site that drifts from the
+    // baseline is refused rather than silently inserted.
+    const vocab = ctx.registry.vocabularies;
+    assertVocabKnown(vocab.audit_types, HOOK_FAILURE, "audit_types");
+    assertVocabKnown(vocab.error_classes, HOOK_FAILURE, "error_class");
     await withStateTransaction(ctx.state.project_dir, ctx.now, async (tx) => {
       for (const m of markers) {
         const key = ledgerKey(m.name, m.correlation);
@@ -171,7 +184,7 @@ export class KernelHookLedger implements HookLedger {
           m.kind === "failed"
             ? JSON.stringify({
                 error: errorMessage(m.error),
-                error_class: "hook-failure",
+                error_class: HOOK_FAILURE,
               })
             : null;
         // INSERT OR IGNORE: a parallel writer (e.g. another HookRunner
@@ -204,12 +217,14 @@ export class KernelHookLedger implements HookLedger {
           await tx.exec(
             "INSERT INTO audit (ts, type, task_id, driver_state_id, payload, " +
               "verdict, error_class) " +
-              "VALUES (?, 'hook-failure', ?, ?, ?, 'error', 'hook-failure')",
+              "VALUES (?, ?, ?, ?, ?, 'error', ?)",
             [
               ctx.now,
+              HOOK_FAILURE,
               ctx.state.task_id,
               ctx.state.driver_state_id,
               payload,
+              HOOK_FAILURE,
             ],
           );
           // Mirror onto tx.audit_buffer so any downstream subsystem

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { deliverContinue } from "../src/lib/deliver-continue.js";
+import { kernelDefaultVocabularies } from "../src/vocabularies.js";
 import {
   KernelError,
   closeDb,
@@ -234,6 +235,49 @@ describe("deliverContinue", () => {
         ),
       );
       assert.ok(ledger !== null);
+    }));
+
+  it("agent-result with an undeclared output_kind is refused VOCAB_UNKNOWN and rolls back", async () =>
+    withFreshDir(async (dir) => {
+      const arid = "ar-00000000-0000-0000-0000-0000000000c1";
+      await seedTask(dir, {
+        pending: [{ agent_run_id: arid, agent: "weird-agent", phase: "work" }],
+      });
+
+      // This is the PRODUCTION seam: deliverContinue resolves the
+      // agent's output_kind (here an undeclared one, as a bundle agent
+      // could declare) and threads the registry vocabularies into the
+      // persistor. The undeclared kind must be refused before any row
+      // lands. Reverting the deliver→persist vocab threading makes this
+      // pass (the gap this test closes).
+      await assert.rejects(
+        withStateTransaction(dir, FIXED_NOW, (tx) =>
+          deliverContinue(tx, {
+            input: { type: "agent-result", agent_run_id: arid, agent_output: "done" },
+            driver_state_id: DRIVER,
+            resolveOutputKind: () => "made-up-kind",
+            vocabularies: kernelDefaultVocabularies(),
+          }),
+        ),
+        (err: unknown) => err instanceof KernelError && err.code === "VOCAB_UNKNOWN",
+      );
+
+      // Rolled back: no agent_records row, pending still stands, counters
+      // untouched, no ledger row.
+      const state = await read(dir, (tx) => loadState(tx));
+      assert.equal(state.agents_count, 0);
+      assert.equal(state.pending_agents.length, 1);
+      const recs = await read(dir, (tx) =>
+        tx.queryRow<{ c: number }>("SELECT COUNT(*) AS c FROM agent_records"),
+      );
+      assert.equal(Number(recs?.c), 0);
+      const ledger = await read(dir, (tx) =>
+        tx.queryRow<{ key: string }>(
+          "SELECT key FROM kernel_idempotency_ledger WHERE key = ?",
+          [`agent-result:${arid}`],
+        ),
+      );
+      assert.equal(ledger, null);
     }));
 
   it("user-answer with a stale gate_event_id is refused", async () =>

@@ -24,9 +24,11 @@
 // Wall-clock discipline: every timestamp comes from `tx.now`.
 
 import { KernelError } from "../state/db.js";
+import { assertVocabKnown } from "../vocabularies.js";
 import type { ContinueTaskInput } from "../types/continue-task.js";
 import type { AgentOutputKind } from "../types/plugins.js";
 import type { Transaction } from "../types/transaction.js";
+import type { KernelVocabularies } from "../types/vocabulary.js";
 
 import { buildAgentResult } from "./build-agent-result.js";
 import { readLedgerRow, writeLedgerRow } from "./ledger.js";
@@ -39,6 +41,11 @@ export interface DeliverContinueArgs {
   // extract findings / verdicts. Defaults to "nonreview" when the
   // resolver is absent or returns undefined.
   resolveOutputKind?: (agent: string) => AgentOutputKind | undefined;
+  // Registry vocabularies for insert-time validation. Threaded to the
+  // persistor (`agent_records.output_kind`) and consulted for the gate
+  // decision's `decided_by`. Optional for the same reason
+  // `resolveOutputKind` is — the production delivery path supplies it.
+  vocabularies?: KernelVocabularies;
 }
 
 export async function deliverContinue(
@@ -132,7 +139,13 @@ async function deliverAgentResult(
     output_kind: outputKind,
     raw_output: agentOutput,
   });
-  await persistAgentResult(tx, { result, output_kind: outputKind, phase, model });
+  await persistAgentResult(tx, {
+    result,
+    output_kind: outputKind,
+    phase,
+    model,
+    ...(args.vocabularies !== undefined ? { vocabularies: args.vocabularies } : {}),
+  });
 
   const taskId = await readTaskId(tx);
   await writeLedgerRow(tx, key, {
@@ -165,13 +178,21 @@ async function deliverUserAnswer(
   }
 
   const status = input.decision === "reject" ? "rejected" : "approved";
+  // A human-answered gate is recorded `decided_by = "human"`. Validate
+  // the value against the merged vocabulary before it lands so the
+  // `decided_by` column stays inside the declared set — the same
+  // insert-time discipline the other enum columns get.
+  const decidedBy = "human";
+  if (args.vocabularies !== undefined) {
+    assertVocabKnown(args.vocabularies.decided_by, decidedBy, "decided_by");
+  }
   await tx.exec(
     "INSERT INTO gates (name, status, decided_by, feedback, decided_at) " +
-      "VALUES (?, ?, 'human', ?, ?) " +
+      "VALUES (?, ?, ?, ?, ?) " +
       "ON CONFLICT(name) DO UPDATE SET " +
       "status = excluded.status, decided_by = excluded.decided_by, " +
       "feedback = excluded.feedback, decided_at = excluded.decided_at",
-    [pending.gate, status, input.message ?? null, tx.now],
+    [pending.gate, status, decidedBy, input.message ?? null, tx.now],
   );
 
   await tx.exec(

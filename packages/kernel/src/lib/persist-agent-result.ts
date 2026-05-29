@@ -22,11 +22,13 @@
 
 import { makeFindingId } from "../ids.js";
 import { parseStateJson } from "../state/json.js";
+import { assertVocabKnown } from "../vocabularies.js";
 import type { AgentResult } from "../types/agent-result.js";
 import type { Finding } from "../types/findings.js";
 import type { AgentOutputKind } from "../types/plugins.js";
 import type { Phase, ModelName } from "../types/row-types.js";
 import type { Transaction } from "../types/transaction.js";
+import type { KernelVocabularies } from "../types/vocabulary.js";
 
 export interface PersistAgentResultArgs {
   result: AgentResult;
@@ -34,6 +36,14 @@ export interface PersistAgentResultArgs {
   phase: Phase;
   model: ModelName | null;
   iteration?: number;
+  // Registry vocabularies for insert-time validation. Optional so the
+  // many in-kernel harnesses that exercise unrelated persistence
+  // behavior need not thread a set; the production delivery path always
+  // supplies it (the same shape as the optional `resolveOutputKind`
+  // resolver on the continue surface). When present, an `output_kind`
+  // outside the merged set is refused with `VOCAB_UNKNOWN` before the
+  // `agent_records` row lands.
+  vocabularies?: KernelVocabularies;
 }
 
 export async function persistAgentResult(
@@ -43,6 +53,13 @@ export async function persistAgentResult(
   const { result, output_kind, phase, model } = args;
   const iteration = args.iteration ?? 1;
   const now = tx.now;
+
+  // Refuse an undeclared output_kind before writing the forensic row —
+  // a bundle agent declaring an `output_kind` outside the merged
+  // vocabulary would otherwise land silently in `agent_records`.
+  if (args.vocabularies !== undefined) {
+    assertVocabKnown(args.vocabularies.output_kinds, output_kind, "output_kind");
+  }
 
   // 1. agent_records — one row per delivered result, including
   //    schema-invalid ones (kept for forensics; findings stay empty).

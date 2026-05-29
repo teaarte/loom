@@ -21,6 +21,7 @@
 // path — the lint enforces this; replay verdicts depend on it.
 
 import { makeFindingId } from "../ids.js";
+import { parseStateJson } from "../state/json.js";
 import type { AgentResult } from "../types/agent-result.js";
 import type { Finding } from "../types/findings.js";
 import type { AgentOutputKind } from "../types/plugins.js";
@@ -202,28 +203,23 @@ async function mergeClassifierDecisions(
   header: Record<string, unknown> | undefined,
 ): Promise<void> {
   if (header === undefined) return;
-  // The classifier writes the entire decision header into
-  // `pipeline_state.decisions`. We materialize the current row, merge
-  // the header keys in, and write the new JSON back. `json_patch` is
-  // the future shape; today's full re-serialize keeps the migration
-  // out of K-scope while preserving the same observable behavior.
+  // The classifier writes its decision header into
+  // `pipeline_state.decisions`: materialize the current row, merge the
+  // header keys in, and write the whole object back (a full re-serialize —
+  // the row is single-writer under this tx). An unparseable blob here is a
+  // corrupted state row: the json_valid CHECK should have refused the write
+  // that produced it, so reaching a parse failure means tampering or a
+  // backend skew. `parseStateJson` fails loud (STATE_CORRUPT rolls this
+  // delivery's tx back) rather than overwriting live decisions with `{}`
+  // and silently dropping whatever was actually there.
   const row = await tx.queryRow<{ decisions: string | null }>(
     "SELECT decisions FROM pipeline_state WHERE id = 1",
   );
-  let current: Record<string, unknown> = {};
-  if (row?.decisions !== null && row?.decisions !== undefined) {
-    try {
-      const parsed = JSON.parse(row.decisions) as unknown;
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        current = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // Corrupt JSON should never reach here — pipeline_state.decisions
-      // CHECK(json_valid) refuses writes that would. If it somehow does,
-      // overwriting is safer than aborting the whole delivery.
-      current = {};
-    }
-  }
+  const parsed = parseStateJson<unknown>(row?.decisions ?? null, null);
+  const current: Record<string, unknown> =
+    parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
   const merged: Record<string, unknown> = { ...current };
   for (const [k, v] of Object.entries(header)) {
     if (k === "verdict" || k === "summary" || k === "findings") continue;

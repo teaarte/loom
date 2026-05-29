@@ -204,6 +204,14 @@ function buildAgentRecordsAccess(rows: AgentRecord[]): AgentRecordsAccess {
   };
 }
 
+// Parse one audit-row `payload` for the display surface. This is the audit
+// DISPLAY reader, and it deliberately TOLERATES a bad blob: a single
+// corrupt payload must not blank the entire audit / forensic view, which a
+// thrown STATE_CORRUPT would do (it would roll back the whole read). A
+// malformed row degrades to `{}` so the surrounding rows still render. The
+// authoritative state readers — the snapshot materializer and the
+// decisions-merge path — do the opposite and fail loud via `parseStateJson`;
+// that leniency is scoped to this display-only reader on purpose.
 function parseJsonObject(raw: unknown): Record<string, unknown> {
   if (raw === null || raw === undefined) return {};
   const s = typeof raw === "string" ? raw : String(raw);
@@ -214,7 +222,8 @@ function parseJsonObject(raw: unknown): Record<string, unknown> {
       return parsed as Record<string, unknown>;
     }
   } catch {
-    /* fall through */
+    // Tolerated on purpose — see the note above: a malformed audit payload
+    // degrades to `{}` rather than aborting the forensic view.
   }
   return {};
 }

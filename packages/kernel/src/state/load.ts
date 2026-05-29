@@ -20,6 +20,7 @@ import type {
 import type { PipelineState } from "../types/state.js";
 import type { Transaction } from "../types/transaction.js";
 import { KernelError } from "./db.js";
+import { parseStateJson as parseJsonField } from "./json.js";
 
 // Materialize the typed PipelineState from rows in the open tx.
 //
@@ -181,20 +182,6 @@ export async function loadState(tx: Transaction): Promise<PipelineState> {
     pending_agents,
     now: tx.now,
   };
-}
-
-function parseJsonField<T>(raw: unknown, fallback: T): T {
-  if (raw === null || raw === undefined) return fallback;
-  const s = typeof raw === "string" ? raw : String(raw);
-  if (s === "") return fallback;
-  try {
-    return JSON.parse(s) as T;
-  } catch {
-    throw new KernelError({
-      code: "STATE_CORRUPT",
-      message: `JSON parse failed in state row (len=${s.length})`,
-    });
-  }
 }
 
 // ============================================================================

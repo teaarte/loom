@@ -8,9 +8,11 @@ import { buildAgentResult } from "../src/lib/build-agent-result.js";
 import { persistAgentResult } from "../src/lib/persist-agent-result.js";
 import { _resetInvariantsForTest } from "../src/invariants.js";
 import {
+  KernelError,
   captureNow,
   closeDb,
   loadState,
+  openDb,
   withStateTransaction,
 } from "../src/state.js";
 import type { NowToken } from "../src/types/now.js";
@@ -326,6 +328,56 @@ describe("persistAgentResult — four output_kind paths", () => {
     assert.equal(state.decisions["verdict"], undefined);
     assert.equal(state.decisions["summary"], undefined);
     assert.equal(state.decisions["findings"], undefined);
+  });
+
+  it("classifier: throws STATE_CORRUPT and rolls back on an unparseable decisions blob", async () => {
+    await seedBaseline(projectDir);
+    await seedPending(projectDir, "ar-cls-bad", "cls-agent");
+
+    // Force an unparseable blob past the json_valid CHECK the way real
+    // tampering / backend skew would. The guard under test is the READER,
+    // not the write-time constraint, so we bypass the constraint to set up.
+    const db = openDb(projectDir);
+    db.exec("PRAGMA ignore_check_constraints = ON");
+    db.prepare("UPDATE pipeline_state SET decisions = ? WHERE id = 1").run("not-json{");
+    db.exec("PRAGMA ignore_check_constraints = OFF");
+
+    await assert.rejects(
+      withStateTransaction(projectDir, captureNow(), async (tx) => {
+        await persistAgentResult(tx, {
+          result: {
+            agent: "cls-agent",
+            agent_run_id: "ar-cls-bad",
+            output: "{...}",
+            parsed_header: { complexity: "high" },
+            schema_validation: { ok: true },
+          },
+          output_kind: "classifier",
+          phase: "p1",
+          model: null,
+        });
+      }),
+      (err: unknown) => err instanceof KernelError && err.code === "STATE_CORRUPT",
+    );
+
+    // The whole delivery rolled back: the corrupt blob is untouched (NOT
+    // overwritten with `{}` or the merged header), the pending row still
+    // stands, and counters were not bumped. Read through the direct
+    // connection — a withStateTransaction commit now also fails loud on the
+    // corrupt blob (its invariant pass loads state), which is the same
+    // fail-closed contract, just not what we want to assert against here.
+    const decRow = db
+      .prepare("SELECT decisions FROM pipeline_state WHERE id = 1")
+      .get() as { decisions: string };
+    const pendRow = db
+      .prepare("SELECT count(*) AS n FROM pending_agents WHERE agent_run_id = 'ar-cls-bad'")
+      .get() as { n: number };
+    const cntRow = db
+      .prepare("SELECT agents_count FROM pipeline_counters WHERE id = 1")
+      .get() as { agents_count: number };
+    assert.equal(decRow.decisions, "not-json{");
+    assert.equal(Number(pendRow.n), 1);
+    assert.equal(Number(cntRow.agents_count), 0);
   });
 
   it("schema-invalid result: persists agent_records but skips findings/verdict", async () => {

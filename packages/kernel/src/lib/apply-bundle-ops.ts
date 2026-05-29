@@ -14,26 +14,35 @@
 import { KernelError } from "../state/db.js";
 import type { BundleOp } from "../types/context.js";
 import type { Finding } from "../types/findings.js";
+import type { Phase } from "../types/row-types.js";
 import type { Transaction } from "../types/transaction.js";
 
 const BUNDLE_TABLE_NAME = /^[a-z_][a-z0-9_]*$/;
 
+// `phase` is the active stage's phase, threaded from the FSM tick so a
+// `record_finding` op buffered by a bundle Step lands under the real
+// phase rather than a placeholder. The BundleOp envelope itself carries
+// no phase — it is worker-portable and the phase is a kernel-side fact —
+// so the kernel stamps it here, at the single drain point. Defaults to
+// the empty string for the few callers (FinalizeStage, a phase-less
+// event Step) where the active stage has no phase.
 export async function applyBundleOps(
   tx: Transaction,
   ops: BundleOp[],
+  phase: Phase = "",
 ): Promise<void> {
   for (const op of ops) {
-    await applyOne(tx, op);
+    await applyOne(tx, op, phase);
   }
 }
 
-async function applyOne(tx: Transaction, op: BundleOp): Promise<void> {
+async function applyOne(tx: Transaction, op: BundleOp, phase: Phase): Promise<void> {
   switch (op.op) {
     case "set_decision":
       await mergeJsonObjectColumn(tx, "decisions", { [op.key]: op.value });
       return;
     case "record_finding":
-      await insertFinding(tx, op.finding);
+      await insertFinding(tx, op.finding, phase);
       return;
     case "set_bundle_state_field":
       await mergeJsonObjectColumn(tx, "bundle_state", { [op.path]: op.value });
@@ -73,15 +82,13 @@ async function applyOne(tx: Transaction, op: BundleOp): Promise<void> {
   }
 }
 
-async function insertFinding(tx: Transaction, f: Finding): Promise<void> {
-  // Phase resolution for ops-buffered findings ships with the
-  // bundle-loader's stage-aware scratch context — the BundleOp
-  // shape today has no phase field, and the persistAgentResult
-  // path is the production write surface that DOES thread phase.
-  // The empty-string fallback below keeps a record landing on the
-  // forensics surface even if a Step.run pushes record_finding
-  // directly (no SQL constraint forbids empty TEXT, only NULL).
-  const phaseFallback = "";
+async function insertFinding(tx: Transaction, f: Finding, phase: Phase): Promise<void> {
+  // `phase` is the active stage's phase threaded from the tick. A
+  // bundle Step that pushes `record_finding` directly through
+  // `ctx.tx.record_finding(...)` now lands its forensics row under the
+  // running phase; the empty-string fallback applies only when the
+  // active stage genuinely has none (FinalizeStage / a phase-less event
+  // Step) — no SQL constraint forbids empty TEXT, only NULL.
   await tx.exec(
     "INSERT INTO findings (id, task_id, agent, iteration, phase, file, " +
       "line_start, line_end, severity, category, proposed_new_category, " +
@@ -93,7 +100,7 @@ async function insertFinding(tx: Transaction, f: Finding): Promise<void> {
       f.task_id.length > 0 ? f.task_id : null,
       f.agent,
       f.iteration,
-      phaseFallback,
+      phase,
       f.file,
       f.line_start,
       f.line_end,

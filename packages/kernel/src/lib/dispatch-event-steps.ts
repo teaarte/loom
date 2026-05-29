@@ -17,6 +17,7 @@
 import { applyBundleOps } from "./apply-bundle-ops.js";
 import type { BundleOp, StageContext } from "../types/context.js";
 import type { HookEvent, StepStage } from "../types/plugins.js";
+import type { Phase } from "../types/row-types.js";
 import type { Transaction } from "../types/transaction.js";
 
 export async function dispatchEventSteps(
@@ -24,6 +25,7 @@ export async function dispatchEventSteps(
   ctx: StageContext,
   tx: Transaction,
   ops: BundleOp[],
+  phase: Phase = "",
 ): Promise<void> {
   const matches: StepStage[] = [];
   for (const stage of ctx.registry.stages.values()) {
@@ -42,9 +44,10 @@ export async function dispatchEventSteps(
     }
     // Drain whatever this Step pushed before the next Step runs —
     // ordering matters when two event-Steps subscribe to the same
-    // event and depend on each other's writes.
+    // event and depend on each other's writes. The active phase is
+    // threaded so a finding the Step buffers lands under it.
     if (ops.length > 0) {
-      await applyBundleOps(tx, ops);
+      await applyBundleOps(tx, ops, phase);
       ops.length = 0;
     }
   }

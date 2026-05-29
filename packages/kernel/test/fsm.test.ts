@@ -993,6 +993,62 @@ describe("applyBundleOps — multi-variant coverage via Step.run", () => {
     assert.deepEqual(persisted.files_created, ["src/c.ts"]);
   });
 
+  it("record_finding pushed from a Step lands under the active stage's phase, not ''", async () => {
+    const stages: Record<string, Stage> = {
+      flag: {
+        kind: "step",
+        name: "flag",
+        phase: "p1",
+        position: "positional",
+        effects: [{ kind: "finding.insert", phase: "p1" }],
+        run: async (_state, ctx) => {
+          ctx.tx.record_finding?.({
+            schema_version: "1.0",
+            id: "f-2026-05-28-aaaaaa",
+            agent: "step-author",
+            iteration: 1,
+            task_id: "t-2026-05-28-fixture",
+            file: "src/x.ts",
+            line_start: 1,
+            line_end: 2,
+            severity: "warn",
+            category: "style",
+            proposed_new_category: null,
+            pattern_id: null,
+            summary: "pushed from a Step",
+            evidence_excerpt: null,
+            suggested_fix: null,
+            status: "open",
+            ref_rule_id: null,
+          });
+        },
+      },
+      g1: {
+        kind: "gate",
+        name: "g1",
+        phase: "p1",
+        message: () => "",
+        valid_answers: () => ({ options: [] }),
+      },
+    };
+    const registry = buildRegistry({ stages, flow: ["flag", "g1"] });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    await runFSM(state, registry);
+
+    const row = await withStateTransaction(projectDir, captureNow(), (tx) =>
+      tx.queryRow<{ phase: string }>(
+        "SELECT phase FROM findings WHERE id = 'f-2026-05-28-aaaaaa'",
+      ),
+    );
+    assert.ok(row !== null, "the pushed finding should have landed");
+    // The regression: before the active phase was threaded into the
+    // scratch-buffer drain, a Step-pushed finding got the empty-string
+    // placeholder. It now carries the running phase.
+    assert.equal(row?.phase, "p1");
+  });
+
   it("record_files_modified dedupes against the existing array", async () => {
     const stages: Record<string, Stage> = {
       add: {
@@ -1164,6 +1220,64 @@ describe("dispatchEventSteps — rollback on throw", () => {
     );
     assert.equal(persisted.pending_agents.length, 0);
     assert.equal(persisted.decisions["should-not-land"], undefined);
+  });
+
+  it("an event Step pushing record_finding lands it under the active stage's phase", async () => {
+    const eventStep: StepStage = {
+      kind: "step",
+      name: "before-step-finder",
+      position: "event",
+      event: "before-step",
+      effects: [{ kind: "finding.insert", phase: "p1" }],
+      run: async (_state, ctx) => {
+        ctx.tx.record_finding?.({
+          schema_version: "1.0",
+          id: "f-2026-05-28-ev0001",
+          agent: "event-author",
+          iteration: 1,
+          task_id: "t-2026-05-28-fixture",
+          file: "src/y.ts",
+          line_start: 3,
+          line_end: 3,
+          severity: "info",
+          category: "style",
+          proposed_new_category: null,
+          pattern_id: null,
+          summary: "pushed from an event Step",
+          evidence_excerpt: null,
+          suggested_fix: null,
+          status: "open",
+          ref_rule_id: null,
+        });
+      },
+    };
+    const stages: Record<string, Stage> = {
+      work: { kind: "step", name: "work", phase: "p1", position: "positional", effects: [] },
+      "before-step-finder": eventStep,
+      g1: {
+        kind: "gate",
+        name: "g1",
+        phase: "p1",
+        message: () => "",
+        valid_answers: () => ({ options: [] }),
+      },
+    };
+    const registry = buildRegistry({ stages, flow: ["work", "g1"] });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    await runFSM(state, registry);
+
+    // The event Step fires on `before-step` entering `work` (phase p1).
+    // Its finding drains through dispatchEventSteps with the active
+    // stage's phase — the path the positional test does NOT cover.
+    const row = await withStateTransaction(projectDir, captureNow(), (tx) =>
+      tx.queryRow<{ phase: string }>(
+        "SELECT phase FROM findings WHERE id = 'f-2026-05-28-ev0001'",
+      ),
+    );
+    assert.ok(row !== null, "the event-pushed finding should have landed");
+    assert.equal(row?.phase, "p1");
   });
 });
 

@@ -124,12 +124,17 @@ export async function runFSM(
     const beforeCtx = await buildHookContext(state, registry, now, stageName);
     await hookRunner.fire(`before-${stage.kind}`, beforeCtx);
 
+    // The active stage's phase, threaded through the scratch-buffer
+    // drain so a `record_finding` a bundle Step pushes lands under the
+    // running phase rather than a placeholder.
+    const activePhase = stagePhase(stage);
+
     const stageResult = await withStateTransaction(
       state.project_dir,
       now,
       async (tx) => {
         const { ctx, ops } = await buildStageContext(state, registry, tx);
-        await dispatchEventSteps(`before-${stage.kind}`, ctx, tx, ops);
+        await dispatchEventSteps(`before-${stage.kind}`, ctx, tx, ops, activePhase);
         const result = await interpretStage(stage, state, ctx);
         if (result.type === "ask_user") {
           // A human-required gate parks the tick until a user answers.
@@ -145,7 +150,7 @@ export async function runFSM(
         // StepStage's `run` body) pushed into the scratch buffer.
         // A throw here aborts the outer tx — invariants on commit
         // catch what mutators alone cannot.
-        await applyBundleOps(tx, ops);
+        await applyBundleOps(tx, ops, activePhase);
         ops.length = 0;
         return result;
       },
@@ -261,6 +266,17 @@ export async function interpretStage(
       return _exhaustive;
     }
   }
+}
+
+// Resolve the active stage's phase for the scratch-buffer drain.
+// FinalizeStage carries no phase by design and a StepStage's phase is
+// optional; both fall back to the empty string the findings column
+// tolerated before — every phase-bearing stage now stamps its real
+// phase onto a bundle-pushed finding.
+function stagePhase(stage: Stage): Phase {
+  if (stage.kind === "finalize") return "";
+  if (stage.kind === "step") return stage.phase ?? "";
+  return stage.phase;
 }
 
 // Record the pending user answer for a parked gate inside the tick's tx.

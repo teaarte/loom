@@ -14,6 +14,7 @@ import {
 import { createBackupTool } from "./tools/backup.js";
 import { createContinueTaskTool } from "./tools/continue-task.js";
 import { createExtensionsListTool } from "./tools/extensions-list.js";
+import { createIssueCrossOwnerMarkerTool } from "./tools/issue-marker.js";
 import { createMetaTool, type MetaInputWithProject } from "./tools/meta.js";
 import { createRecoverTool } from "./tools/recover.js";
 import { createRestoreTool } from "./tools/restore.js";
@@ -26,6 +27,8 @@ import type {
   ContinueTaskResponse,
   ExtensionsListInput,
   ExtensionsListResponse,
+  IssueCrossOwnerMarkerInput,
+  IssueCrossOwnerMarkerResponse,
   PipelineMetaResponse,
   PipelineStateView,
   RecoverTaskInput,
@@ -59,6 +62,10 @@ export interface ToolRegistry {
   pipeline_run_task: ToolHandler<RunTaskInput, RunTaskResponse>;
   pipeline_continue_task: ToolHandler<ContinueTaskRequestInput, ContinueTaskResponse>;
   pipeline_recover: ToolHandler<RecoverTaskInput, RecoverTaskResponse>;
+  pipeline_issue_cross_owner_marker: ToolHandler<
+    IssueCrossOwnerMarkerInput,
+    IssueCrossOwnerMarkerResponse
+  >;
   pipeline_backup: ToolHandler<BackupInput, BackupResponse>;
   pipeline_restore: ToolHandler<RestoreInput, RestoreResponse>;
 }
@@ -186,9 +193,29 @@ const TOOL_DESCRIPTORS = [
         agent_run_ids: { type: "array", items: { type: "string" } },
         recovery_id: { type: "string" },
         owner_id: { type: "string" },
+        marker: { type: "object" },
         client_identifier_unverified: { type: "string" },
       },
       required: ["project_dir", "driver_state_id", "choice"],
+    },
+  },
+  {
+    name: "pipeline_issue_cross_owner_marker",
+    description:
+      "Mints a single-use, TTL-bounded cross-owner bypass marker for a " +
+      "task whose owner differs from the caller. Possessing the bypass-HMAC " +
+      "key (env var or user-global key file) is the authorization to mint; " +
+      "returns the signed marker fields to pass to pipeline_recover.marker. " +
+      "Refuses with BYPASS_KEY_MISSING when no key is configured.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_dir: { type: "string" },
+        driver_state_id: { type: "string" },
+        ttl_ms: { type: "number" },
+        client_identifier_unverified: { type: "string" },
+      },
+      required: ["project_dir", "driver_state_id", "ttl_ms"],
     },
   },
   {
@@ -236,6 +263,7 @@ export function createServer(deps: ServerDeps = {}): CreateServerHandle {
     pipeline_run_task: createRunTaskTool(deps),
     pipeline_continue_task: createContinueTaskTool(deps),
     pipeline_recover: createRecoverTool(deps),
+    pipeline_issue_cross_owner_marker: createIssueCrossOwnerMarkerTool(deps),
     pipeline_backup: createBackupTool(deps),
     pipeline_restore: createRestoreTool(deps),
   };
@@ -284,6 +312,11 @@ async function dispatch(
   }
   if (name === "pipeline_recover") {
     return await tools.pipeline_recover(args as unknown as RecoverTaskInput);
+  }
+  if (name === "pipeline_issue_cross_owner_marker") {
+    return await tools.pipeline_issue_cross_owner_marker(
+      args as unknown as IssueCrossOwnerMarkerInput,
+    );
   }
   if (name === "pipeline_backup") {
     return await tools.pipeline_backup(args as unknown as BackupInput);

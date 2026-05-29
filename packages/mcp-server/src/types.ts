@@ -180,6 +180,17 @@ export type RecoveryChoiceInput =
   | "retry-failed"
   | "cancel-pending";
 
+// The marker fields a caller presents on a cross-owner recovery — the
+// exact shape `pipeline_issue_cross_owner_marker` returns. Every field
+// except `key_id` feeds the HMAC the kernel re-derives to verify it.
+export interface BypassMarkerInput {
+  issued_at: string;
+  expires_at: string;
+  reason: string;
+  hmac: string;
+  key_id: string;
+}
+
 export interface RecoverTaskInput {
   project_dir: string;
   driver_state_id: string;
@@ -191,8 +202,35 @@ export interface RecoverTaskInput {
   // response; omit it to issue a NEW recovery action.
   recovery_id?: string;
   owner_id?: string;
+  // Present only for a cross-owner recovery — the signed, single-use
+  // marker an operator minted via pipeline_issue_cross_owner_marker.
+  marker?: BypassMarkerInput;
   // Opaque, unverified caller string — audit only.
   client_identifier_unverified?: string;
+}
+
+// ---------------------------------------------------------------------
+// pipeline_issue_cross_owner_marker
+// ---------------------------------------------------------------------
+
+export interface IssueCrossOwnerMarkerInput {
+  project_dir: string;
+  driver_state_id: string;
+  ttl_ms: number;
+  client_identifier_unverified?: string;
+}
+
+// On success every field is set and `error` is undefined; on a refusal
+// (allowlist miss, no signing key) the fields are null and `error`
+// carries the typed code. The caller passes the marker fields verbatim
+// to pipeline_recover.
+export interface IssueCrossOwnerMarkerResponse {
+  key_id: string | null;
+  hmac: string | null;
+  issued_at: string | null;
+  expires_at: string | null;
+  reason: string | null;
+  error?: { code: string; message: string };
 }
 
 // The wire response plus the always-present server-issued recovery_id (a

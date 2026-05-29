@@ -1,13 +1,25 @@
 // pipeline_recover — the five-choice recovery surface.
 //
 // Composition mirrors pipeline_continue_task: project-dir allowlist gate
-// → owner comparison → ledger replay lookup → recover inside one
-// withStateTransaction (the recovery-keyed ledger row + a co-committed
-// audit row land with the state mutation) → for the re-entrant choices
-// (retry / retry-failed / cancel-pending) load state and run the FSM to
-// the next directive; for the terminal choices (abandon / force-close)
-// shape the terminal response directly → materialize the cached response
-// on the ledger row.
+// → ledger replay lookup → recover inside one withStateTransaction (the
+// owner check + the recovery-keyed ledger row + a co-committed audit row
+// land with the state mutation) → for the re-entrant choices (retry /
+// retry-failed / cancel-pending) resolve the next directive; for the
+// terminal choices (abandon / force-close) shape the terminal response
+// directly → materialize the cached response on the ledger row.
+//
+// Owner check + cross-owner marker: the owner comparison runs INSIDE the
+// recovery tx via `ownerCheckGuard`. Same-owner / unclaimed tasks pass
+// untouched. A cross-owner recovery is refused with CROSS_OWNER_REQUIRED
+// unless the caller presents a signed `marker`; a presented marker is
+// verified (signature, target, expiry, key) and CONSUMED in the same tx
+// as the recovery — no read-then-act window. `client_identifier_unverified`
+// stays forensics-only (the kernel never branches on it).
+//
+// retry-failed: the named pending rows are re-shuttled reusing their
+// existing agent_run_id (no fresh begin_spawn → no duplicate-window
+// trip), gated on provider idempotency — a non-idempotent provider is
+// refused with PROVIDER_NOT_IDEMPOTENT.
 //
 // recovery_id is server-issued: omit it on the first call (the kernel
 // mints one and returns it); pass it back to replay the cached response
@@ -15,29 +27,29 @@
 // carries the (minted-or-supplied) recovery_id so a client retry is
 // keyable — even when the response is an error envelope.
 //
-// Cross-owner recovery is refused with CROSS_OWNER_MARKER_REQUIRED: the
-// owner_id comparison is the only owner check this surface performs — the
-// bypass-marker acceptance path is a separate concern and is not reached
-// here.
-//
-// Refusals (allowlist, owner mismatch, invalid/stale/terminal recovery,
+// Refusals (allowlist, owner / marker, invalid/stale/terminal recovery,
 // missing registry) are error-shaped wire envelopes; only programmer
 // errors throw.
 
 import {
   assertProjectDirAllowed,
+  buildRetryFailedDirective,
   captureNow,
   KernelError,
   loadState,
   makeRecoveryId,
   openDb,
+  ownerCheckGuard,
   readLedgerRow,
   recoverTask,
   runFSM,
   TransactionImpl,
   withStateTransaction,
   writeLedgerRow,
+  type BypassMarker,
+  type NowToken,
   type Registry,
+  type RecoveryOutcome,
   type Transaction,
 } from "@loom/kernel";
 import type { TransportResponse } from "@loom/transport-types";
@@ -84,26 +96,13 @@ export function createRecoverTool(
       return refusal(err, driverStateId, recoveryId);
     }
 
-    // 2. Owner comparison. A row owner_id that is set and differs from the
-    //    caller refuses cross-owner recovery; the marker path is separate.
     const callerOwner =
       typeof input.owner_id === "string" && input.owner_id.length > 0
         ? input.owner_id
         : DEFAULT_OWNER;
-    let ownerCheck: { code: string; message: string } | null;
-    try {
-      ownerCheck = await checkOwner(input.project_dir, callerOwner);
-    } catch (err) {
-      return refusal(err, driverStateId, recoveryId);
-    }
-    if (ownerCheck !== null) {
-      return {
-        response: errorResponse(driverStateId, ownerCheck.code, ownerCheck.message),
-        recovery_id: recoveryId,
-      };
-    }
+    const marker = toBypassMarker(input.marker);
 
-    // 3. Replay — a materialized ledger blob for this exact recovery action
+    // 2. Replay — a materialized ledger blob for this exact recovery action
     //    replays the cached envelope verbatim (same recovery_id echoed).
     const ledgerKey = `recovery:${driverStateId}:${input.choice}:${recoveryId}`;
     const cached = await readCachedRecovery(input.project_dir, ledgerKey);
@@ -111,7 +110,7 @@ export function createRecoverTool(
       return { response: cached, recovery_id: recoveryId };
     }
 
-    // 4. The re-entrant choices need a flow to tick; without a registry
+    // 3. The re-entrant choices need a flow to tick; without a registry
     //    they refuse. Terminal choices (abandon / force-close) shape a
     //    terminal response with no FSM tick, so they proceed regardless.
     const reentrant = REENTRANT.has(input.choice);
@@ -132,10 +131,17 @@ export function createRecoverTool(
         ? input.client_identifier_unverified
         : "unknown";
 
-    // 5. Recover + co-committed audit row.
-    let result: { recovery_id: string; reenter: boolean };
+    // 4. Owner check + recover + co-committed audit row, all in one tx. The
+    //    cross-owner marker (if any) is verified and CONSUMED here, atomic
+    //    with the recovery it authorizes.
+    let result: { recovery_id: string; reenter: boolean; outcome: RecoveryOutcome };
     try {
       result = await withStateTransaction(input.project_dir, captureNow(), async (tx) => {
+        await ownerCheckGuard(
+          tx,
+          { driver_state_id: driverStateId, caller_owner_id: callerOwner },
+          marker,
+        );
         const recovered = await recoverTask(tx, {
           driver_state_id: driverStateId,
           choice: input.choice,
@@ -147,27 +153,36 @@ export function createRecoverTool(
           client_identifier_unverified: identifier,
           choice: input.choice,
           recovery_id: recoveryId,
-        });
+        }, outcomeErrorClass(recovered.outcome));
         return recovered;
       });
     } catch (err) {
       return refusal(err, driverStateId, recoveryId);
     }
 
-    // 6. Shape the response: re-entrant choices resume the FSM; terminal
-    //    choices read the now-closed state and shape directly. The
+    // 5. Shape the response: re-entrant choices resume the FSM (retry /
+    //    cancel-pending) or re-shuttle the named pending rows (retry-failed);
+    //    terminal choices read the now-closed state and shape directly. The
     //    recovery has already committed, so a kernel-coded failure of the
-    //    post-recovery FSM tick (e.g. a still-pending row that cannot be
-    //    re-shuttled inside the spawn duplicate-window) is shaped as an
-    //    error envelope, not thrown — the cached envelope makes a replay
-    //    return the same outcome.
+    //    re-entry (e.g. PROVIDER_NOT_IDEMPOTENT on a retry-failed against a
+    //    non-idempotent provider) is shaped as an error envelope, not
+    //    thrown — the cached envelope makes a replay return the same outcome.
     let response: TransportResponse;
     if (result.reenter) {
       try {
         const registry = await deps.resolveRegistry!(input.project_dir);
         const loaded = await readState(input.project_dir);
-        const { directive } = await runFSM(loaded, registry);
-        response = adapter.shape(directive, { driver_state_id: driverStateId });
+        if (input.choice === "retry-failed") {
+          const directive = buildRetryFailedDirective(
+            loaded,
+            registry,
+            input.agent_run_ids ?? [],
+          );
+          response = adapter.shape(directive, { driver_state_id: driverStateId });
+        } else {
+          const { directive } = await runFSM(loaded, registry);
+          response = adapter.shape(directive, { driver_state_id: driverStateId });
+        }
       } catch (err) {
         if (!(err instanceof KernelError)) throw err;
         response = errorResponse(driverStateId, err.code, err.message);
@@ -176,7 +191,7 @@ export function createRecoverTool(
       response = await terminalResponse(input.project_dir, input.choice);
     }
 
-    // 7. Materialize the cached response on the recovery ledger row.
+    // 6. Materialize the cached response on the recovery ledger row.
     await withStateTransaction(input.project_dir, captureNow(), async (tx) => {
       const taskId = await readTaskId(tx);
       await writeLedgerRow(tx, ledgerKey, {
@@ -195,25 +210,34 @@ function resolveRecoveryId(supplied: string | undefined): string {
   return makeRecoveryId();
 }
 
-// Compare the caller owner against the stored owner_id. Returns a refusal
-// shape on cross-owner mismatch, or null when recovery may proceed (row
-// owner null, equal, or no task yet — recoverTask surfaces a missing task).
-async function checkOwner(
-  projectDir: string,
-  callerOwner: string,
-): Promise<{ code: string; message: string } | null> {
-  const db = openDb(projectDir);
-  const tx = new TransactionImpl(db, captureNow());
-  const row = await tx.queryRow<{ owner_id: unknown }>(
-    "SELECT owner_id FROM pipeline_state WHERE id = 1",
-  );
-  if (row === null || row.owner_id === null) return null;
-  const rowOwner = String(row.owner_id);
-  if (rowOwner === callerOwner) return null;
+// Map the wire marker (plain strings) onto the kernel BypassMarker
+// (NowToken-branded timestamps). The kernel re-derives the HMAC and
+// verifies it — a tampered field simply fails the signature check.
+function toBypassMarker(
+  input: RecoverTaskInput["marker"],
+): BypassMarker | undefined {
+  if (input === undefined) return undefined;
   return {
-    code: "CROSS_OWNER_MARKER_REQUIRED",
-    message: `recovery of a task owned by '${rowOwner}' requires an owner bypass marker`,
+    issued_at: input.issued_at as NowToken,
+    expires_at: input.expires_at as NowToken,
+    reason: input.reason,
+    hmac: input.hmac,
+    key_id: input.key_id,
   };
+}
+
+// The forensic recovery outcome maps to the audit error_class: an
+// idempotent / raced recovery is a successful no-op tagged for forensics,
+// not a failure — verdict stays 'ok' and the tag rides on error_class.
+function outcomeErrorClass(outcome: RecoveryOutcome): string | null {
+  switch (outcome) {
+    case "idempotent":
+      return "recovery-idempotent";
+    case "raced":
+      return "recovery-raced";
+    case "applied":
+      return null;
+  }
 }
 
 async function readCachedRecovery(
@@ -274,11 +298,12 @@ async function writeAuditRow(
   taskId: string | null,
   driverStateId: string,
   payload: Record<string, unknown>,
+  errorClass: string | null,
 ): Promise<void> {
   await tx.exec(
     "INSERT INTO audit (ts, type, task_id, driver_state_id, payload, verdict, error_class) " +
-      "VALUES (?, ?, ?, ?, ?, 'ok', NULL)",
-    [tx.now, type, taskId, driverStateId, JSON.stringify(payload)],
+      "VALUES (?, ?, ?, ?, ?, 'ok', ?)",
+    [tx.now, type, taskId, driverStateId, JSON.stringify(payload), errorClass],
   );
 }
 

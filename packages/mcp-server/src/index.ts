@@ -15,6 +15,8 @@ export { createContinueTaskTool } from "./tools/continue-task.js";
 export type { ContinueTaskDeps } from "./tools/continue-task.js";
 export { createRecoverTool } from "./tools/recover.js";
 export type { RecoverDeps } from "./tools/recover.js";
+export { createIssueCrossOwnerMarkerTool } from "./tools/issue-marker.js";
+export type { IssueMarkerDeps } from "./tools/issue-marker.js";
 export { createBackupTool } from "./tools/backup.js";
 export type { BackupDeps } from "./tools/backup.js";
 export { createRestoreTool } from "./tools/restore.js";
@@ -27,6 +29,7 @@ export { FLAG_TO_PRESET, parseTaskArgs } from "./lib/parse-task-args.js";
 export type {
   BackupInput,
   BackupResponse,
+  BypassMarkerInput,
   ClientCapabilities,
   ContinueTaskRequestInput,
   ContinueTaskResponse,
@@ -34,6 +37,8 @@ export type {
   ExtensionsListInput,
   ExtensionsListResponse,
   ExtensionStatus,
+  IssueCrossOwnerMarkerInput,
+  IssueCrossOwnerMarkerResponse,
   MetaBundle,
   MetaInput,
   MetaProviders,

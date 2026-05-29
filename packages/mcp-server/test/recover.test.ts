@@ -24,9 +24,16 @@ import {
   type Stage,
 } from "@loom/kernel";
 
-import { createRecoverTool, createRunTaskTool } from "../src/index.js";
+import {
+  createIssueCrossOwnerMarkerTool,
+  createRecoverTool,
+  createRunTaskTool,
+} from "../src/index.js";
 
 const FIXED_NOW = "2026-05-28T10:00:00.000Z";
+
+// A ≥32-byte signing key for the cross-owner marker tests.
+const ENV_KEY = Buffer.alloc(32, 0xc3).toString("base64");
 
 function bundleManifest(name: string): DiscoveredManifest {
   return {
@@ -45,17 +52,17 @@ function bundleManifest(name: string): DiscoveredManifest {
   };
 }
 
-function stubProvider(): LLMProvider {
+function stubProvider(idempotent = true): LLMProvider {
   return {
     name: "stub",
-    capabilities: { execution: "shuttle", idempotent_spawn: true, reports_usage: false },
+    capabilities: { execution: "shuttle", idempotent_spawn: idempotent, reports_usage: false },
     async spawn() {
       throw new Error("stub provider spawn must not be called from the transport test");
     },
   };
 }
 
-function buildRegistry(): Registry {
+function buildRegistry(idempotent = true): Registry {
   const stages: Record<string, Stage> = {
     "spawn-1": { kind: "spawn", name: "spawn-1", phase: "work", agent: "impl-1" },
     "spawn-2": { kind: "spawn", name: "spawn-2", phase: "work", agent: "impl-2" },
@@ -78,7 +85,7 @@ function buildRegistry(): Registry {
     hooks: [],
     invariants: [],
   };
-  const provider = stubProvider();
+  const provider = stubProvider(idempotent);
   const policyFactories = new Map<PolicyName, () => Policy>();
   policyFactories.set("human", () => () => ({ type: "human-required", reason: "test" }));
   return {
@@ -105,7 +112,7 @@ interface Harness {
   registry: Registry;
 }
 
-async function freshHarness(): Promise<Harness> {
+async function freshHarness(idempotent = true): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "loom-recover-mcp-"));
   openDb(dir);
   await reconcileExtensions({
@@ -115,7 +122,7 @@ async function freshHarness(): Promise<Harness> {
   });
   const allowlistPath = join(dir, "projects.allow");
   writeFileSync(allowlistPath, `${realpathSync(dir)}\n`, "utf8");
-  return { dir, allowlistPath, registry: buildRegistry() };
+  return { dir, allowlistPath, registry: buildRegistry(idempotent) };
 }
 
 function cleanup(dir: string): void {
@@ -127,9 +134,18 @@ function cleanup(dir: string): void {
   rmSync(dir, { recursive: true, force: true });
 }
 
+function restoreServerEnv(prev: string | undefined): void {
+  if (prev === undefined) delete process.env["PIPELINE_BYPASS_HMAC_KEY"];
+  else process.env["PIPELINE_BYPASS_HMAC_KEY"] = prev;
+}
+
 function tools(h: Harness) {
   const deps = { resolveRegistry: () => h.registry, allowlistPath: h.allowlistPath };
-  return { run: createRunTaskTool(deps), recover: createRecoverTool(deps) };
+  return {
+    run: createRunTaskTool(deps),
+    recover: createRecoverTool(deps),
+    issueMarker: createIssueCrossOwnerMarkerTool({ allowlistPath: h.allowlistPath }),
+  };
 }
 
 // Create the task and return its driver_state_id + the first spawn's
@@ -218,8 +234,8 @@ describe("pipeline_recover", () => {
     }
   });
 
-  it("retry-failed with a real pending id commits the recovery and caches its envelope", async () => {
-    const h = await freshHarness();
+  it("retry-failed re-shuttles the named pending row reusing its agent_run_id (no DUPLICATE_SPAWN)", async () => {
+    const h = await freshHarness(true); // idempotent provider
     try {
       const { driver_state_id, agent_run_id } = await bootstrap(h, "uuid-r5");
       const { recover } = tools(h);
@@ -230,18 +246,15 @@ describe("pipeline_recover", () => {
         agent_run_ids: [agent_run_id],
       });
       assert.match(res.recovery_id, /^rec-/);
-      // The recovery committed; the FSM re-tick cannot re-shuttle the
-      // still-pending row inside the spawn duplicate-window, so the shaped
-      // outcome is a DUPLICATE_SPAWN envelope (the deferred re-spawn
-      // concern). Pinning the concrete code documents current behavior —
-      // the provider-idempotency work will flip this test.
-      assert.equal(res.response.status, "error");
-      if (res.response.status === "error") {
-        assert.equal(res.response.code, "DUPLICATE_SPAWN");
+      // The named pending row is re-launched WITHOUT a fresh begin_spawn —
+      // reusing the existing agent_run_id, so the duplicate-window guard is
+      // never consulted. The directive is a spawn, not a DUPLICATE_SPAWN.
+      assert.equal(res.response.status, "spawn-agent");
+      if (res.response.status === "spawn-agent") {
+        assert.equal(res.response.agent_run_id, agent_run_id);
+        assert.equal(res.response.agent, "impl-1");
       }
-      // The recovery ledger row exists with a materialized blob — proof
-      // the recovery applied (committed) and its response was cached for
-      // replay, independent of the FSM re-tick outcome.
+      // The recovery ledger row exists with a materialized blob.
       const row = await withStateTransaction(h.dir, captureNow(), (tx) =>
         tx.queryRow<{ response_blob: unknown }>(
           "SELECT response_blob FROM kernel_idempotency_ledger WHERE key = ?",
@@ -250,6 +263,26 @@ describe("pipeline_recover", () => {
       );
       assert.notEqual(row, null);
       assert.notEqual(row?.response_blob, null);
+    } finally {
+      cleanup(h.dir);
+    }
+  });
+
+  it("retry-failed against a non-idempotent provider is refused with PROVIDER_NOT_IDEMPOTENT", async () => {
+    const h = await freshHarness(false); // non-idempotent provider
+    try {
+      const { driver_state_id, agent_run_id } = await bootstrap(h, "uuid-r5b");
+      const { recover } = tools(h);
+      const res = await recover({
+        project_dir: h.dir,
+        driver_state_id,
+        choice: "retry-failed",
+        agent_run_ids: [agent_run_id],
+      });
+      assert.equal(res.response.status, "error");
+      if (res.response.status === "error") {
+        assert.equal(res.response.code, "PROVIDER_NOT_IDEMPOTENT");
+      }
     } finally {
       cleanup(h.dir);
     }
@@ -277,7 +310,7 @@ describe("pipeline_recover", () => {
     }
   });
 
-  it("cross-owner recovery is refused with CROSS_OWNER_MARKER_REQUIRED", async () => {
+  it("cross-owner recovery without a marker is refused with CROSS_OWNER_REQUIRED", async () => {
     const h = await freshHarness();
     try {
       const { driver_state_id } = await bootstrap(h, "uuid-r6", "alice");
@@ -290,9 +323,141 @@ describe("pipeline_recover", () => {
       });
       assert.equal(res.response.status, "error");
       if (res.response.status === "error") {
-        assert.equal(res.response.code, "CROSS_OWNER_MARKER_REQUIRED");
+        assert.equal(res.response.code, "CROSS_OWNER_REQUIRED");
       }
     } finally {
+      cleanup(h.dir);
+    }
+  });
+
+  it("a valid issued marker authorizes a cross-owner recovery", async () => {
+    const prevEnv = process.env["PIPELINE_BYPASS_HMAC_KEY"];
+    process.env["PIPELINE_BYPASS_HMAC_KEY"] = ENV_KEY;
+    const h = await freshHarness();
+    try {
+      const { driver_state_id } = await bootstrap(h, "uuid-r6b", "alice");
+      const { recover, issueMarker } = tools(h);
+      const issued = await issueMarker({ project_dir: h.dir, driver_state_id, ttl_ms: 60_000 });
+      assert.equal(issued.error, undefined);
+      assert.ok(issued.hmac !== null && issued.reason !== null);
+
+      const res = await recover({
+        project_dir: h.dir,
+        driver_state_id,
+        choice: "abandon",
+        owner_id: "bob",
+        marker: {
+          issued_at: issued.issued_at as string,
+          expires_at: issued.expires_at as string,
+          reason: issued.reason as string,
+          hmac: issued.hmac as string,
+          key_id: issued.key_id as string,
+        },
+      });
+      assert.equal(res.response.status, "complete");
+      const state = await withStateTransaction(h.dir, captureNow(), loadState);
+      assert.equal(state.status, "abandoned");
+    } finally {
+      restoreServerEnv(prevEnv);
+      cleanup(h.dir);
+    }
+  });
+
+  it("a forged marker is refused with CROSS_OWNER_MARKER_INVALID", async () => {
+    const prevEnv = process.env["PIPELINE_BYPASS_HMAC_KEY"];
+    process.env["PIPELINE_BYPASS_HMAC_KEY"] = ENV_KEY;
+    const h = await freshHarness();
+    try {
+      const { driver_state_id } = await bootstrap(h, "uuid-r6c", "alice");
+      const { recover, issueMarker } = tools(h);
+      const issued = await issueMarker({ project_dir: h.dir, driver_state_id, ttl_ms: 60_000 });
+      const res = await recover({
+        project_dir: h.dir,
+        driver_state_id,
+        choice: "abandon",
+        owner_id: "bob",
+        marker: {
+          issued_at: issued.issued_at as string,
+          expires_at: issued.expires_at as string,
+          reason: issued.reason as string,
+          hmac: "0".repeat(64), // tampered signature
+          key_id: issued.key_id as string,
+        },
+      });
+      assert.equal(res.response.status, "error");
+      if (res.response.status === "error") {
+        assert.equal(res.response.code, "CROSS_OWNER_MARKER_INVALID");
+      }
+      // The forged attempt did not consume the genuine marker row.
+      const state = await withStateTransaction(h.dir, captureNow(), loadState);
+      assert.equal(state.status, "in_progress");
+    } finally {
+      restoreServerEnv(prevEnv);
+      cleanup(h.dir);
+    }
+  });
+
+  it("a consumed marker replayed under a fresh recovery_id is CROSS_OWNER_MARKER_CONSUMED", async () => {
+    const prevEnv = process.env["PIPELINE_BYPASS_HMAC_KEY"];
+    process.env["PIPELINE_BYPASS_HMAC_KEY"] = ENV_KEY;
+    const h = await freshHarness();
+    try {
+      const { driver_state_id } = await bootstrap(h, "uuid-r6d", "alice");
+      const { recover, issueMarker } = tools(h);
+      const issued = await issueMarker({ project_dir: h.dir, driver_state_id, ttl_ms: 60_000 });
+      const marker = {
+        issued_at: issued.issued_at as string,
+        expires_at: issued.expires_at as string,
+        reason: issued.reason as string,
+        hmac: issued.hmac as string,
+        key_id: issued.key_id as string,
+      };
+      // First use consumes the marker (fresh recovery_id minted).
+      const first = await recover({
+        project_dir: h.dir,
+        driver_state_id,
+        choice: "abandon",
+        owner_id: "bob",
+        marker,
+      });
+      assert.equal(first.response.status, "complete");
+      // Replay with the SAME marker but a DIFFERENT recovery_id — the
+      // recovery-ledger replay does not fire, so the owner guard runs and
+      // finds the marker already consumed.
+      const second = await recover({
+        project_dir: h.dir,
+        driver_state_id,
+        choice: "abandon",
+        owner_id: "bob",
+        recovery_id: makeRecoveryId(),
+        marker,
+      });
+      assert.equal(second.response.status, "error");
+      if (second.response.status === "error") {
+        assert.equal(second.response.code, "CROSS_OWNER_MARKER_CONSUMED");
+      }
+    } finally {
+      restoreServerEnv(prevEnv);
+      cleanup(h.dir);
+    }
+  });
+
+  it("issuing a marker with no signing key is refused with BYPASS_KEY_MISSING", async () => {
+    const prevEnv = process.env["PIPELINE_BYPASS_HMAC_KEY"];
+    const prevHome = process.env["HOME"];
+    delete process.env["PIPELINE_BYPASS_HMAC_KEY"];
+    process.env["HOME"] = mkdtempSync(join(tmpdir(), "loom-recover-emptyhome-"));
+    const h = await freshHarness();
+    try {
+      const { driver_state_id } = await bootstrap(h, "uuid-r6e", "alice");
+      const { issueMarker } = tools(h);
+      const issued = await issueMarker({ project_dir: h.dir, driver_state_id, ttl_ms: 60_000 });
+      assert.equal(issued.hmac, null);
+      assert.equal(issued.error?.code, "BYPASS_KEY_MISSING");
+    } finally {
+      restoreServerEnv(prevEnv);
+      if (prevHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = prevHome;
       cleanup(h.dir);
     }
   });
@@ -359,6 +524,49 @@ describe("pipeline_recover", () => {
       const payload = JSON.parse(String(row?.payload)) as Record<string, unknown>;
       assert.equal(payload["client_identifier_unverified"], "custom:test-client");
       assert.equal(payload["choice"], "abandon");
+    } finally {
+      cleanup(h.dir);
+    }
+  });
+
+  it("an idempotent abandon tags the audit row error_class=recovery-idempotent", async () => {
+    const h = await freshHarness();
+    try {
+      const { driver_state_id } = await bootstrap(h, "uuid-r11");
+      const { recover } = tools(h);
+      // First abandon closes the task (applied → no error_class).
+      await recover({ project_dir: h.dir, driver_state_id, choice: "abandon" });
+      // A second abandon (fresh recovery_id) finds a terminal task → no
+      // state change → tagged recovery-idempotent.
+      await recover({ project_dir: h.dir, driver_state_id, choice: "abandon" });
+      const row = await withStateTransaction(h.dir, captureNow(), (tx) =>
+        tx.queryRow<{ error_class: unknown }>(
+          "SELECT error_class FROM audit WHERE type = 'pipeline_recover' ORDER BY id DESC LIMIT 1",
+        ),
+      );
+      assert.equal(row?.error_class, "recovery-idempotent");
+    } finally {
+      cleanup(h.dir);
+    }
+  });
+
+  it("a raced cancel-pending tags the audit row error_class=recovery-raced", async () => {
+    const h = await freshHarness();
+    try {
+      const { driver_state_id } = await bootstrap(h, "uuid-r12");
+      const { recover } = tools(h);
+      // Simulate a racing delivery that already drained the pending row,
+      // so this cancel-pending finds nothing outstanding → recovery-raced.
+      await withStateTransaction(h.dir, captureNow(), (tx) =>
+        tx.exec("DELETE FROM pending_agents"),
+      );
+      await recover({ project_dir: h.dir, driver_state_id, choice: "cancel-pending" });
+      const row = await withStateTransaction(h.dir, captureNow(), (tx) =>
+        tx.queryRow<{ error_class: unknown }>(
+          "SELECT error_class FROM audit WHERE type = 'pipeline_recover' ORDER BY id DESC LIMIT 1",
+        ),
+      );
+      assert.equal(row?.error_class, "recovery-raced");
     } finally {
       cleanup(h.dir);
     }

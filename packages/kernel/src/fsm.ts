@@ -49,7 +49,7 @@ import type {
 } from "./types/context.js";
 import type { Finding } from "./types/findings.js";
 import type { NowToken } from "./types/now.js";
-import type { Stage, StageResult } from "./types/plugins.js";
+import type { AskUserDirective, Stage, StageResult } from "./types/plugins.js";
 import type { Registry } from "./types/registry.js";
 import type { ModelName, Phase } from "./types/row-types.js";
 import type { PipelineState } from "./types/state.js";
@@ -131,6 +131,16 @@ export async function runFSM(
         const { ctx, ops } = await buildStageContext(state, registry, tx);
         await dispatchEventSteps(`before-${stage.kind}`, ctx, tx, ops);
         const result = await interpretStage(stage, state, ctx);
+        if (result.type === "ask_user") {
+          // A human-required gate parks the tick until a user answers.
+          // Persist the pending answer — including the gate_event_id the
+          // ask was issued under — inside THIS tick's tx, so the eventual
+          // delivery can prove the answer matches the gate the kernel
+          // actually asked. The delivery path refuses a mismatched id as
+          // stale; this is the writer that makes a legitimate round-trip
+          // pass.
+          await persistPendingAnswer(tx, state, result.directive);
+        }
         // Drain BundleOps that the interpreter (e.g. a positional
         // StepStage's `run` body) pushed into the scratch buffer.
         // A throw here aborts the outer tx — invariants on commit
@@ -251,6 +261,29 @@ export async function interpretStage(
       return _exhaustive;
     }
   }
+}
+
+// Record the pending user answer for a parked gate inside the tick's tx.
+// The single-row driver_state PK is unchanged; only `pending_user_answer`
+// is written, carrying the gate_event_id so the matching delivery is
+// bound to this exact ask. Written here because the FSM loop owns the
+// driver_state row — bundle code never sees `driver.*`. The in-memory
+// snapshot is updated to mirror the persisted row.
+async function persistPendingAnswer(
+  tx: Transaction,
+  state: PipelineState,
+  directive: AskUserDirective,
+): Promise<void> {
+  const pending = {
+    gate: directive.gate,
+    message: directive.message,
+    gate_event_id: directive.gate_event_id,
+  };
+  await tx.exec(
+    "UPDATE driver_state SET pending_user_answer = ? WHERE id = 1",
+    [JSON.stringify(pending)],
+  );
+  state.driver.pending_user_answer = pending;
 }
 
 // ============================================================================

@@ -51,7 +51,15 @@ export interface PipelineState {
     flow_name: string;
     step_index: number;
     complete: boolean;
-    pending_user_answer: { gate: string; message: string } | null;
+    // Set when a human-required gate parks the tick. Carries the
+    // gate_event_id the ask was issued under so the matching user-answer
+    // delivery can be bound to this exact gate event (a mismatched id is
+    // refused as stale).
+    pending_user_answer: {
+      gate: string;
+      message: string;
+      gate_event_id: string;
+    } | null;
     scratch: Record<string, unknown>;
   };
 

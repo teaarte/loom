@@ -9,6 +9,7 @@ import {
   _resetInvariantsForTest,
 } from "../src/invariants.js";
 import { buildVocabularies } from "../src/vocabularies.js";
+import { deliverContinue } from "../src/lib/deliver-continue.js";
 import { persistAgentResult } from "../src/lib/persist-agent-result.js";
 import {
   KernelError,
@@ -499,6 +500,108 @@ describe("runFSM — flow control", () => {
       assert.equal(out.directive.gate, "g1");
     }
     assert.equal(state.driver.step_index, 1);
+  });
+});
+
+describe("runFSM — gate → user-answer round-trip", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    _resetInvariantsForTest();
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  it("persists the pending answer + gate_event_id so the continue path is not stale", async () => {
+    const stages: Record<string, Stage> = {
+      g1: {
+        kind: "gate",
+        name: "g1",
+        phase: "p1",
+        message: () => "Proceed?",
+        valid_answers: () => ({
+          options: [
+            { verbs: ["yes"], label: "Approve", produces: { decision: "accept" } },
+          ],
+        }),
+      },
+    };
+    // The default `human` policy parks at the gate (human-required).
+    const registry = buildRegistry({ stages, flow: ["g1"] });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    const out = await runFSM(state, registry);
+    assert.equal(out.directive.kind, "ask-user");
+    const gateEventId =
+      out.directive.kind === "ask-user" ? out.directive.gate_event_id : "";
+    assert.ok(gateEventId.startsWith("gev-"));
+
+    // The writer (FSM tick) persisted the pending answer WITH the issued
+    // gate_event_id, in the same tick's tx.
+    const parked = await withStateTransaction(projectDir, captureNow(), (tx) =>
+      loadState(tx),
+    );
+    assert.ok(parked.driver.pending_user_answer !== null);
+    assert.equal(parked.driver.pending_user_answer?.gate, "g1");
+    assert.equal(parked.driver.pending_user_answer?.gate_event_id, gateEventId);
+
+    // The matching user-answer delivers end-to-end — the existing reader's
+    // `pending.gate_event_id === input.gate_event_id` check passes, so no
+    // GATE_EVENT_STALE.
+    await withStateTransaction(projectDir, captureNow(), (tx) =>
+      deliverContinue(tx, {
+        input: {
+          type: "user-answer",
+          gate_event_id: gateEventId,
+          decision: "accept",
+          message: "ok",
+        },
+        driver_state_id: state.driver_state_id,
+      }),
+    );
+
+    const after = await withStateTransaction(projectDir, captureNow(), (tx) =>
+      loadState(tx),
+    );
+    assert.equal(after.driver.pending_user_answer, null); // cleared on delivery
+    const gate = after.gates["g1"];
+    assert.ok(gate);
+    assert.equal(gate?.status, "approved");
+    assert.equal(gate?.decided_by, "human");
+    assert.equal(gate?.feedback, "ok");
+  });
+
+  it("a mismatched gate_event_id is refused as stale after a real park", async () => {
+    const stages: Record<string, Stage> = {
+      g1: {
+        kind: "gate",
+        name: "g1",
+        phase: "p1",
+        message: () => "Proceed?",
+        valid_answers: () => ({ options: [] }),
+      },
+    };
+    const registry = buildRegistry({ stages, flow: ["g1"] });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    const out = await runFSM(state, registry);
+    assert.equal(out.directive.kind, "ask-user");
+
+    // A different id than the one that was issued must not satisfy the gate.
+    await assert.rejects(
+      withStateTransaction(projectDir, captureNow(), (tx) =>
+        deliverContinue(tx, {
+          input: {
+            type: "user-answer",
+            gate_event_id: "gev-00000000-0000-0000-0000-0000000000ff",
+            decision: "accept",
+          },
+          driver_state_id: state.driver_state_id,
+        }),
+      ),
+      (err: unknown) => err instanceof KernelError && err.code === "GATE_EVENT_STALE",
+    );
   });
 });
 

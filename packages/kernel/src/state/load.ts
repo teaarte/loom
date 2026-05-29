@@ -172,7 +172,7 @@ export async function loadState(tx: Transaction): Promise<PipelineState> {
       step_index: Number(driver.step_index),
       complete: Number(driver.complete) !== 0,
       pending_user_answer: parseJsonField<
-        { gate: string; message: string } | null
+        { gate: string; message: string; gate_event_id: string } | null
       >(driver.pending_user_answer, null),
       scratch: parseJsonField<Record<string, unknown>>(driver.scratch, {}),
     },

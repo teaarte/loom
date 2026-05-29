@@ -45,6 +45,9 @@ export async function interpretGate(
     }
     const message = await Promise.resolve(stage.message(ctx.state));
     const valid_answers = await Promise.resolve(stage.valid_answers(ctx.state));
+    // Mint the gate_event_id here; the FSM tick persists it alongside the
+    // pending answer so the matching user-answer delivery can be bound to
+    // this exact ask (a mismatched id is refused as stale).
     return {
       type: "ask_user",
       directive: {

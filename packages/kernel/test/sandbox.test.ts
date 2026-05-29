@@ -7,8 +7,9 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { KernelError } from "../src/state.js";
@@ -49,9 +50,42 @@ describe("resolveSafePath", () => {
 
   it("accepts a not-yet-existing in-project target (file_write case)", async () => {
     const r = await resolveSafePath("new/dir/file.txt", project);
-    // realpath fails on the missing target → falls back to the resolved
-    // absolute path, which is still inside the project.
+    // The leaf has no realpath; the guard canonicalizes the longest
+    // existing ancestor (the project root) and re-appends the remainder.
     assert.ok(r.ok);
+    if (r.ok) {
+      // Resolve the root the same way the guard does so the comparison
+      // holds even when the temp root is itself a symlink (macOS /var).
+      const root = await realpath(project);
+      assert.ok(
+        r.path === root || r.path.startsWith(root + sep),
+        `${r.path} must be under ${root}`,
+      );
+      assert.ok(
+        r.path.endsWith(join("new", "dir", "file.txt")),
+        `${r.path} must end with the requested remainder`,
+      );
+    }
+  });
+
+  it("refuses a not-yet-existing target that escapes the project (no symlink)", async () => {
+    // The leaf does not exist, so there is no realpath to follow. The old
+    // lexical fallback trusted the `..` and let the write land outside;
+    // canonicalizing the existing ancestor catches it.
+    const r = await resolveSafePath("../escape/new.txt", project);
+    assert.ok(!r.ok);
+    if (!r.ok) assert.equal(r.reason, "path-escapes-project");
+  });
+
+  it("refuses a new leaf under an in-project dir symlink that points outside", async () => {
+    // A directory symlink inside the project whose target is outside it.
+    // Writing a BRAND-NEW file *through* it must resolve to the real
+    // (outside) parent and be refused — otherwise the sole write guard is
+    // bypassed on the file_write path.
+    symlinkSync(outside, join(project, "escape-dir"));
+    const r = await resolveSafePath("escape-dir/pwned.txt", project);
+    assert.ok(!r.ok);
+    if (!r.ok) assert.equal(r.reason, "path-escapes-project");
   });
 
   it("refuses a symlink that escapes the project after realpath", async () => {

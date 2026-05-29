@@ -36,7 +36,7 @@
 // catching.
 
 import { realpath } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
 export type SafePathResult =
   | { ok: true; path: string }
@@ -117,11 +117,15 @@ export async function resolveSafePath(
 
   const abs = resolve(projectReal, input);
 
-  // Follow symlinks before judging escape. A not-yet-existing target (e.g.
-  // a `file_write` to a new file) has no realpath — fall back to the
-  // resolved absolute path rather than throwing, so creating a legitimate
-  // in-project file is allowed.
-  const real = await realpath(abs).catch(() => abs);
+  // Follow symlinks before judging escape. A not-yet-existing target (a
+  // `file_write` to a new file) has no realpath of its own, so we
+  // canonicalize the LONGEST EXISTING ANCESTOR and re-append the missing
+  // remainder. Trusting the lexical path here would preserve the in-project
+  // *name* of a symlinked intermediate directory; canonicalizing the
+  // existing ancestor instead resolves that symlink to its real (outside)
+  // target, where the containment check below catches it. A genuinely-new
+  // in-project file keeps the canonical in-project prefix and is allowed.
+  const real = await canonicalizeLongestExistingAncestor(abs);
 
   // Require a true path-segment boundary: a bare `startsWith` would let
   // `<root>-evil/` masquerade as inside `<root>`. This is also the guard
@@ -138,4 +142,35 @@ export async function resolveSafePath(
   }
 
   return { ok: true, path: real };
+}
+
+// Canonicalize the longest existing ancestor of an absolute path and
+// re-append the non-existent remainder. When the full path already exists
+// (a file or a symlink), this is just its `realpath`. When the leaf — or a
+// deeper segment — does not exist yet, walk up to the first ancestor that
+// does, `realpath` THAT (collapsing any symlinked directory in the chain to
+// its real target), then rejoin the missing tail. The escape check then
+// judges a new file by where its real parent actually lives, never by the
+// in-project name of a symlinked intermediate directory.
+async function canonicalizeLongestExistingAncestor(
+  abs: string,
+): Promise<string> {
+  const tail: string[] = [];
+  let probe = abs;
+  for (;;) {
+    const real = await realpath(probe).catch(() => null);
+    if (real !== null) {
+      return tail.length === 0 ? real : join(real, ...tail);
+    }
+    const parent = dirname(probe);
+    if (parent === probe) {
+      // Reached the filesystem root without finding an existing ancestor.
+      // The root always exists, so this is unreachable in practice;
+      // returning the lexical path keeps the containment check meaningful
+      // rather than throwing from a path-resolution helper.
+      return abs;
+    }
+    tail.unshift(basename(probe));
+    probe = parent;
+  }
 }

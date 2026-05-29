@@ -2,12 +2,14 @@
 //
 // A bundle reaching for the raw kernel `Transaction` type bypasses the
 // `BundleScratchTx` façade and the invariant-rollback boundary that
-// goes with it. The loader sweeps the bundle's source tree at start
-// and refuses any import that names `Transaction` from `@loom/kernel`
-// or pulls it through the deeper path. The sweep is bounded to the
-// first 200 lines of each source file so a `Transaction` mention deep
-// inside a fixture string or test docstring does not surface as a
-// false positive.
+// goes with it. The loader sweeps the bundle's source tree at start and
+// refuses every way the raw handle could be named: a named import, the
+// deeper `.../transaction` path, a re-export (`export { Transaction }
+// from "@loom/kernel"`), and a namespace import (`import * as K`) whose
+// `K.Transaction` member access reaches the type indirectly. The sweep
+// is bounded to the first 200 lines of each source file so a
+// `Transaction` mention deep inside a fixture string or test docstring
+// does not surface as a false positive.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
@@ -27,10 +29,48 @@ const SCAN_SKIP_DIRS: ReadonlySet<string> = new Set([
 
 // Matches `import { ... Transaction ... } from "@loom/kernel..."` and
 // the more direct `from "@loom/kernel/.../transaction"` path import.
+// The leading verb is `import` OR `export` so a re-export
+// (`export { Transaction } from "@loom/kernel"`) — which hands the raw
+// handle out the bundle's own barrel — is refused on the same footing.
 const TRANSACTION_BINDING_RE =
-  /import\s+(?:type\s+)?\{[^}]*\bTransaction\b[^}]*\}\s+from\s+["']@loom\/kernel(?:\/[^"']*)?["']/;
+  /(?:import|export)\s+(?:type\s+)?\{[^}]*\bTransaction\b[^}]*\}\s+from\s+["']@loom\/kernel(?:\/[^"']*)?["']/;
 const TRANSACTION_PATH_RE =
   /from\s+["']@loom\/kernel\/(?:[^"']*\/)?(?:transaction|state\/transaction)(?:\.[a-z]+)?["']/;
+// Namespace import — `import * as K from "@loom/kernel..."` (or the
+// `export * as K` re-export). The binding name is captured; a
+// `K.Transaction` member access elsewhere in the file is the actual
+// reach for the raw handle.
+const TRANSACTION_NAMESPACE_RE =
+  /(?:import|export)\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s+["']@loom\/kernel(?:\/[^"']*)?["']/g;
+
+function escapeForRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Locate a `<ns>.Transaction` reach where `<ns>` was bound by a
+// namespace import of `@loom/kernel`. Returns the 1-based line of the
+// member access (the real violation) or null when no namespace binding
+// touches `Transaction` — a namespace import of some OTHER symbol is
+// legitimate and must pass.
+function namespaceTransactionLine(lines: string[]): number | null {
+  const names: string[] = [];
+  for (const line of lines) {
+    TRANSACTION_NAMESPACE_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = TRANSACTION_NAMESPACE_RE.exec(line)) !== null) {
+      if (m[1] !== undefined) names.push(m[1]);
+    }
+  }
+  if (names.length === 0) return null;
+  const memberRes = names.map(
+    (n) => new RegExp(`\\b${escapeForRegExp(n)}\\.Transaction\\b`),
+  );
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (memberRes.some((re) => re.test(line))) return i + 1;
+  }
+  return null;
+}
 
 interface ImportViolation {
   path: string;
@@ -95,7 +135,10 @@ function scanFile(path: string, out: ImportViolation[]): void {
   for (let i = 0; i < lines.length; i++) {
     buffer += (lines[i] ?? "") + "\n";
   }
-  if (!TRANSACTION_BINDING_RE.test(buffer) && !TRANSACTION_PATH_RE.test(buffer)) {
+  const bindingOrPath =
+    TRANSACTION_BINDING_RE.test(buffer) || TRANSACTION_PATH_RE.test(buffer);
+  const nsLine = namespaceTransactionLine(lines);
+  if (!bindingOrPath && nsLine === null) {
     return;
   }
   // Locate the first matching line for the operator's debugging note.
@@ -105,6 +148,13 @@ function scanFile(path: string, out: ImportViolation[]): void {
       out.push({ path, line: i + 1, match: line.trim() });
       return;
     }
+  }
+  // A namespace binding's `<ns>.Transaction` reach — point at the
+  // member-access line, which is where the raw handle is actually
+  // grabbed.
+  if (nsLine !== null) {
+    out.push({ path, line: nsLine, match: (lines[nsLine - 1] ?? "").trim() });
+    return;
   }
   // Multi-line import — fall back to first line that mentions Transaction.
   for (let i = 0; i < lines.length; i++) {

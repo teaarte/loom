@@ -28,6 +28,15 @@ describe("parseRestoreSql", () => {
     assert.equal(out.length, 5);
   });
 
+  it("accepts CREATE TABLE / INSERT for the bypass_markers kernel table", () => {
+    const sql = [
+      "CREATE TABLE IF NOT EXISTS bypass_markers (id INTEGER PRIMARY KEY CHECK (id = 1), issued_at TEXT NOT NULL, expires_at TEXT NOT NULL, reason TEXT NOT NULL, hmac TEXT NOT NULL, key_id TEXT NOT NULL);",
+      "INSERT INTO bypass_markers (id, issued_at, expires_at, reason, hmac, key_id) VALUES (1, '2026-05-29T12:00:00.000Z', '2026-05-29T13:00:00.000Z', 'cross-owner-recover:d-x', 'abc', 'env:dead');",
+    ].join("\n");
+    const out = parseRestoreSql(sql);
+    assert.equal(out.length, 2);
+  });
+
   it("refuses ATTACH", () => {
     expectRejected("ATTACH DATABASE 'evil.db' AS evil;");
   });

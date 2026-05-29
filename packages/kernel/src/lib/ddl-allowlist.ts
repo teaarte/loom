@@ -37,6 +37,7 @@ export const KERNEL_OWNED_TABLES: ReadonlySet<string> = new Set([
   "agent_verdicts",
   "findings",
   "gates",
+  "bypass_markers",
   "audit",
   "kernel_idempotency_ledger",
   "installed_extensions",

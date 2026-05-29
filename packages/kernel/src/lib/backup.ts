@@ -1,15 +1,22 @@
 // Consistent textual snapshot of the kernel-owned tables + the apply
 // half of restore.
 //
-// `dumpStateSql` emits a deterministic `.sql` dump — `CREATE TABLE` /
-// `CREATE INDEX` DDL (read verbatim from sqlite_master, rewritten to
-// `IF NOT EXISTS` so a replay into an already-migrated database is a
-// no-op for the schema) followed by explicit-column `INSERT` statements
-// with values serialized as SQL literals. Column order comes from
-// `PRAGMA table_info` (cid order) and row order from `rowid`, so the same
-// state dumps byte-identical every time. `kernel_schema_versions` is
+// `dumpStateSql` emits a deterministic `.sql` dump — a journal-mode
+// header (`PRAGMA journal_mode=WAL` + `wal_autocheckpoint`, for an
+// external consumer; the kernel restore path skips them), then
+// `CREATE TABLE` / `CREATE INDEX` DDL (read verbatim from sqlite_master,
+// rewritten to `IF NOT EXISTS` so a replay into an already-migrated
+// database is a no-op for the schema), then explicit-column `INSERT`
+// statements with values serialized as SQL literals. Column order comes
+// from `PRAGMA table_info` (cid order) and row order from `rowid`, so the
+// same state dumps byte-identical every time. `kernel_schema_versions` is
 // excluded — it is migration-managed and a target database already owns
 // its row.
+//
+// `bypass_markers` IS dumped, `hmac` + `key_id` included: a marker
+// restored against a rotated key is correctly invalid (its key_id no
+// longer matches the active key), which is the intended TTL/rotation
+// semantics — a restored escape hatch is not silently re-armed.
 //
 // `applyRestoreStatements` executes a pre-parsed, allowlisted statement
 // list (the output of `parseRestoreSql`) in order inside the caller's tx.
@@ -35,6 +42,7 @@ const DUMP_TABLES: readonly string[] = [
   "agent_verdicts",
   "findings",
   "gates",
+  "bypass_markers",
   "audit",
   "kernel_idempotency_ledger",
 ];
@@ -50,6 +58,14 @@ interface TableInfoRow {
 
 export async function dumpStateSql(tx: Transaction): Promise<string> {
   const lines: string[] = [];
+
+  // 0. Journal-mode header. A `journal_mode` switch cannot run inside a
+  //    BEGIN IMMEDIATE tx, so `applyRestoreStatements` skips these on the
+  //    kernel restore path (the target DB already sets WAL at open). They
+  //    are emitted here so a dump consumed by an EXTERNAL tool (sqlite3
+  //    CLI replaying the .sql at top level) carries the journal mode.
+  lines.push("PRAGMA journal_mode=WAL;");
+  lines.push("PRAGMA wal_autocheckpoint=4000;");
 
   // 1. CREATE TABLE DDL (verbatim, rewritten to IF NOT EXISTS).
   for (const table of DUMP_TABLES) {
@@ -89,11 +105,18 @@ export async function dumpStateSql(tx: Transaction): Promise<string> {
 
 // Execute the pre-validated statements in order. Caller guarantees they
 // came through `parseRestoreSql` — this function does NOT re-validate.
+//
+// PRAGMA statements are SKIPPED: the only ones the allowlist accepts are
+// `journal_mode=WAL` and `wal_autocheckpoint`, and a `journal_mode`
+// switch is illegal inside the BEGIN IMMEDIATE this runs under. They are
+// header hints for an external consumer; the kernel DB already sets both
+// at open, so skipping them leaves the restore round-trip correct.
 export async function applyRestoreStatements(
   tx: Transaction,
   statements: string[],
 ): Promise<void> {
   for (const stmt of statements) {
+    if (/^PRAGMA\b/i.test(stmt)) continue;
     await tx.exec(stmt);
   }
 }

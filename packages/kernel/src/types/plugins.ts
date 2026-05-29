@@ -1,7 +1,15 @@
-// Plugin contracts.
+// Plugin contracts — the canonical definitions.
 //
-// `LLMProvider` is the one plugin contract that lives in `provider.ts`
-// instead of here — it pulls in `ProviderResult` / `ProviderSpawnRequest`
+// The full shapes below (`Agent` / `Stage` + its five variants / `Hook`
+// / `MCPClientPlugin` / `SandboxPlugin` / `AgentOutputKind` /
+// `PluginMeta`) ARE the contracts the kernel surface, providers, and
+// bundles compile against — there is no separate contracts package they
+// extend. Keeping them co-located with the kernel barrel gives plugin
+// authors one import path and avoids ossifying a package boundary before
+// a second consumer proves where the seam belongs.
+//
+// `LLMProvider` is the one contract that lives in `provider.ts` instead
+// of here — it pulls in `ProviderResult` / `ProviderSpawnRequest`
 // directly, so co-locating with those keeps imports flat.
 //
 // The Stage union is the heart of the FSM execution surface — five

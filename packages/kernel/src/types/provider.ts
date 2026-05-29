@@ -75,8 +75,10 @@ export type StreamEvent =
   | { type: "usage"; tokens: { in: number; out: number; cached?: number } }
   | { type: "error"; message: string };
 
-// Forward-declared plugin contract — full LLMProvider definition ships
-// with the plugin-contracts work.
+// Canonical LLMProvider contract — defined in full here, co-located
+// with its runtime result/intent shapes above (it references them
+// directly) rather than alongside the other contracts in `plugins.ts`,
+// so the provider neighbourhood's imports stay flat.
 import type { PluginMeta } from "./plugins.js";
 
 export interface LLMProvider extends PluginMeta {

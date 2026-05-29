@@ -37,6 +37,7 @@ const KERNEL_AUDIT_TYPES: readonly string[] = [
   "extension-manifest-changed",
   "extension-removed",
   "extension-load-failed",
+  "tool-call",
 ];
 
 const KERNEL_OUTPUT_KINDS: readonly AgentOutputKind[] = [
@@ -51,9 +52,14 @@ const KERNEL_DECIDED_BY: readonly GateDecidedBy[] = ["human", "auto-policy"];
 const KERNEL_ERROR_CLASSES: readonly string[] = [
   "hook-failure",
   "extension-load-failed",
+  "sandbox-violation",
+  "tool-output-compressed",
 ];
 
-const KERNEL_SANDBOX_KINDS: readonly string[] = [];
+const KERNEL_SANDBOX_KINDS: readonly string[] = [
+  "path-restricted",
+  "passthrough",
+];
 
 const KERNEL_PROVIDER_FEATURES: readonly string[] = [];
 

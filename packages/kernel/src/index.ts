@@ -1,5 +1,7 @@
 export * from "./types/index.js";
 export * from "./ids.js";
+export * from "./sandbox/index.js";
+export * from "./tools/index.js";
 export * from "./state.js";
 export * from "./narrow.js";
 export * from "./invariants.js";

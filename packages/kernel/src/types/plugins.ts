@@ -238,12 +238,83 @@ export interface MCPClientPlugin extends PluginMeta {
   tool_idempotency?: Record<string, boolean>;
 }
 
+// The outer process-isolation boundary. Concrete kinds advertise what
+// they actually contain via `capabilities`; a kind that cannot honour a
+// capability MUST report it false rather than silently no-op (an
+// agent/operator reading the matrix should never be misled about what is
+// contained). The cross-platform default is filesystem-discipline only;
+// native OS isolation and containerized kinds land additively against
+// this same contract.
+export type SandboxKind =
+  | "passthrough" // no isolation; dev only
+  | "path-restricted" // filesystem path discipline; cross-platform default
+  | "sandbox-exec" // macOS native, per-call
+  | "bwrap" // Linux bubblewrap, per-call
+  | "docker" // full container per task
+  | "vm" // VM-per-task, highest isolation
+  | (string & {}); // open string for community plugins
+
+export interface ExecOptions {
+  // Working directory inside the sandbox.
+  cwd?: string;
+  // Environment variables for this exec; merged with sandbox-level env.
+  env?: Record<string, string>;
+  // Hard timeout in milliseconds. The sandbox kills the process if exceeded.
+  timeout_ms?: number;
+  // stdin to feed (rare; bash-like tools use this).
+  stdin?: string;
+}
+
+export interface ExecResult {
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  // Wall-clock duration of the exec. The substrate never reads a clock
+  // (replay determinism), so a sandbox that cannot self-time reports 0
+  // and the calling tool-runner stamps the real elapsed time.
+  duration_ms: number;
+  timed_out: boolean;
+}
+
+export interface SandboxConfig {
+  // Mounted directories. The project workspace is mounted read-write by default.
+  mounts: { host_path: string; sandbox_path: string; mode: "ro" | "rw" }[];
+  // Network egress allow-list (host:port pairs).
+  network_allow?: string[];
+  // Resource limits.
+  limits?: { cpu?: number; memory_mb?: number; disk_mb?: number; pids?: number };
+  // Environment variable names to pass through.
+  env_passthrough?: string[];
+}
+
 export interface SandboxPlugin extends PluginMeta {
-  kind: string;
-  exec(
-    command: string,
-    args: string[],
-  ): Promise<{ stdout: string; stderr: string; exit_code: number }>;
+  // The plugin's identity IS its kind — `name` carries the SandboxKind.
+  name: SandboxKind;
+
+  // Capabilities advertised. A boolean here is a promise: `true` means the
+  // boundary genuinely contains that axis.
+  capabilities: {
+    filesystem_isolation: boolean;
+    network_isolation: boolean;
+    process_isolation: boolean;
+    resource_limits: boolean;
+  };
+
+  // Prepare the sandbox (spin up a container, build a bwrap profile, …).
+  initialize?(config: SandboxConfig): Promise<void>;
+
+  // Execute a command inside the sandbox. A Bash-shaped tool delegates here
+  // when the sandbox is active.
+  exec(cmd: string, opts: ExecOptions): Promise<ExecResult>;
+
+  // Read a file through the sandbox boundary.
+  read_file(path: string): Promise<string>;
+
+  // Write a file through the sandbox boundary.
+  write_file(path: string, content: string): Promise<void>;
+
+  // Tear down (stop a container, remove temp profiles, …).
+  shutdown?(): Promise<void>;
 }
 
 export type Sandbox = SandboxPlugin;

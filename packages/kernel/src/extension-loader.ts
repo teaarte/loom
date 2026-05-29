@@ -24,7 +24,7 @@ import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 
-import { KERNEL_SCHEMA_VERSION, openDb } from "./state/db.js";
+import { KERNEL_SCHEMA_VERSION, withConnection } from "./state/db.js";
 import type { ExtensionKind, ExtensionManifest } from "./types/extension.js";
 import type { NowToken } from "./types/now.js";
 
@@ -242,11 +242,6 @@ function insertAudit(
 // reconcileExtensions — pure core
 // ============================================================================
 
-// Each per-extension reconcile + audit pair runs in its own
-// BEGIN IMMEDIATE / COMMIT block so the installed_extensions row and
-// its lifecycle audit row co-commit atomically — a crash mid-sweep
-// cannot leave one without the other.
-//
 // withStateTransaction is NOT used here: it runs the kernel invariant
 // suite on commit, which materializes PipelineState via loadState. At
 // kernel start (when reconciliation runs) no pipeline_state row exists
@@ -259,8 +254,22 @@ export async function reconcileExtensions(opts: {
   now: NowToken;
 }): Promise<ReconciliationReport> {
   const { manifests, project_dir, now } = opts;
-  const db = openDb(project_dir);
+  return await withConnection(project_dir, async (db) =>
+    reconcileOnConnection(db, manifests, now),
+  );
+}
 
+// Body of the reconcile pass, run on a connection borrowed from the
+// project pool so it never pins the shared maintenance handle. Each
+// per-extension reconcile + audit pair runs in its own BEGIN IMMEDIATE /
+// COMMIT block so the installed_extensions row and its lifecycle audit
+// row co-commit atomically — a crash mid-sweep cannot leave one without
+// the other.
+function reconcileOnConnection(
+  db: DatabaseSync,
+  manifests: DiscoveredManifest[],
+  now: NowToken,
+): ReconciliationReport {
   const report: ReconciliationReport = {
     installed: [],
     changed: [],

@@ -1,22 +1,24 @@
-// SQLite-backed Transaction runtime + the atomic-mutation wrapper.
+// SQLite-backed Transaction runtime + the atomic-mutation wrappers.
 //
 // `TransactionImpl` implements the kernel-internal Transaction interface
-// over a node:sqlite DatabaseSync handle. `withStateTransaction` opens
-// BEGIN IMMEDIATE, hands the wrapped handle to the caller's fn, runs
-// pre-commit hooks (validateState + runInvariants), then commits — or
-// rolls back on any throw. STATE_BUSY is translated once at this
-// boundary so callers never see a raw driver code.
+// over a node:sqlite DatabaseSync handle. `withStateTransaction` borrows
+// a connection from the project's pool, opens BEGIN IMMEDIATE, hands the
+// wrapped handle to the caller's fn, runs pre-commit hooks (validateState
+// + runInvariants), then commits — or rolls back on any throw — and
+// returns the connection to the pool. `withReadTransaction` borrows a
+// connection, pins one consistent committed snapshot under
+// `PRAGMA query_only` + BEGIN DEFERRED, and runs a read-only fn. Each
+// operation has its own connection, so two concurrent same-project ticks
+// can never re-enter a transaction on a shared handle; write contention
+// surfaces through the SQLite write lock as a typed STATE_BUSY, exactly
+// like the cross-process case.
 
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 
 import { runInvariants } from "../invariants.js";
 import type { NowToken } from "../types/now.js";
 import type { Transaction } from "../types/transaction.js";
-import {
-  DEFAULT_BUSY_TIMEOUT_MS,
-  KernelError,
-  openDb,
-} from "./db.js";
+import { captureNow, getPool, KernelError } from "./db.js";
 
 // ============================================================================
 // Transaction runtime
@@ -88,29 +90,37 @@ async function validateState(_tx: Transaction): Promise<void> {
   // intentionally empty
 }
 
+function isBusyError(err: unknown): boolean {
+  return /\bbusy\b|\blocked\b/i.test((err as Error).message);
+}
+
 // ============================================================================
 // withStateTransaction
 // ============================================================================
 
-// Open one atomic SQLite transaction at BEGIN IMMEDIATE, hand a
-// Transaction handle to the caller's fn, validate + invariant-check
-// before commit, and roll back on any throw.
+// Borrow a pooled connection, open one atomic SQLite transaction at
+// BEGIN IMMEDIATE, hand a Transaction handle to the caller's fn, validate
+// + invariant-check before commit, and roll back on any throw. The
+// connection is released back to the pool on the way out — or DISCARDED
+// when the ROLLBACK itself throws (the transaction state is then unknown,
+// so the handle is poisoned and must not be reused).
 //
-// STATE_BUSY: when the writer lock is held by another connection and
-// the busy_timeout expires, SQLite raises a "database is locked" /
-// "busy" error at BEGIN; the catch below maps it to a typed
-// KernelError so callers never see a raw driver code.
+// STATE_BUSY: when the writer lock is held by another connection (another
+// in-process operation OR another process) and busy_timeout expires,
+// SQLite raises a "database is locked" / "busy" error at BEGIN; the catch
+// maps it to a typed KernelError so callers never see a raw driver code.
 export async function withStateTransaction<T>(
   projectDir: string,
   now: NowToken,
   fn: (tx: Transaction) => Promise<T>,
   opts?: { busyTimeoutMs?: number },
 ): Promise<T> {
-  const db = openDb(projectDir, opts);
+  const pool = getPool(projectDir, opts);
+  const db = await pool.acquire();
 
-  // The default busy_timeout is set on first open; if a caller supplies
-  // a value after the first open, re-apply it for this tx and restore
-  // the default on the way out (success or failure).
+  // A per-call busy_timeout overrides the connection default for this
+  // operation; release() restores the pool default before the next
+  // borrower sees the connection.
   if (opts?.busyTimeoutMs !== undefined) {
     db.exec(`PRAGMA busy_timeout = ${opts.busyTimeoutMs}`);
   }
@@ -118,12 +128,11 @@ export async function withStateTransaction<T>(
   try {
     db.exec("BEGIN IMMEDIATE");
   } catch (err) {
-    if (opts?.busyTimeoutMs !== undefined) {
-      db.exec(`PRAGMA busy_timeout = ${DEFAULT_BUSY_TIMEOUT_MS}`);
-    }
-    const msg = (err as Error).message;
-    if (/\bbusy\b|\blocked\b/i.test(msg)) {
-      throw new KernelError({ code: "STATE_BUSY", message: msg });
+    // BEGIN failed → no transaction was opened → the connection is clean
+    // and can be returned for reuse.
+    pool.release(db);
+    if (isBusyError(err)) {
+      throw new KernelError({ code: "STATE_BUSY", message: (err as Error).message });
     }
     throw err;
   }
@@ -140,13 +149,60 @@ export async function withStateTransaction<T>(
       });
     }
     db.exec("COMMIT");
+    pool.release(db);
     return result;
   } catch (err) {
-    try { db.exec("ROLLBACK"); } catch { /* tx may already be terminated */ }
+    let poisoned = false;
+    try { db.exec("ROLLBACK"); } catch { poisoned = true; }
+    if (poisoned) pool.discard(db);
+    else pool.release(db);
     throw err;
-  } finally {
-    if (opts?.busyTimeoutMs !== undefined) {
-      db.exec(`PRAGMA busy_timeout = ${DEFAULT_BUSY_TIMEOUT_MS}`);
+  }
+}
+
+// ============================================================================
+// withReadTransaction
+// ============================================================================
+
+// Borrow a pooled connection, pin one consistent committed snapshot under
+// `PRAGMA query_only = ON` + BEGIN DEFERRED, run the read-only fn (e.g.
+// all of loadState), then COMMIT and return the connection. WAL lets the
+// read run concurrently with a writer; the snapshot is fixed at the first
+// statement, so a multi-statement read never sees a torn mix across an
+// interleaved commit. query_only refuses any accidental write at the
+// SQLite layer. The now token threaded through the Transaction is local
+// to this read (nothing is persisted), so a fresh captureNow() is fine.
+export async function withReadTransaction<T>(
+  projectDir: string,
+  fn: (tx: Transaction) => Promise<T>,
+): Promise<T> {
+  const pool = getPool(projectDir);
+  const db = await pool.acquire();
+
+  try {
+    db.exec("PRAGMA query_only = ON");
+    db.exec("BEGIN DEFERRED");
+  } catch (err) {
+    // query_only may have flipped before BEGIN failed → discard so the
+    // next borrower never inherits a half-configured handle.
+    pool.discard(db);
+    if (isBusyError(err)) {
+      throw new KernelError({ code: "STATE_BUSY", message: (err as Error).message });
     }
+    throw err;
+  }
+
+  const tx = new TransactionImpl(db, captureNow());
+  try {
+    const result = await fn(tx);
+    db.exec("COMMIT");
+    pool.release(db);
+    return result;
+  } catch (err) {
+    let poisoned = false;
+    try { db.exec("ROLLBACK"); } catch { poisoned = true; }
+    if (poisoned) pool.discard(db);
+    else pool.release(db);
+    throw err;
   }
 }

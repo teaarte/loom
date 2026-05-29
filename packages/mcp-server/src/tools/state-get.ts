@@ -3,15 +3,14 @@
 // asked counters, the full PipelineState aggregate, per-table JSONL,
 // and a stable-width ASCII rendering whose column widths are pinned
 // so two snapshots diff cleanly.
+//
+// Every format reads inside a single `withReadTransaction`: one
+// consistent committed snapshot per call (BEGIN DEFERRED + query_only),
+// so a multi-statement inspection never sees a torn mix across an
+// interleaved writer commit, and the reader never blocks the writer.
 
-import type { DatabaseSync } from "node:sqlite";
-
-import {
-  captureNow,
-  loadState,
-  openDb,
-  TransactionImpl,
-} from "@loom/kernel";
+import { loadState, withReadTransaction } from "@loom/kernel";
+import type { Transaction } from "@loom/kernel";
 
 import type {
   PipelineStateView,
@@ -65,13 +64,12 @@ function clampLimit(raw: number | undefined): number {
 export function createStateGetTool(): ToolHandler<StateGetInput, PipelineStateView> {
   return async (input) => {
     const format: StateGetFormat = input.format ?? "summary";
-    const db = openDb(input.project_dir);
-
-    if (format === "summary") return renderSummary(db);
-    if (format === "json") return await renderJson(input.project_dir);
-    if (format === "jsonl") return renderJsonl(db, input);
-
-    return renderPrettyTable(db, input);
+    return await withReadTransaction(input.project_dir, async (tx) => {
+      if (format === "summary") return await renderSummary(tx);
+      if (format === "json") return { format: "json", state: await loadState(tx) };
+      if (format === "jsonl") return await renderJsonl(tx, input);
+      return await renderPrettyTable(tx, input);
+    });
   };
 }
 
@@ -81,23 +79,19 @@ export function createStateGetTool(): ToolHandler<StateGetInput, PipelineStateVi
 // useful envelope.
 // ---------------------------------------------------------------------
 
-function renderSummary(db: DatabaseSync): PipelineStateView {
-  const ps = db
-    .prepare("SELECT task_id, status, owner_id FROM pipeline_state WHERE id = 1")
-    .get() as { task_id: string | null; status: string; owner_id: string | null } | undefined;
+async function renderSummary(tx: Transaction): Promise<PipelineStateView> {
+  const ps = await tx.queryRow<{
+    task_id: string | null;
+    status: string;
+    owner_id: string | null;
+  }>("SELECT task_id, status, owner_id FROM pipeline_state WHERE id = 1");
 
-  const pendingRow = db
-    .prepare("SELECT COUNT(*) AS c FROM pending_agents")
-    .get() as { c: number };
-  const gatesRow = db
-    .prepare("SELECT COUNT(*) AS c FROM gates")
-    .get() as { c: number };
-  const auditRow = db
-    .prepare("SELECT COUNT(*) AS c FROM audit")
-    .get() as { c: number };
-  const findingsRow = db
-    .prepare("SELECT COUNT(*) AS c FROM findings")
-    .get() as { c: number };
+  const pendingRow = await tx.queryRow<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM pending_agents",
+  );
+  const gatesRow = await tx.queryRow<{ c: number }>("SELECT COUNT(*) AS c FROM gates");
+  const auditRow = await tx.queryRow<{ c: number }>("SELECT COUNT(*) AS c FROM audit");
+  const findingsRow = await tx.queryRow<{ c: number }>("SELECT COUNT(*) AS c FROM findings");
 
   return {
     format: "summary",
@@ -105,35 +99,22 @@ function renderSummary(db: DatabaseSync): PipelineStateView {
       task_id: ps?.task_id ?? null,
       status: ps?.status ?? null,
       owner_id: ps?.owner_id ?? null,
-      pending_agent_count: Number(pendingRow.c),
-      gate_count: Number(gatesRow.c),
-      audit_row_count: Number(auditRow.c),
-      finding_count: Number(findingsRow.c),
+      pending_agent_count: Number(pendingRow?.c ?? 0),
+      gate_count: Number(gatesRow?.c ?? 0),
+      audit_row_count: Number(auditRow?.c ?? 0),
+      finding_count: Number(findingsRow?.c ?? 0),
     },
   };
-}
-
-// ---------------------------------------------------------------------
-// json — full PipelineState aggregate. Uses a read-only tx wrapper:
-// the handler never commits, so the now token threaded through
-// `TransactionImpl` is local to this scope and not observable on disk.
-// ---------------------------------------------------------------------
-
-async function renderJson(projectDir: string): Promise<PipelineStateView> {
-  const db = openDb(projectDir);
-  const tx = new TransactionImpl(db, captureNow());
-  const state = await loadState(tx);
-  return { format: "json", state };
 }
 
 // ---------------------------------------------------------------------
 // jsonl — each row of the requested table on its own line.
 // ---------------------------------------------------------------------
 
-function renderJsonl(db: DatabaseSync, input: StateGetInput): PipelineStateView {
+async function renderJsonl(tx: Transaction, input: StateGetInput): Promise<PipelineStateView> {
   const table = resolveTable(input.table);
   const limit = clampLimit(input.limit);
-  const rows = queryTable(db, table, input.since, limit);
+  const rows = await queryTable(tx, table, input.since, limit);
   return { format: "jsonl", lines: rows.map((r) => JSON.stringify(r)) };
 }
 
@@ -144,19 +125,22 @@ function renderJsonl(db: DatabaseSync, input: StateGetInput): PipelineStateView 
 // cleanly without whitespace noise.
 // ---------------------------------------------------------------------
 
-function renderPrettyTable(db: DatabaseSync, input: StateGetInput): PipelineStateView {
+async function renderPrettyTable(
+  tx: Transaction,
+  input: StateGetInput,
+): Promise<PipelineStateView> {
   const limit = clampLimit(input.limit);
   const tables: Record<string, string> = {};
 
   if (input.table !== undefined) {
     const table = resolveTable(input.table);
-    const rows = queryTable(db, table, input.since, limit);
+    const rows = await queryTable(tx, table, input.since, limit);
     tables[table] = renderTable(rows);
     return { format: "pretty-table", tables };
   }
 
   const table = DEFAULT_TABLE;
-  const rows = queryTable(db, table, input.since, limit);
+  const rows = await queryTable(tx, table, input.since, limit);
   tables[table] = renderTable(rows);
   return { format: "pretty-table", tables };
 }
@@ -166,19 +150,20 @@ function renderPrettyTable(db: DatabaseSync, input: StateGetInput): PipelineStat
 // timestamp column on the allowlist.
 // ---------------------------------------------------------------------
 
-function queryTable(
-  db: DatabaseSync,
+async function queryTable(
+  tx: Transaction,
   table: string,
   since: string | undefined,
   limit: number,
-): Record<string, unknown>[] {
+): Promise<Record<string, unknown>[]> {
   const tsCol = tsColumnFor(table);
   if (since !== undefined && tsCol !== null && TS_FILTERED_TABLES.has(table)) {
-    return db
-      .prepare(`SELECT * FROM ${table} WHERE ${tsCol} >= ? LIMIT ?`)
-      .all(since, limit) as Record<string, unknown>[];
+    return await tx.queryAll<Record<string, unknown>>(
+      `SELECT * FROM ${table} WHERE ${tsCol} >= ? LIMIT ?`,
+      [since, limit],
+    );
   }
-  return db.prepare(`SELECT * FROM ${table} LIMIT ?`).all(limit) as Record<string, unknown>[];
+  return await tx.queryAll<Record<string, unknown>>(`SELECT * FROM ${table} LIMIT ?`, [limit]);
 }
 
 function resolveTable(requested: string | undefined): string {

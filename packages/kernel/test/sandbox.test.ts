@@ -25,6 +25,37 @@ import {
   resolveSandbox,
 } from "../src/sandbox/index.js";
 
+// `kill(pid, 0)` probes liveness without delivering a signal: it returns
+// for a live process and throws ESRCH once the process is gone.
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as { code?: unknown }).code !== "ESRCH";
+  }
+}
+
+// Poll for the pid file a forked command writes, returning the recorded
+// pid once it appears. Bounded by an attempt count (not a wall clock).
+async function readRecordedPid(
+  file: string,
+  attempts: number,
+  stepMs: number,
+): Promise<number> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const raw = readFileSync(file, "utf8").trim();
+      const pid = Number(raw);
+      if (raw.length > 0 && Number.isInteger(pid) && pid > 0) return pid;
+    } catch {
+      /* file not written yet */
+    }
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  throw new Error("forked command never recorded its child pid");
+}
+
 // ============================================================================
 // resolveSafePath — path discipline
 // ============================================================================
@@ -364,6 +395,54 @@ describe("passthrough sandbox", () => {
     const r = await sb.exec("sleep 5", { timeout_ms: 50 });
     assert.equal(r.timed_out, true);
     assert.notEqual(r.exit_code, 0);
+  });
+
+  it("kills the whole process tree on timeout (no surviving grandchild)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loom-passthru-tree-"));
+    const pidFile = join(dir, "child.pid");
+    let grandchild: number | undefined;
+    try {
+      const sb = createPassthroughSandbox();
+      // Background a long sleep, record ITS pid, then `wait` so the shell
+      // stays alive until the timeout. Start the run but DON'T await it to
+      // completion: on a shell-only kill the shell dies at the timeout, but
+      // the orphaned sleep keeps the stdio pipes open, so `exec` would not
+      // resolve until that sleep finishes on its own (~30s). The proof of a
+      // *process-group* kill is that the sleep is already dead shortly after
+      // the timeout — observed here, before the orphan could self-terminate.
+      // (Awaiting first would hide the bug: by the time exec returned, the
+      // sleep would have ended regardless.)
+      const done = sb.exec(`sleep 30 & echo $! > ${pidFile}; wait`, {
+        timeout_ms: 200,
+      });
+
+      grandchild = await readRecordedPid(pidFile, 80, 25);
+      // Past the 200ms timeout with a wide margin under the 30s sleep, so a
+      // surviving orphan is still alive here and a tree-killed one is gone.
+      await new Promise((r) => setTimeout(r, 700));
+      assert.ok(
+        !processExists(grandchild),
+        "the backgrounded child must be killed by the timeout, not orphaned",
+      );
+
+      // With the fix, the group kill closed the pipes at the timeout, so the
+      // run has already resolved — confirm it is reported as timed out.
+      const r = await done;
+      assert.equal(r.timed_out, true);
+      assert.notEqual(r.exit_code, 0);
+    } finally {
+      // If the fix regressed, the orphan is still alive and `done` is still
+      // pending on its held pipes — kill it so exec settles and no 30s sleep
+      // leaks into the test host.
+      if (grandchild !== undefined && processExists(grandchild)) {
+        try {
+          process.kill(grandchild, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("read_file / write_file pass straight through with no path discipline", async () => {

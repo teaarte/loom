@@ -18,6 +18,22 @@ import type {
   SandboxPlugin,
 } from "../types/plugins.js";
 
+// Kill the child's whole process group. The shell is spawned detached, so
+// it leads its own group; signaling the NEGATIVE pid reaches every
+// descendant (a backgrounded grandchild included), not just the shell. An
+// ESRCH means the group already exited in the window between the timeout
+// firing and this signal — a benign race, swallowed; anything else is a
+// real fault and propagates.
+function killProcessGroup(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch (err) {
+    const code = (err as { code?: unknown }).code;
+    if (code !== "ESRCH") throw err;
+  }
+}
+
 export interface PassthroughSandboxOptions {
   // Sink for the startup warning. Wired to the same audit channel tool
   // calls use, so the no-isolation notice survives in state.db. When
@@ -52,6 +68,12 @@ export function createPassthroughSandbox(
           shell: true,
           cwd: options.cwd,
           env: options.env ? { ...process.env, ...options.env } : process.env,
+          // Run the shell in its own process group. A command that
+          // backgrounds work (`sleep 30 & wait`) spawns grandchildren that
+          // outlive a kill aimed at the shell PID alone; detaching lets the
+          // timeout signal the whole group, so the timeout bounds the
+          // process TREE rather than just /bin/sh.
+          detached: true,
         });
 
         let stdout = "";
@@ -62,7 +84,7 @@ export function createPassthroughSandbox(
         if (options.timeout_ms !== undefined) {
           timer = setTimeout(() => {
             timedOut = true;
-            child.kill("SIGKILL");
+            killProcessGroup(child.pid);
           }, options.timeout_ms);
         }
 

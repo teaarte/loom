@@ -53,12 +53,17 @@ interface SeedOpts {
 }
 async function seedStateDb(dir: string, opts: SeedOpts): Promise<void> {
   openDb(dir); // runs migrations → real pipeline_state / driver_state / pending_agents
-  await withStateTransaction(dir, captureNow(), async (tx) => {
+  // Stamp timestamps from the same tick the tx commits under, not a fixed
+  // past instant. A hardcoded started_at drifts out of the zombie-pending
+  // window as the wall clock advances, and the seed's pre-commit invariant
+  // pass then rejects an otherwise-valid pending-agent fixture.
+  const now = captureNow();
+  await withStateTransaction(dir, now, async (tx) => {
     await tx.exec(
       "INSERT INTO pipeline_state " +
         "(id, schema_version, project_dir, bundle, task, driver_state_id, owner_id, status, started_at) " +
         "VALUES (1, '3.0.0', ?, 'code-fixture', 'seeded task', 'd-seed', ?, ?, ?)",
-      [dir, opts.ownerId, opts.status, "2026-05-29T00:00:00.000Z"],
+      [dir, opts.ownerId, opts.status, now],
     );
     await tx.exec(
       "INSERT INTO driver_state (id, flow_name, pending_user_answer) VALUES (1, 'standard', ?)",
@@ -67,7 +72,7 @@ async function seedStateDb(dir: string, opts: SeedOpts): Promise<void> {
     for (let i = 0; i < opts.pendingAgents; i++) {
       await tx.exec(
         "INSERT INTO pending_agents (agent_run_id, agent, phase, started_at) VALUES (?, 'impl-1', 'work', ?)",
-        [`ar-${i}`, "2026-05-29T00:00:00.000Z"],
+        [`ar-${i}`, now],
       );
     }
   });

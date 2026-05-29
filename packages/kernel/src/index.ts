@@ -29,6 +29,7 @@ export * from "./lib/project-dir.js";
 export * from "./lib/initialize-task.js";
 export * from "./lib/deliver-continue.js";
 export * from "./lib/recover-task.js";
+export * from "./lib/bypass-marker.js";
 export * from "./lib/ddl-allowlist.js";
 export * from "./lib/backup.js";
 export * from "./stages/spawn.js";

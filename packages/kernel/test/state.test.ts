@@ -80,6 +80,7 @@ describe("openDb", () => {
         "agent_records",
         "agent_verdicts",
         "audit",
+        "bypass_markers",
         "driver_state",
         "findings",
         "gates",
@@ -101,7 +102,11 @@ describe("openDb", () => {
       .prepare("SELECT component, version FROM kernel_schema_versions ORDER BY component")
       .all() as { component: string; version: string }[];
     const components = rows.map((r) => r.component);
-    assert.deepEqual(components, ["001-initial", "002-installed-extensions"]);
+    assert.deepEqual(components, [
+      "001-initial",
+      "002-installed-extensions",
+      "003-bypass-markers",
+    ]);
     for (const r of rows) assert.equal(r.version, "3.0.0");
   });
 
@@ -126,7 +131,11 @@ describe("migration runner — idempotent", () => {
       .prepare("SELECT component FROM kernel_schema_versions ORDER BY component")
       .all() as { component: string }[];
     const components = rows.map((r) => r.component);
-    assert.deepEqual(components, ["001-initial", "002-installed-extensions"]);
+    assert.deepEqual(components, [
+      "001-initial",
+      "002-installed-extensions",
+      "003-bypass-markers",
+    ]);
   });
 });
 

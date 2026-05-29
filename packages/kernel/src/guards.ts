@@ -15,6 +15,13 @@
 // The `// allow-ambient-clock` marker on the call line is the
 // load-bearing exception flag the lint pass recognizes.
 
+import { timingSafeEqual } from "node:crypto";
+
+import {
+  computeMarkerHmac,
+  loadBypassKey,
+  reasonEncodesDriver,
+} from "./lib/bypass-marker.js";
 import { KernelError } from "./state/db.js";
 import type { NowToken } from "./types/now.js";
 import type { Transaction } from "./types/transaction.js";
@@ -40,29 +47,128 @@ function subtractMs(now: NowToken, ms: number): NowToken {
   return new Date(epoch - ms).toISOString() as NowToken; // allow-ambient-clock: parses the supplied NowToken string only; never reads the host clock
 }
 
-// Forward-declared HMAC-verification stubs. Both throw
-// NOT_IMPLEMENTED until the cross-owner recovery + bypass-marker
-// table land. Guards delegate so the call-site signature is stable
-// across the forward gap; tests exercise the pre-delegation paths
-// (REQUIRED / EXPIRED) without reaching these.
-function verifyOwnerBypassMarker(
-  _tx: Transaction,
-  _target: OwnerCheckTarget,
-): void {
-  throw new KernelError({
-    code: "NOT_IMPLEMENTED",
-    message: "cross-owner bypass-marker verification is not yet implemented",
-  });
+// Verify a cross-owner bypass marker and CONSUME it in the same tx as
+// the recovery it authorizes — there is no read-then-act window. The
+// signing key is loaded from outside state.db and any project dir, so a
+// writer that can reach the bypass_markers row still cannot forge a
+// valid signature. The single-row marker is deleted on consume; a
+// replay after consume surfaces CONSUMED (the signature is valid but no
+// live row remains), distinct from a forged marker (bad signature →
+// INVALID).
+async function verifyOwnerBypassMarker(
+  tx: Transaction,
+  target: OwnerCheckTarget,
+  marker: BypassMarker,
+): Promise<void> {
+  const key = loadBypassKey();
+  if (key === null) {
+    throw new KernelError({
+      code: "BYPASS_KEY_MISSING",
+      message:
+        "cross-owner recovery needs a bypass-HMAC key — set PIPELINE_BYPASS_HMAC_KEY or install a user-global ~/.claude/bypass-hmac.key",
+    });
+  }
+  // A marker minted under a now-rotated key cannot authorize anything —
+  // rotation is the documented kill switch for outstanding markers.
+  if (marker.key_id !== key.key_id) {
+    throw new KernelError({
+      code: "CROSS_OWNER_MARKER_INVALID",
+      message: `marker key_id '${marker.key_id}' does not match the active key '${key.key_id}' (rotated?)`,
+      detail: { marker_key_id: marker.key_id, active_key_id: key.key_id },
+    });
+  }
+  const expected = computeMarkerHmac(
+    key.key,
+    marker.issued_at,
+    marker.expires_at,
+    marker.reason,
+  );
+  if (!hmacEqual(expected, marker.hmac)) {
+    throw new KernelError({
+      code: "CROSS_OWNER_MARKER_INVALID",
+      message: "cross-owner bypass marker has an invalid signature",
+    });
+  }
+  // The reason binds the marker to ONE task — a marker minted for a
+  // different driver_state_id cannot be replayed against this recovery.
+  if (!reasonEncodesDriver(marker.reason, target.driver_state_id)) {
+    throw new KernelError({
+      code: "CROSS_OWNER_MARKER_INVALID",
+      message: `marker reason does not encode the target driver_state_id '${target.driver_state_id}'`,
+      detail: { reason: marker.reason, driver_state_id: target.driver_state_id },
+    });
+  }
+  if (marker.expires_at < tx.now) {
+    throw new KernelError({
+      code: "BYPASS_MARKER_EXPIRED",
+      message: `cross-owner bypass marker expired at ${marker.expires_at} (tx.now=${tx.now})`,
+      detail: { expires_at: marker.expires_at, tx_now: tx.now },
+    });
+  }
+  // Single-use: the live row must still exist AND match the presented
+  // marker. A valid signature with no live row means the marker was
+  // already consumed; a live row with a different signature means a
+  // newer marker superseded the one presented.
+  const row = await tx.queryRow<{ hmac: string }>(
+    "SELECT hmac FROM bypass_markers WHERE id = 1",
+  );
+  if (row === null) {
+    throw new KernelError({
+      code: "CROSS_OWNER_MARKER_CONSUMED",
+      message: "cross-owner bypass marker has already been consumed",
+    });
+  }
+  if (!hmacEqual(String(row.hmac), marker.hmac)) {
+    throw new KernelError({
+      code: "CROSS_OWNER_MARKER_INVALID",
+      message: "presented marker does not match the live bypass_markers row",
+    });
+  }
+  await tx.exec("DELETE FROM bypass_markers WHERE id = 1");
 }
 
-function verifyBypassHmac(
-  _tx: Transaction,
-  _marker: BypassMarker,
-): void {
-  throw new KernelError({
-    code: "NOT_IMPLEMENTED",
-    message: "bypass-marker HMAC verification is not yet implemented",
-  });
+// Verify a direct-write bypass marker's signature against the active
+// key. Expiry is already checked by `bypassMarkerGuard` before this
+// runs; this is the forge-resistance gate. Unlike the cross-owner
+// validator it does not consume the row — single-use is the cross-owner
+// recovery ritual, and no MVP surface performs a marker-authorized
+// direct state.db write yet.
+function verifyBypassHmac(_tx: Transaction, marker: BypassMarker): void {
+  const key = loadBypassKey();
+  if (key === null) {
+    throw new KernelError({
+      code: "BYPASS_KEY_MISSING",
+      message:
+        "bypass marker verification needs a bypass-HMAC key — set PIPELINE_BYPASS_HMAC_KEY or install a user-global ~/.claude/bypass-hmac.key",
+    });
+  }
+  if (marker.key_id !== key.key_id) {
+    throw new KernelError({
+      code: "BYPASS_MARKER_INVALID",
+      message: `marker key_id '${marker.key_id}' does not match the active key '${key.key_id}' (rotated?)`,
+      detail: { marker_key_id: marker.key_id, active_key_id: key.key_id },
+    });
+  }
+  const expected = computeMarkerHmac(
+    key.key,
+    marker.issued_at,
+    marker.expires_at,
+    marker.reason,
+  );
+  if (!hmacEqual(expected, marker.hmac)) {
+    throw new KernelError({
+      code: "BYPASS_MARKER_INVALID",
+      message: "bypass marker has an invalid signature",
+    });
+  }
+}
+
+// Constant-time hex-digest comparison. Equal length is required by
+// `timingSafeEqual`; a length mismatch is an immediate non-match (and
+// itself reveals nothing beyond "wrong length").
+function hmacEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
 // ============================================================================
@@ -84,9 +190,15 @@ export interface OwnerCheckTarget {
   caller_owner_id: string | null;
 }
 
+// The full marker a caller presents — every field except `key_id`
+// feeds the HMAC-SHA256 over (issued_at || expires_at || reason);
+// `key_id` names the signing key so a rotation mismatch is legible.
 export interface BypassMarker {
-  hmac: string;
+  issued_at: NowToken;
   expires_at: NowToken;
+  reason: string;
+  hmac: string;
+  key_id: string;
 }
 
 export interface BypassMarkerContext {
@@ -213,10 +325,12 @@ export async function ownerCheckGuard(
       },
     });
   }
-  // The HMAC validator throws NOT_IMPLEMENTED for now; once it
-  // lands, the same call path surfaces
-  // CROSS_OWNER_MARKER_INVALID / CROSS_OWNER_MARKER_CONSUMED.
-  verifyOwnerBypassMarker(tx, target);
+  // Cross-owner with a marker: verify its signature against the active
+  // key and consume it in THIS tx. A bad signature / wrong target /
+  // rotated key surfaces CROSS_OWNER_MARKER_INVALID; a replay after
+  // consume surfaces CROSS_OWNER_MARKER_CONSUMED; an expired marker
+  // surfaces BYPASS_MARKER_EXPIRED; no key surfaces BYPASS_KEY_MISSING.
+  await verifyOwnerBypassMarker(tx, target, marker);
 }
 
 // ============================================================================

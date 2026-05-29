@@ -9,7 +9,15 @@ import {
   ownerCheckGuard,
   phaseTransitionGuard,
   spawnGuard,
+  type BypassMarker,
 } from "../src/guards.js";
+import {
+  computeMarkerHmac,
+  crossOwnerReason,
+  issueCrossOwnerMarker,
+  loadBypassKey,
+  markerExpiresAt,
+} from "../src/lib/bypass-marker.js";
 import {
   KernelError,
   captureNow,
@@ -20,6 +28,11 @@ import {
   _resetInvariantsForTest,
 } from "../src/invariants.js";
 import type { NowToken } from "../src/types/now.js";
+
+// Two distinct ≥32-byte keys for the signing / rotation cases. base64 of
+// constant bytes — deterministic, no clock / randomness.
+const ENV_KEY_A = Buffer.alloc(32, 0xa1).toString("base64");
+const ENV_KEY_B = Buffer.alloc(32, 0xb2).toString("base64");
 
 function freshProject(): string {
   return mkdtempSync(join(tmpdir(), "loom-guards-"));
@@ -306,12 +319,19 @@ describe("phaseTransitionGuard", () => {
 
 describe("ownerCheckGuard", () => {
   let projectDir: string;
+  let prevEnv: string | undefined;
+  let prevHome: string | undefined;
   beforeEach(() => {
     _resetInvariantsForTest();
     projectDir = freshProject();
+    prevEnv = process.env["PIPELINE_BYPASS_HMAC_KEY"];
+    prevHome = process.env["HOME"];
+    process.env["PIPELINE_BYPASS_HMAC_KEY"] = ENV_KEY_A;
   });
   afterEach(() => {
     _resetInvariantsForTest();
+    restoreEnv("PIPELINE_BYPASS_HMAC_KEY", prevEnv);
+    restoreEnv("HOME", prevHome);
     cleanup(projectDir);
   });
 
@@ -352,27 +372,183 @@ describe("ownerCheckGuard", () => {
     );
   });
 
-  it("with a marker, delegates to the forward-declared HMAC validator (NOT_IMPLEMENTED)", async () => {
-    // The HMAC validator is forward-declared; the guard's job is
-    // to reach the stub when a marker is supplied. The test asserts
-    // the call gets that far by observing the NOT_IMPLEMENTED
-    // throw — the proper success path (and INVALID / CONSUMED
-    // codes) land alongside the cross-owner recovery primitive.
+  it("a valid marker authorizes the cross-owner op and is consumed", async () => {
     await seedPipelineState(projectDir, "alice");
     const now = captureNow();
+    const marker = await withStateTransaction(projectDir, now, (tx) =>
+      issueCrossOwnerMarker(tx, { driver_state_id: "d-fixture", ttl_ms: 60_000 }),
+    );
+
+    // The guard verifies + consumes in the same tx; no throw means the
+    // cross-owner op is authorized.
+    await withStateTransaction(projectDir, now, async (tx) => {
+      await ownerCheckGuard(
+        tx,
+        { driver_state_id: "d-fixture", caller_owner_id: "bob" },
+        toGuardMarker(marker),
+      );
+    });
+
+    // Single-use: the bypass_markers row is gone after the consume.
+    const row = await withStateTransaction(projectDir, now, (tx) =>
+      tx.queryRow("SELECT id FROM bypass_markers WHERE id = 1"),
+    );
+    assert.equal(row, null);
+  });
+
+  it("refuses a forged marker (bad signature) with CROSS_OWNER_MARKER_INVALID", async () => {
+    await seedPipelineState(projectDir, "alice");
+    const now = captureNow();
+    const key = loadBypassKey();
+    assert.ok(key !== null);
+    const forged: BypassMarker = {
+      issued_at: now,
+      expires_at: markerExpiresAt(now, 60_000),
+      reason: crossOwnerReason("d-fixture"),
+      key_id: key.key_id,
+      hmac: "0".repeat(64), // valid-length hex, wrong signature
+    };
     await assert.rejects(
       withStateTransaction(projectDir, now, async (tx) => {
         await ownerCheckGuard(
           tx,
           { driver_state_id: "d-fixture", caller_owner_id: "bob" },
-          { hmac: "stub", expires_at: tx.now },
+          forged,
         );
       }),
-      (err: unknown) => {
-        assert.ok(err instanceof KernelError);
-        assert.equal((err as KernelError).code, "NOT_IMPLEMENTED");
-        return true;
-      },
+      (err: unknown) =>
+        err instanceof KernelError && err.code === "CROSS_OWNER_MARKER_INVALID",
+    );
+  });
+
+  it("refuses an expired marker with BYPASS_MARKER_EXPIRED", async () => {
+    await seedPipelineState(projectDir, "alice");
+    const key = loadBypassKey();
+    assert.ok(key !== null);
+    const issued = "2026-05-29T11:00:00.000Z" as NowToken;
+    const expired = "2026-05-29T11:30:00.000Z" as NowToken;
+    const reason = crossOwnerReason("d-fixture");
+    const marker: BypassMarker = {
+      issued_at: issued,
+      expires_at: expired,
+      reason,
+      key_id: key.key_id,
+      hmac: computeMarkerHmac(key.key, issued, expired, reason),
+    };
+    // tx.now is well after expires_at.
+    const now = "2026-05-29T12:00:00.000Z" as NowToken;
+    await assert.rejects(
+      withStateTransaction(projectDir, now, async (tx) => {
+        await ownerCheckGuard(
+          tx,
+          { driver_state_id: "d-fixture", caller_owner_id: "bob" },
+          marker,
+        );
+      }),
+      (err: unknown) =>
+        err instanceof KernelError && err.code === "BYPASS_MARKER_EXPIRED",
+    );
+  });
+
+  it("refuses a marker minted for a different driver_state_id", async () => {
+    await seedPipelineState(projectDir, "alice");
+    const now = captureNow();
+    const key = loadBypassKey();
+    assert.ok(key !== null);
+    const reason = crossOwnerReason("d-some-other-task");
+    const expires = markerExpiresAt(now, 60_000);
+    const marker: BypassMarker = {
+      issued_at: now,
+      expires_at: expires,
+      reason,
+      key_id: key.key_id,
+      hmac: computeMarkerHmac(key.key, now, expires, reason),
+    };
+    await assert.rejects(
+      withStateTransaction(projectDir, now, async (tx) => {
+        await ownerCheckGuard(
+          tx,
+          { driver_state_id: "d-fixture", caller_owner_id: "bob" },
+          marker,
+        );
+      }),
+      (err: unknown) =>
+        err instanceof KernelError && err.code === "CROSS_OWNER_MARKER_INVALID",
+    );
+  });
+
+  it("refuses a marker signed under a now-rotated key", async () => {
+    await seedPipelineState(projectDir, "alice");
+    const now = captureNow();
+    const marker = await withStateTransaction(projectDir, now, (tx) =>
+      issueCrossOwnerMarker(tx, { driver_state_id: "d-fixture", ttl_ms: 60_000 }),
+    );
+    // Rotate the active key — the marker's key_id no longer matches.
+    process.env["PIPELINE_BYPASS_HMAC_KEY"] = ENV_KEY_B;
+    await assert.rejects(
+      withStateTransaction(projectDir, now, async (tx) => {
+        await ownerCheckGuard(
+          tx,
+          { driver_state_id: "d-fixture", caller_owner_id: "bob" },
+          toGuardMarker(marker),
+        );
+      }),
+      (err: unknown) =>
+        err instanceof KernelError && err.code === "CROSS_OWNER_MARKER_INVALID",
+    );
+  });
+
+  it("a consumed marker replays as CROSS_OWNER_MARKER_CONSUMED", async () => {
+    await seedPipelineState(projectDir, "alice");
+    const now = captureNow();
+    const marker = await withStateTransaction(projectDir, now, (tx) =>
+      issueCrossOwnerMarker(tx, { driver_state_id: "d-fixture", ttl_ms: 60_000 }),
+    );
+    // First use consumes the row.
+    await withStateTransaction(projectDir, now, async (tx) => {
+      await ownerCheckGuard(
+        tx,
+        { driver_state_id: "d-fixture", caller_owner_id: "bob" },
+        toGuardMarker(marker),
+      );
+    });
+    // Replay of the same (now-consumed) marker — valid signature, no row.
+    await assert.rejects(
+      withStateTransaction(projectDir, now, async (tx) => {
+        await ownerCheckGuard(
+          tx,
+          { driver_state_id: "d-fixture", caller_owner_id: "bob" },
+          toGuardMarker(marker),
+        );
+      }),
+      (err: unknown) =>
+        err instanceof KernelError && err.code === "CROSS_OWNER_MARKER_CONSUMED",
+    );
+  });
+
+  it("refuses with BYPASS_KEY_MISSING when no signing key is configured", async () => {
+    await seedPipelineState(projectDir, "alice");
+    // No env key, and a home dir with no key file → loadBypassKey null.
+    delete process.env["PIPELINE_BYPASS_HMAC_KEY"];
+    process.env["HOME"] = mkdtempSync(join(tmpdir(), "loom-emptyhome-"));
+    const now = captureNow();
+    const marker: BypassMarker = {
+      issued_at: now,
+      expires_at: markerExpiresAt(now, 60_000),
+      reason: crossOwnerReason("d-fixture"),
+      key_id: "env:deadbeef",
+      hmac: "0".repeat(64),
+    };
+    await assert.rejects(
+      withStateTransaction(projectDir, now, async (tx) => {
+        await ownerCheckGuard(
+          tx,
+          { driver_state_id: "d-fixture", caller_owner_id: "bob" },
+          marker,
+        );
+      }),
+      (err: unknown) =>
+        err instanceof KernelError && err.code === "BYPASS_KEY_MISSING",
     );
   });
 });
@@ -390,48 +566,98 @@ describe("bypassMarkerGuard", () => {
     queryAll: async () => [],
   };
 
+  let prevEnv: string | undefined;
+  let prevHome: string | undefined;
+  beforeEach(() => {
+    prevEnv = process.env["PIPELINE_BYPASS_HMAC_KEY"];
+    prevHome = process.env["HOME"];
+    process.env["PIPELINE_BYPASS_HMAC_KEY"] = ENV_KEY_A;
+  });
+  afterEach(() => {
+    restoreEnv("PIPELINE_BYPASS_HMAC_KEY", prevEnv);
+    restoreEnv("HOME", prevHome);
+  });
+
+  // Build a fresh direct-write marker signed under the active key.
+  function freshMarker(): BypassMarker {
+    const key = loadBypassKey();
+    assert.ok(key !== null);
+    const issued = "2026-05-28T11:30:00.000Z" as NowToken;
+    const expires = "2026-05-28T13:00:00.000Z" as NowToken; // after fakeTx.now
+    const reason = "direct-write";
+    return {
+      issued_at: issued,
+      expires_at: expires,
+      reason,
+      key_id: key.key_id,
+      hmac: computeMarkerHmac(key.key, issued, expires, reason),
+    };
+  }
+
   it("refuses without a marker (BYPASS_MARKER_REQUIRED)", () => {
     assert.throws(
       () => bypassMarkerGuard(fakeTx, {}),
-      (err: unknown) => {
-        assert.ok(err instanceof KernelError);
-        assert.equal((err as KernelError).code, "BYPASS_MARKER_REQUIRED");
-        return true;
-      },
+      (err: unknown) =>
+        err instanceof KernelError && err.code === "BYPASS_MARKER_REQUIRED",
     );
   });
 
   it("refuses an expired marker via the tx.now comparison", () => {
+    const m = freshMarker();
+    m.expires_at = "2026-05-28T11:00:00.000Z" as NowToken; // 1h before tx.now
     assert.throws(
-      () =>
-        bypassMarkerGuard(fakeTx, {
-          marker: {
-            hmac: "stub",
-            expires_at: "2026-05-28T11:00:00.000Z" as NowToken, // 1h before tx.now
-          },
-        }),
-      (err: unknown) => {
-        assert.ok(err instanceof KernelError);
-        assert.equal((err as KernelError).code, "BYPASS_MARKER_EXPIRED");
-        return true;
-      },
+      () => bypassMarkerGuard(fakeTx, { marker: m }),
+      (err: unknown) =>
+        err instanceof KernelError && err.code === "BYPASS_MARKER_EXPIRED",
     );
   });
 
-  it("delegates to HMAC validator when marker is fresh (NOT_IMPLEMENTED)", () => {
+  it("passes a fresh marker with a valid signature", () => {
+    bypassMarkerGuard(fakeTx, { marker: freshMarker() });
+  });
+
+  it("refuses a fresh marker with a bad signature (BYPASS_MARKER_INVALID)", () => {
+    const m = freshMarker();
+    m.hmac = "0".repeat(64);
     assert.throws(
-      () =>
-        bypassMarkerGuard(fakeTx, {
-          marker: {
-            hmac: "stub",
-            expires_at: "2026-05-28T13:00:00.000Z" as NowToken, // 1h after tx.now
-          },
-        }),
-      (err: unknown) => {
-        assert.ok(err instanceof KernelError);
-        assert.equal((err as KernelError).code, "NOT_IMPLEMENTED");
-        return true;
-      },
+      () => bypassMarkerGuard(fakeTx, { marker: m }),
+      (err: unknown) =>
+        err instanceof KernelError && err.code === "BYPASS_MARKER_INVALID",
+    );
+  });
+
+  it("refuses with BYPASS_KEY_MISSING when no signing key is configured", () => {
+    const m = freshMarker();
+    delete process.env["PIPELINE_BYPASS_HMAC_KEY"];
+    process.env["HOME"] = mkdtempSync(join(tmpdir(), "loom-emptyhome-"));
+    assert.throws(
+      () => bypassMarkerGuard(fakeTx, { marker: m }),
+      (err: unknown) =>
+        err instanceof KernelError && err.code === "BYPASS_KEY_MISSING",
     );
   });
 });
+
+// Restore an env var to a prior value (delete if it was unset).
+function restoreEnv(name: string, prev: string | undefined): void {
+  if (prev === undefined) delete process.env[name];
+  else process.env[name] = prev;
+}
+
+// The issued marker carries the same fields the guard's BypassMarker
+// expects; the NowToken brand is structural so the shapes line up.
+function toGuardMarker(m: {
+  issued_at: string;
+  expires_at: string;
+  reason: string;
+  hmac: string;
+  key_id: string;
+}): BypassMarker {
+  return {
+    issued_at: m.issued_at as NowToken,
+    expires_at: m.expires_at as NowToken,
+    reason: m.reason,
+    hmac: m.hmac,
+    key_id: m.key_id,
+  };
+}

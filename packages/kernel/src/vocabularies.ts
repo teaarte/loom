@@ -57,6 +57,11 @@ const KERNEL_ERROR_CLASSES: readonly string[] = [
   "extension-load-failed",
   "sandbox-violation",
   "tool-output-compressed",
+  // Forensic tags on recovery audit rows: an abandon / force-close of an
+  // already-terminal task (no state change), and a serialized recovery
+  // that found the work already done by a racing delivery.
+  "recovery-idempotent",
+  "recovery-raced",
 ];
 
 const KERNEL_SANDBOX_KINDS: readonly string[] = [

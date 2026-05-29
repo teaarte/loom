@@ -38,7 +38,11 @@
 
 import { KernelError } from "../state/db.js";
 import type { RecoveryChoice } from "../types/continue-task.js";
+import type { ProviderShuttleIntent } from "../types/provider.js";
+import type { Registry } from "../types/registry.js";
+import type { PipelineState } from "../types/state.js";
 import type { Transaction } from "../types/transaction.js";
+import type { KernelDirective } from "../types/transport.js";
 
 import { readLedgerRow, writeLedgerRow } from "./ledger.js";
 
@@ -52,11 +56,22 @@ export interface RecoverTaskArgs {
   recovery_id: string;
 }
 
+// Forensic discriminator the caller maps to the audit `error_class`:
+//   applied     — the recovery mutated state (or is a re-entrant action).
+//   idempotent  — abandon / force-close of an already-terminal task; no
+//                 state change. error_class "recovery-idempotent".
+//   raced       — a serialized recovery that found the work already done
+//                 (cancel-pending with nothing to drain). error_class
+//                 "recovery-raced".
+export type RecoveryOutcome = "applied" | "idempotent" | "raced";
+
 export interface RecoverTaskResult {
   recovery_id: string;
   // Whether the caller must run the FSM after commit (re-entrant choices)
   // or shape a terminal response directly (abandon / force-close).
   reenter: boolean;
+  // Forensic classification of this recovery for the audit row.
+  outcome: RecoveryOutcome;
 }
 
 const REENTRANT: ReadonlySet<RecoveryChoice> = new Set<RecoveryChoice>([
@@ -78,7 +93,14 @@ export async function recoverTask(
   // response without touching state.
   const existing = await readLedgerRow(tx, key);
   if (existing !== null) {
-    return { recovery_id: args.recovery_id, reenter: REENTRANT.has(args.choice) };
+    // The mutation committed on an earlier call; its audit row already
+    // carries the real classification. The replay re-mutates nothing, so
+    // there is no fresh outcome to tag.
+    return {
+      recovery_id: args.recovery_id,
+      reenter: REENTRANT.has(args.choice),
+      outcome: "applied",
+    };
   }
 
   const status = await readStatus(tx);
@@ -94,21 +116,24 @@ export async function recoverTask(
     });
   }
 
+  let outcome: RecoveryOutcome;
   switch (args.choice) {
     case "abandon":
-      await applyAbandon(tx, status);
+      outcome = await applyAbandon(tx, status);
       break;
     case "force-close":
-      await applyForceClose(tx, status);
+      outcome = await applyForceClose(tx, status);
       break;
     case "retry":
       await applyRetry(tx);
+      outcome = "applied";
       break;
     case "retry-failed":
       await applyRetryFailed(tx, args.agent_run_ids ?? []);
+      outcome = "applied";
       break;
     case "cancel-pending":
-      await applyCancelPending(tx);
+      outcome = await applyCancelPending(tx);
       break;
     default: {
       const _exhaustive: never = args.choice;
@@ -123,26 +148,114 @@ export async function recoverTask(
     response_blob: null,
   });
 
-  return { recovery_id: args.recovery_id, reenter: reentrant };
+  return { recovery_id: args.recovery_id, reenter: reentrant, outcome };
+}
+
+// retry-failed re-shuttle. The named pending rows are re-launched
+// reusing their EXISTING agent_run_id — built into a shuttle intent
+// WITHOUT a fresh `begin_spawn`, so the spawn duplicate-window guard is
+// never consulted. Re-issuing the same agent_run_id to an idempotent
+// provider dedups at the provider's own window, so this is the safe
+// re-launch path. The still-pending rows stay in place; the host re-runs
+// the named agents and delivers their results through the normal path.
+//
+// Refuses with PROVIDER_NOT_IDEMPOTENT when any named agent resolves to
+// a provider that does NOT declare `capabilities.idempotent_spawn`:
+// re-issuing the same agent_run_id to a non-idempotent vendor could
+// double-execute, so the caller must `cancel-pending` first to surface a
+// fresh agent_run_id.
+//
+// Runs on the loaded post-recovery state (the recovery committed,
+// leaving the rows in place); no tx, no clock — a pure mapping from
+// pending rows + registry to a `KernelDirective`.
+export function buildRetryFailedDirective(
+  state: PipelineState,
+  registry: Registry,
+  agentRunIds: string[],
+): KernelDirective {
+  const byId = new Map(state.pending_agents.map((r) => [r.agent_run_id, r]));
+  const intents: ProviderShuttleIntent[] = [];
+  for (const arid of agentRunIds) {
+    const row = byId.get(arid);
+    if (row === undefined) {
+      // Validated present inside the recovery tx; a miss here means a
+      // racing drain landed between commit and re-shuttle.
+      throw new KernelError({
+        code: "RECOVERY_STALE",
+        message: `agent_run_id '${arid}' is no longer pending`,
+        detail: { agent_run_id: arid },
+      });
+    }
+    const provider = registry.providers.resolve(row.agent, state, row.phase);
+    if (!provider.capabilities.idempotent_spawn) {
+      throw new KernelError({
+        code: "PROVIDER_NOT_IDEMPOTENT",
+        message:
+          `retry-failed cannot re-shuttle agent '${row.agent}' under non-idempotent ` +
+          `provider '${provider.name}' — cancel-pending first to surface a fresh agent_run_id`,
+        detail: { agent: row.agent, provider: provider.name, agent_run_id: arid },
+      });
+    }
+    const agentDef = registry.agents.get(row.agent);
+    const intent: ProviderShuttleIntent = {
+      agent: row.agent,
+      agent_run_id: row.agent_run_id,
+      phase: row.phase,
+      model: row.model ?? agentDef?.default_model ?? "default",
+      prompt: reShuttlePromptStub(state.task_id, row.agent, row.phase, agentDef?.template_path ?? ""),
+      extras: { provider: provider.name },
+    };
+    if (agentDef?.system_prompt !== undefined) {
+      intent.system_prompt = agentDef.system_prompt;
+    }
+    if (agentDef?.mcp_tools !== undefined) {
+      intent.mcp_tools_available = agentDef.mcp_tools;
+    }
+    intents.push(intent);
+  }
+  const only = intents[0];
+  if (intents.length === 1 && only !== undefined) {
+    return { kind: "shuttle", spawn: only };
+  }
+  return { kind: "shuttle-batch", spawns: intents };
+}
+
+// Deterministic prompt stub mirroring the SpawnStage interpreter's stub.
+// Real prompt rendering is a bundle concern (a before-spawn event Step),
+// out of the kernel's re-shuttle path.
+function reShuttlePromptStub(
+  taskId: string | null,
+  agent: string,
+  phase: string,
+  templatePath: string,
+): string {
+  return [
+    `agent=${agent}`,
+    `phase=${phase}`,
+    `task_id=${taskId ?? ""}`,
+    `template=${templatePath}`,
+  ].join("\n");
 }
 
 // abandon — clean teardown. Idempotent against a terminal task: a second
 // abandon (or an abandon of an already-closed task) rewrites nothing, so
-// ended_at stays pinned to the original close.
-async function applyAbandon(tx: Transaction, status: string): Promise<void> {
-  if (status !== "in_progress") return;
+// ended_at stays pinned to the original close — tagged `idempotent`.
+async function applyAbandon(tx: Transaction, status: string): Promise<RecoveryOutcome> {
+  if (status !== "in_progress") return "idempotent";
   await drainPending(tx);
   await tx.exec(
     "UPDATE pipeline_state SET status = 'abandoned', verdict = NULL, ended_at = ? WHERE id = 1",
     [tx.now],
   );
+  return "applied";
 }
 
 // force-close — terminate under operator override. Closing every open
 // phase as skipped is what keeps INV_007 (non-null verdict → all phases
-// terminal) satisfied; dropping pending rows keeps INV_012 clean.
-async function applyForceClose(tx: Transaction, status: string): Promise<void> {
-  if (status !== "in_progress") return;
+// terminal) satisfied; dropping pending rows keeps INV_012 clean. A
+// force-close of an already-terminal task rewrites nothing — `idempotent`.
+async function applyForceClose(tx: Transaction, status: string): Promise<RecoveryOutcome> {
+  if (status !== "in_progress") return "idempotent";
   await drainPending(tx);
   await tx.exec(
     "UPDATE phases SET status = 'skipped', skipped_reason = 'force-closed', updated_at = ? " +
@@ -154,6 +267,7 @@ async function applyForceClose(tx: Transaction, status: string): Promise<void> {
       "pipeline_violation = 'force-close', ended_at = ? WHERE id = 1",
     [tx.now],
   );
+  return "applied";
 }
 
 // retry — re-enter the FSM at the current step. Valid only when nothing
@@ -204,8 +318,12 @@ async function applyRetryFailed(
 }
 
 // cancel-pending — drain everything outstanding and step past the failing
-// stage so the FSM resumes at the next step on re-entry.
-async function applyCancelPending(tx: Transaction): Promise<void> {
+// stage so the FSM resumes at the next step on re-entry. When nothing is
+// outstanding (a racing delivery already drained the rows) the drain is a
+// no-op — the state mutation is unchanged (the step still advances and the
+// violation is recorded), only the forensic tag flips to `raced`.
+async function applyCancelPending(tx: Transaction): Promise<RecoveryOutcome> {
+  const raced = (await countPending(tx)) === 0 && !(await hasPendingUserAnswer(tx));
   await drainPending(tx);
   await tx.exec(
     "UPDATE pipeline_state SET pipeline_violation = 'pending-cancel' WHERE id = 1",
@@ -213,6 +331,7 @@ async function applyCancelPending(tx: Transaction): Promise<void> {
   await tx.exec(
     "UPDATE driver_state SET step_index = step_index + 1 WHERE id = 1",
   );
+  return raced ? "raced" : "applied";
 }
 
 // Drain pending agents and clear the pending user answer — shared by the

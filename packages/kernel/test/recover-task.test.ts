@@ -246,6 +246,44 @@ describe("recoverTask", () => {
     assert.equal(after.pipeline_violation, "pending-cancel");
   });
 
+  it("abandon of an in-progress task tags outcome=applied", async () => {
+    dir = await freshProject();
+    const dsid = await seedTask(dir, ["work"]);
+    const res = await withStateTransaction(dir, LATER, async (tx) => {
+      await addPending(tx, makeAgentRunId(), "work");
+      return recoverTask(tx, { driver_state_id: dsid, choice: "abandon", recovery_id: makeRecoveryId() });
+    });
+    assert.equal(res.outcome, "applied");
+  });
+
+  it("abandon of an already-terminal task tags outcome=idempotent", async () => {
+    dir = await freshProject();
+    const dsid = await seedTask(dir, ["work"]);
+    await withStateTransaction(dir, LATER, (tx) =>
+      recoverTask(tx, { driver_state_id: dsid, choice: "abandon", recovery_id: makeRecoveryId() }),
+    );
+    // A second abandon (fresh recovery_id) finds a terminal task → no state
+    // change → idempotent.
+    const res = await withStateTransaction(dir, "2026-05-29T14:00:00.000Z" as NowToken, (tx) =>
+      recoverTask(tx, { driver_state_id: dsid, choice: "abandon", recovery_id: makeRecoveryId() }),
+    );
+    assert.equal(res.outcome, "idempotent");
+  });
+
+  it("cancel-pending with nothing outstanding tags outcome=raced", async () => {
+    dir = await freshProject();
+    const dsid = await seedTask(dir, ["work"]);
+    // No pending agents and no pending user answer — a racing delivery
+    // already drained the work, so this cancel-pending is a serialized
+    // no-op (raced), though the violation + step advance still record.
+    const res = await withStateTransaction(dir, LATER, (tx) =>
+      recoverTask(tx, { driver_state_id: dsid, choice: "cancel-pending", recovery_id: makeRecoveryId() }),
+    );
+    assert.equal(res.outcome, "raced");
+    const after = await read(dir, loadState);
+    assert.equal(after.pipeline_violation, "pending-cancel");
+  });
+
   it("retry against a terminal (force-closed) task is RECOVERY_TERMINAL", async () => {
     dir = await freshProject();
     const dsid = await seedTask(dir, ["work"]);

@@ -7,6 +7,7 @@ export * from "./narrow.js";
 export * from "./invariants.js";
 export * from "./guards.js";
 export * from "./fsm.js";
+export * from "./prompt-renderer.js";
 export * from "./hook-runner.js";
 // The throwing `topoSortHooks` in ./hooks.js is the local-caller form
 // the HookRunner constructor depends on; the barrel surfaces the tagged-

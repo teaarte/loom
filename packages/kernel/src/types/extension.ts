@@ -75,3 +75,20 @@ export interface VariableBinding {
   schema?: Record<string, unknown>;
   default?: string;
 }
+
+// A template after the bundle-loader has read it off disk and stripped
+// an optional frontmatter block. Stored in `Registry.prompts` keyed by
+// agent name; the tick-time renderer reads `body` and substitutes
+// context variables into it.
+//
+// `system_prompt` / `context_budget` carry whatever the frontmatter
+// declared so the load-time read is the single filesystem touch. The
+// renderer never inlines `system_prompt` into the rendered body — the
+// spawn intent carries it as a separate, provider-cacheable prefix, so
+// inlining would double it.
+export interface RenderedTemplate {
+  agent: string;
+  body: string;
+  system_prompt?: string;
+  context_budget?: ContextBudget;
+}

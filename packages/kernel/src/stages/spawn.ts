@@ -23,6 +23,7 @@
 
 import { getKernelTx } from "../fsm.js";
 import { spawnGuard } from "../guards.js";
+import { buildPrompt } from "../prompt-renderer.js";
 import type { StageContext } from "../types/context.js";
 import type { SpawnStage, StageResult } from "../types/plugins.js";
 import type { ProviderShuttleIntent } from "../types/provider.js";
@@ -65,7 +66,7 @@ export async function interpretSpawn(
     agent_run_id,
     phase: stage.phase,
     model,
-    prompt: buildPromptStub(state, stage, agent.template_path),
+    prompt: buildPrompt(state, agent, ctx.registry),
     extras,
   };
   if (agent.system_prompt !== undefined) {
@@ -76,22 +77,4 @@ export async function interpretSpawn(
   }
 
   return { type: "shuttle", intent };
-}
-
-// Prompt rendering lives in the prompt-engine subsystem — kernel
-// only needs to emit a deterministic stub here so the stage
-// interpreter returns a complete `ProviderShuttleIntent`. Bundles
-// that build real prompts replace the stub via an event-position
-// StepStage subscribed to `before-spawn`.
-function buildPromptStub(
-  state: PipelineState,
-  stage: SpawnStage,
-  templatePath: string,
-): string {
-  return [
-    `agent=${stage.agent}`,
-    `phase=${stage.phase}`,
-    `task_id=${state.task_id ?? ""}`,
-    `template=${templatePath}`,
-  ].join("\n");
 }

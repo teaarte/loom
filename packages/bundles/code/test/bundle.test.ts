@@ -78,6 +78,9 @@ describe("@loom/bundle-code — loadBundle", () => {
     // 21 canonical agents (the source's 24 minus the three CC-harness
     // trigger agents).
     assert.equal(registry.agents.size, 21);
+    // Every agent's `.md` is read off disk into the prompt map at load.
+    assert.equal(registry.prompts?.size, 21);
+    assert.ok((registry.prompts?.get("classifier")?.body.length ?? 0) > 0);
     assert.equal(registry.flows.size, 3);
     assert.deepEqual(
       registry.flows.get("medium"),
@@ -196,6 +199,35 @@ describe("@loom/bundle-code — load-time refusals", () => {
         assert.ok(err instanceof KernelError);
         assert.equal((err as KernelError).code, "GATE_ROLE_UNKNOWN");
         assert.equal((err as KernelError).detail?.["role"], "bogus-role");
+        return true;
+      },
+    );
+  });
+
+  it("refuses an agent whose template .md is missing on disk (TEMPLATE_NOT_FOUND)", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, now);
+
+    const broken: Bundle = {
+      ...codeBundle,
+      agents: [
+        ...codeBundle.agents,
+        { name: "phantom", template_path: "agents/phantom.md", output_kind: "nonreview" },
+      ],
+    };
+
+    await assert.rejects(
+      loadBundle({
+        bundle: broken,
+        bundle_source_dir: PKG_ROOT,
+        project_dir: projectDir,
+        providers: [shuttleStub()],
+        now,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError);
+        assert.equal((err as KernelError).code, "TEMPLATE_NOT_FOUND");
+        assert.equal((err as KernelError).detail?.["agent"], "phantom");
         return true;
       },
     );

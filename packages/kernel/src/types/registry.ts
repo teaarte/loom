@@ -4,6 +4,7 @@
 // `requires` (Kahn's algorithm, tie-break = registration order).
 
 import type { Bundle } from "./bundle.js";
+import type { RenderedTemplate } from "./extension.js";
 import type { Invariant } from "./invariants.js";
 import type { Agent, Hook, MCPClientPlugin, Stage } from "./plugins.js";
 import type { Policy, PolicyName } from "./policy.js";
@@ -33,6 +34,14 @@ export interface Registry {
   // get a Policy instance — keeping the state row pure-data while
   // the call site stays a one-liner.
   policyFactories: Map<PolicyName, () => Policy>;
+  // Agent prompt templates, materialized off disk at load time and
+  // keyed by agent name. The bundle-loader populates this when a
+  // `bundle_source_dir` is in hand (always so in production); the
+  // tick-time `buildPrompt` reads from it with no further IO. A
+  // registry assembled without a source dir has an empty map, and the
+  // renderer falls back to a deterministic stub. Optional so the
+  // hand-built registries in tests need not declare it.
+  prompts?: Map<string, RenderedTemplate>;
 }
 
 export interface ProviderRegistry {

@@ -21,8 +21,10 @@
 // floor, manifest cross-check, source-import discipline).
 
 import { buildPolicyFactoryRegistry } from "../policies/index.js";
+import { materializeTemplates } from "../prompt-renderer.js";
 import { buildVocabularies } from "../vocabularies.js";
 import type { Bundle } from "../types/bundle.js";
+import type { RenderedTemplate } from "../types/extension.js";
 import type { NowToken } from "../types/now.js";
 import type {
   Agent,
@@ -85,6 +87,17 @@ export async function loadBundle(opts: LoadBundleOptions): Promise<Registry> {
     validateImportScope(bundle_source_dir);
   }
 
+  // 14 — materialize agent prompt templates off disk. The renderer
+  //      reads files only here; the tick-time builder stays pure. A
+  //      missing template is a load-time refusal (TEMPLATE_NOT_FOUND).
+  //      Skipped when bundle_source_dir is absent (mirrors the
+  //      import-scope sweep) — callers without it get an empty map and
+  //      the renderer falls back to a deterministic stub.
+  const prompts: Map<string, RenderedTemplate> =
+    bundle_source_dir !== undefined
+      ? materializeTemplates(bundle, bundle_source_dir)
+      : new Map<string, RenderedTemplate>();
+
   // Registry assembly — only reached when every cascade rule passed.
   const policyFactories = buildPolicyFactoryRegistry(bundle);
   const providerRegistry = buildProviderRegistry(providers, bundle);
@@ -112,6 +125,7 @@ export async function loadBundle(opts: LoadBundleOptions): Promise<Registry> {
     providers: providerRegistry,
     policyFactories,
     vocabularies,
+    prompts,
   };
   return registry;
 }

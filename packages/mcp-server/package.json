@@ -23,5 +23,8 @@
     "@loom/provider-claude-code-shuttle": "workspace:*",
     "@loom/transport-types": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@loom/provider-ollama": "workspace:*"
   }
 }

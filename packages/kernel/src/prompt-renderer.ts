@@ -11,10 +11,12 @@
 //     the filesystem.
 //   - Tick time (`buildPrompt`): a pure, synchronous function over
 //     (state, agent, registry). It substitutes the context-scoped
-//     variables into the materialized body and returns the prompt
-//     string. No filesystem, no clock — so the spawn interpreter keeps
-//     its synchronous shape and the tick stays inside the replay
-//     contract.
+//     variables into the materialized body, appends a deterministic
+//     `## Spawn context` block assembled from `state` alone (the task,
+//     its canonical ids, the project, and the decisions taken so far),
+//     and returns the prompt string. No filesystem, no clock — so the
+//     spawn interpreter keeps its synchronous shape and the tick stays
+//     inside the replay contract.
 //
 // `system_prompt` is NOT inlined into the rendered body: the spawn
 // intent carries it as a separate, provider-cacheable prefix, so
@@ -183,7 +185,67 @@ export function buildPrompt(
   if (template === undefined) {
     return buildPromptStub(state, agent);
   }
-  return renderBody(template.body, state);
+  const body = renderBody(template.body, state);
+  return appendSpawnContext(body, state);
+}
+
+// Append the kernel-built `## Spawn context` block to a rendered body —
+// unless the template authored its own. The guard matches a markdown
+// `## Spawn context` HEADING (line start), not a prose mention of the
+// string: several templates reference `` `## Spawn context` `` inside a
+// list item to tell the agent where to read the task, and that must NOT
+// suppress the block the agent is being told to read.
+function appendSpawnContext(body: string, state: PipelineState): string {
+  if (/^##[ \t]+Spawn context\b/m.test(body)) {
+    return body;
+  }
+  return `${body}\n\n${buildSpawnContext(state)}`;
+}
+
+// Assemble the `## Spawn context` block from `state` alone — pure,
+// synchronous, and byte-stable for a given state (no clock, no Map
+// iteration-order dependence: decision keys are sorted). The heading and
+// subheading names match what the agent templates are told to read
+// ("Canonical identifiers", "Task description"), so an agent instructed
+// to "copy the task_id from the spawn context's 'Canonical identifiers'
+// section" finds it exactly where promised.
+export function buildSpawnContext(state: PipelineState): string {
+  const lines: string[] = [
+    "## Spawn context",
+    "",
+    "### Canonical identifiers",
+    `- task_id: ${state.task_id ?? ""}`,
+    `- driver_state_id: ${state.driver_state_id}`,
+    "",
+    "### Task description",
+    state.task,
+  ];
+  if (state.task_short != null) {
+    lines.push("", "### Task (short)", state.task_short);
+  }
+  lines.push("", "### Project", state.project_dir);
+  lines.push("", "### Decisions so far", renderDecisions(state.decisions));
+  return lines.join("\n");
+}
+
+// Render the decisions map as sorted `- key: value` lines. Keys are
+// sorted by UTF-16 code unit (the default Array.sort order — NOT
+// `localeCompare`, which is locale-dependent and would break byte
+// stability). Non-string values are JSON-encoded so each decision stays
+// on one line; strings render verbatim. Empty map → an explicit marker.
+function renderDecisions(decisions: Record<string, unknown>): string {
+  const keys = Object.keys(decisions).sort();
+  if (keys.length === 0) {
+    return "(none yet)";
+  }
+  return keys.map((key) => `- ${key}: ${renderDecisionValue(decisions[key])}`).join("\n");
+}
+
+function renderDecisionValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 function renderBody(body: string, state: PipelineState): string {

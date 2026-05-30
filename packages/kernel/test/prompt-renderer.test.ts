@@ -106,15 +106,20 @@ function writeTemplate(bundleDir: string, name: string, body: string): void {
   writeFileSync(join(bundleDir, "agents", `${name}.md`), body);
 }
 
-// buildPrompt only reads task / project_dir / task_short / task_id. A
-// partial cast is sufficient to exercise the pure render path (mirrors
-// the `{} as PipelineState` pattern used elsewhere in the suite).
+// buildPrompt reads task / project_dir / task_short / task_id (for the
+// substitution + the appended spawn-context block) plus driver_state_id
+// and decisions (block-only). A partial cast is sufficient to exercise
+// the pure render path (mirrors the `{} as PipelineState` pattern used
+// elsewhere in the suite); decisions defaults to `{}` exactly as the DB
+// hydration does.
 function stateStub(
   o: {
     task?: string;
     project_dir?: string;
     task_short?: string | null;
     task_id?: string | null;
+    driver_state_id?: string;
+    decisions?: Record<string, unknown>;
   } = {},
 ): PipelineState {
   return {
@@ -124,6 +129,8 @@ function stateStub(
     // treat a null task_short as the empty string.
     task_short: "task_short" in o ? o.task_short : "health-endpoint",
     task_id: "task_id" in o ? o.task_id : "task-1",
+    driver_state_id: o.driver_state_id ?? "ds-1",
+    decisions: o.decisions ?? {},
   } as unknown as PipelineState;
 }
 
@@ -216,7 +223,9 @@ describe("buildPrompt — pure render", () => {
       agent("planner"),
       registryWith(prompts),
     );
-    assert.equal(out, "Plan ship X in /srv/app (ship-x).");
+    // The substituted body leads; the kernel-built spawn-context block is
+    // appended after it (asserted in its own describe block below).
+    assert.ok(out.startsWith("Plan ship X in /srv/app (ship-x)."));
   });
 
   it("is byte-identical on repeat for the same state (replay determinism)", () => {
@@ -242,8 +251,8 @@ describe("buildPrompt — pure render", () => {
       registryWith(new Map([["x", { agent: "x", body: "Do {{task}} now ({{task_short}})." }]])),
     );
     assert.notEqual(first, second);
-    assert.equal(first, "Do T.");
-    assert.equal(second, "Do T now (ts).");
+    assert.ok(first.startsWith("Do T."));
+    assert.ok(second.startsWith("Do T now (ts)."));
   });
 
   it("leaves unknown {{tokens}} untouched (later binding layers own them)", () => {
@@ -261,7 +270,7 @@ describe("buildPrompt — pure render", () => {
       agent("x"),
       registryWith(new Map([["x", { agent: "x", body: "[{{task_short}}]" }]])),
     );
-    assert.equal(out, "[]");
+    assert.ok(out.startsWith("[]"));
   });
 
   it("falls back to the deterministic stub when no materialized template exists", () => {
@@ -274,6 +283,118 @@ describe("buildPrompt — pure render", () => {
     assert.ok(out.includes("agent=planner"));
     assert.ok(out.includes("task_id=task-9"));
     assert.ok(out.includes("template=agents/planner.md"));
+  });
+});
+
+// ============================================================================
+// buildPrompt — appended `## Spawn context` block
+// ============================================================================
+
+// Count markdown `## Spawn context` HEADINGs (line-anchored) — not prose
+// mentions of the string. Mirrors the renderer's idempotency guard.
+function spawnContextHeadingCount(s: string): number {
+  return (s.match(/^##[ \t]+Spawn context\b/gm) ?? []).length;
+}
+
+describe("buildPrompt — spawn context block", () => {
+  function rendered(
+    state: PipelineState,
+    body = "# Agent\nDo the work.\n",
+  ): string {
+    return buildPrompt(
+      state,
+      agent("x"),
+      registryWith(new Map([["x", { agent: "x", body }]])),
+    );
+  }
+
+  it("carries the heading, the verbatim task, and task_id under Canonical identifiers", () => {
+    const out = rendered(
+      stateStub({
+        task: "Add a /healthz endpoint that returns 200",
+        task_id: "task-42",
+        driver_state_id: "ds-abc",
+      }),
+    );
+    assert.ok(out.includes("## Spawn context"), "block heading present");
+    assert.ok(out.includes("### Canonical identifiers"), "ids subsection present");
+    assert.ok(out.includes("### Task description"), "task subsection present");
+    // task_id lives under the Canonical identifiers subsection, ahead of
+    // the task description — the order the classifier is told to read.
+    const idsAt = out.indexOf("### Canonical identifiers");
+    const taskAt = out.indexOf("### Task description");
+    assert.ok(out.indexOf("- task_id: task-42") > idsAt);
+    assert.ok(out.indexOf("- task_id: task-42") < taskAt);
+    assert.ok(out.includes("- driver_state_id: ds-abc"));
+    // The task appears verbatim under its subsection.
+    assert.ok(out.includes("Add a /healthz endpoint that returns 200"));
+  });
+
+  it("omits the Task (short) subsection when task_short is null", () => {
+    const withShort = rendered(stateStub({ task_short: "health-endpoint" }));
+    const withoutShort = rendered(stateStub({ task_short: null }));
+    assert.ok(withShort.includes("### Task (short)\nhealth-endpoint"));
+    assert.ok(!withoutShort.includes("### Task (short)"));
+  });
+
+  it("renders decisions as sorted key: value lines (byte-stable re-render)", () => {
+    // Insertion order is deliberately NOT sorted — the block must sort.
+    const state = stateStub({
+      decisions: {
+        security_needed: true,
+        change_kind: "logic",
+        task_short: "health-endpoint",
+        refs_count: 3,
+      },
+    });
+    const a = rendered(state);
+    const b = rendered(state);
+    // Determinism: identical state → byte-identical prompt.
+    assert.equal(a, b);
+    assert.ok(a.includes("### Decisions so far"));
+    // Keys appear sorted by code unit: change_kind < refs_count <
+    // security_needed < task_short.
+    const order = ["change_kind", "refs_count", "security_needed", "task_short"]
+      .map((k) => a.indexOf(`- ${k}:`));
+    for (let i = 1; i < order.length; i++) {
+      assert.ok(order[i - 1]! >= 0 && order[i]! > order[i - 1]!, "decisions sorted");
+    }
+    // String values render verbatim; non-strings are JSON-encoded.
+    assert.ok(a.includes("- change_kind: logic"));
+    assert.ok(a.includes("- security_needed: true"));
+    assert.ok(a.includes("- refs_count: 3"));
+  });
+
+  it("marks an empty decisions map as '(none yet)'", () => {
+    const out = rendered(stateStub({ decisions: {} }));
+    assert.ok(out.includes("### Decisions so far\n(none yet)"));
+  });
+
+  it("appends exactly one block — a template that authored its own heading is left alone", () => {
+    const authored = "# Agent\n## Spawn context\nThe author wrote this themselves.\n";
+    const out = rendered(stateStub(), authored);
+    assert.equal(spawnContextHeadingCount(out), 1, "no double-append");
+    // The author's content is preserved; the kernel block was NOT added,
+    // so the kernel's Canonical-identifiers subsection is absent.
+    assert.ok(out.includes("The author wrote this themselves."));
+    assert.ok(!out.includes("### Canonical identifiers"));
+  });
+
+  it("still appends when the template only MENTIONS the string in prose", () => {
+    // Mirrors the real classifier template, which references
+    // `` `## Spawn context` `` inside a list item to point the agent at
+    // the block. A prose mention is not a heading — the block is appended.
+    const prose = "# Classifier\n- **Task description** — under `## Spawn context`.\n";
+    const out = rendered(stateStub({ task: "classify me" }), prose);
+    assert.equal(spawnContextHeadingCount(out), 1, "block appended despite the prose mention");
+    assert.ok(out.includes("### Canonical identifiers"));
+    assert.ok(out.includes("classify me"));
+  });
+
+  it("does NOT append the block to the no-template stub", () => {
+    const out = buildPrompt(stateStub(), agent("planner"), registryWith(new Map()));
+    assert.ok(out.startsWith("agent=planner"));
+    assert.ok(!out.includes("## Spawn context"));
   });
 });
 

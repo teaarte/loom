@@ -206,6 +206,21 @@ describe("e2e shuttle — wired registry", () => {
           !prompt.startsWith("agent=classifier"),
           "prompt must not be the no-template stub",
         );
+        // The wired path now carries the task: the renderer appends a
+        // `## Spawn context` block with the verbatim task under it, so the
+        // classifier classifies the ACTUAL task, not an all-defaults stub.
+        assert.ok(
+          prompt.includes("## Spawn context"),
+          "prompt should carry the appended spawn-context block",
+        );
+        assert.ok(
+          prompt.includes("### Canonical identifiers"),
+          "spawn context should expose the canonical ids the classifier copies",
+        );
+        assert.ok(
+          prompt.includes("fix a typo in the README"),
+          "spawn context should carry the verbatim task description",
+        );
       }
     } finally {
       h.dispose();

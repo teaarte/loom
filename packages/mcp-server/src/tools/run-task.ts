@@ -41,6 +41,7 @@ import {
 import type { TransportResponse } from "@loom/transport-types";
 
 import { parseTaskArgs } from "../lib/parse-task-args.js";
+import { persistDriverStepIndex } from "../lib/persist-progress.js";
 import { createTransportAdapter } from "../transport-adapter.js";
 import type { RunTaskInput, RunTaskResponse, ToolHandler } from "../types.js";
 
@@ -140,7 +141,10 @@ export function createRunTaskTool(
           stack: input.stack ?? null,
           client_idempotency_uuid: input.client_idempotency_uuid,
           phases: registry.bundle.phases,
-          flow_name: "standard",
+          // Drive the bundle's declared default flow. The kernel stores
+          // this on the driver row at create; runFSM resolves it against
+          // the registry's flow map every tick.
+          flow_name: registry.bundle.default_flow,
         });
         await writeAuditRow(tx, "pipeline_run_task", created.task_id, created.driver_state_id, {
           client_identifier_unverified: identifier,
@@ -153,11 +157,13 @@ export function createRunTaskTool(
 
     // 6. Load state, run the FSM to its first directive, shape it.
     const loaded = await readState(input.project_dir);
-    const { directive } = await runFSM(loaded, registry);
+    const { state: ticked, directive } = await runFSM(loaded, registry);
     const response = adapter.shape(directive, { driver_state_id: ids.driver_state_id });
 
-    // 7. Materialize the cached creation response on the ledger row.
+    // 7. Persist the tick's paused step index + materialize the cached
+    //    creation response on the ledger row, co-committed.
     await withStateTransaction(input.project_dir, captureNow(), async (tx) => {
+      await persistDriverStepIndex(tx, ticked.driver.step_index);
       await writeLedgerRow(tx, `task-create:${input.client_idempotency_uuid}`, {
         driver_state_id: ids.driver_state_id,
         task_id: ids.task_id,

@@ -16,6 +16,7 @@
 
 import { getKernelTx } from "../fsm.js";
 import { spawnGuard } from "../guards.js";
+import { buildPrompt } from "../prompt-renderer.js";
 import type { StageContext } from "../types/context.js";
 import type { FanoutStage, StageResult } from "../types/plugins.js";
 import type { ProviderShuttleIntent } from "../types/provider.js";
@@ -76,12 +77,10 @@ export async function interpretFanout(
       agent_run_id,
       phase: stage.phase,
       model,
-      prompt: [
-        `agent=${agentName}`,
-        `phase=${stage.phase}`,
-        `task_id=${state.task_id ?? ""}`,
-        `fanout=${stage.name}`,
-      ].join("\n"),
+      // Render the agent's materialized template, same as the single-
+      // spawn path — a fanout sibling is as much a real agent run as a
+      // lone spawn and needs its instructions, not an identifier stub.
+      prompt: buildPrompt(state, agent, ctx.registry),
       extras,
     };
     if (agent.system_prompt !== undefined) {

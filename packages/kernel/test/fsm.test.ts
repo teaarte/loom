@@ -824,19 +824,30 @@ describe("runFSM — finalize + auto-policy", () => {
     assert.notEqual(after.ended_at, null);
   });
 
-  it("FinalizeStage halts with INV_INCONSISTENT_FINALIZE when verdict is null", async () => {
+  it("FinalizeStage resolves an unset verdict to accepted and completes", async () => {
     const stages: Record<string, Stage> = {
       finalize: { kind: "finalize", name: "finalize" } as FinalizeStage,
     };
     const registry = buildRegistry({ stages, flow: ["finalize"] });
+    // No verdict seeded; the phase starts pending. Finalize sweeps the
+    // phase to skipped and writes the resolved verdict in the same tx, so
+    // the verdict/phase-terminality invariant holds on commit.
     const now = await seedBaseline(projectDir, { flow_name: "default" });
     const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
 
     const out = await runFSM(state, registry);
-    assert.equal(out.directive.kind, "error");
-    if (out.directive.kind === "error") {
-      assert.equal(out.directive.code, "INV_INCONSISTENT_FINALIZE");
+    assert.equal(out.directive.kind, "complete");
+    if (out.directive.kind === "complete") {
+      assert.equal(out.directive.verdict, "accepted");
     }
+    assert.equal(state.status, "completed");
+
+    // The resolved verdict persisted alongside completion.
+    const after = await withStateTransaction(projectDir, captureNow(), (tx) =>
+      loadState(tx),
+    );
+    assert.equal(after.status, "completed");
+    assert.equal(after.verdict, "accepted");
   });
 
   it("auto-approve policy advances past the gate without ask-user", async () => {

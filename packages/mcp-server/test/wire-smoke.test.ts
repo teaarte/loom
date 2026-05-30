@@ -359,7 +359,7 @@ describe("wire smoke — functional (in-memory linked transport)", () => {
 });
 
 describe("wire smoke — boot (child-process stdio binary)", () => {
-  it("the stdio binary boots, frames tools/list + a read-only call, and refuses an active-task call with a structured envelope", async () => {
+  it("the stdio binary boots, frames tools/list + a read-only call, and drives an active-task call through the wired registry to a real spawn", async () => {
     // dist/test/wire-smoke.test.js → ../src/bin/stdio.js
     const here = dirname(fileURLToPath(import.meta.url));
     const binPath = join(here, "..", "src", "bin", "stdio.js");
@@ -367,9 +367,9 @@ describe("wire smoke — boot (child-process stdio binary)", () => {
 
     // The binary resolves the allowlist at $HOME/.claude/projects.allow.
     // Point HOME at a temp dir that allowlists the project, so the
-    // active-task call clears the allowlist gate and reaches the
-    // (intentionally unwired) registry — proving the binary returns a
-    // structured REGISTRY_UNAVAILABLE envelope rather than crashing.
+    // active-task call clears the allowlist gate and reaches the wired
+    // registry — proving the binary assembles the installed bundle and
+    // returns a real first directive over its actual stdio pipes.
     const fakeHome = mkdtempSync(join(tmpdir(), "loom-wire-home-"));
     mkdirSync(join(fakeHome, ".claude"), { recursive: true });
     writeFileSync(
@@ -401,19 +401,26 @@ describe("wire smoke — boot (child-process stdio binary)", () => {
       const meta = asRecord(await call(client, "pipeline_meta", { project_dir: projectDir }));
       assert.equal(meta["protocol_version"], "3.0.0");
 
-      // An active-task call over the binary (no injected registry) returns
-      // the documented structured refusal — a real wire envelope, not a
-      // crash or a dropped connection.
+      // An active-task call over the binary now reaches the wired
+      // registry: the installed bundle is assembled and the FSM ticks to
+      // its first directive — a real spawn-agent envelope, framed over the
+      // actual stdio pipes, not a crash or a refusal.
       const run = asRecord(
         await call(client, "pipeline_run_task", {
           project_dir: projectDir,
-          task: "no registry here",
+          task: "fix a typo in the README",
           client_idempotency_uuid: "uuid-boot-1",
         }),
       );
       const runResponse = asRecord(run["response"]);
-      assert.equal(runResponse["status"], "error");
-      assert.equal(runResponse["code"], "REGISTRY_UNAVAILABLE");
+      assert.equal(runResponse["status"], "spawn-agent");
+      assert.equal(runResponse["agent"], "classifier");
+      const spawnRequest = asRecord(runResponse["spawn_request"]);
+      assert.ok(
+        typeof spawnRequest["prompt"] === "string" &&
+          spawnRequest["prompt"].includes("# Classifier agent"),
+        "the spawn prompt should carry the real classifier template body",
+      );
     } finally {
       await client.close().catch(() => {});
       try {

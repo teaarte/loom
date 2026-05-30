@@ -32,6 +32,7 @@ import {
 } from "@loom/kernel";
 import type { TransportResponse } from "@loom/transport-types";
 
+import { persistDriverStepIndex } from "../lib/persist-progress.js";
 import { createTransportAdapter } from "../transport-adapter.js";
 import type {
   ContinueTaskRequestInput,
@@ -125,13 +126,15 @@ export function createContinueTaskTool(
 
     // 5. Run the FSM against the post-delivery state and shape it.
     const loaded = await readState(input.project_dir);
-    const { directive } = await runFSM(loaded, registry);
+    const { state: ticked, directive } = await runFSM(loaded, registry);
     const response = adapter.shape(directive, { driver_state_id: driverStateId });
 
-    // 6. Materialize the cached response on every op key (the fanout
-    //    batch shares one envelope across all its agent_run_ids).
+    // 6. Persist the tick's paused step index + materialize the cached
+    //    response on every op key (the fanout batch shares one envelope
+    //    across all its agent_run_ids), co-committed.
     const taskId = loaded.task_id;
     await withStateTransaction(input.project_dir, captureNow(), async (tx) => {
+      await persistDriverStepIndex(tx, ticked.driver.step_index);
       for (const key of keys) {
         await writeLedgerRow(tx, key, {
           driver_state_id: driverStateId,

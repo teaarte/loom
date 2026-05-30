@@ -27,9 +27,15 @@ importers:
 
   packages/mcp-server:
     dependencies:
+      '@loom/bundle-code':
+        specifier: workspace:*
+        version: link:../bundles/code
       '@loom/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@loom/provider-claude-code-shuttle':
+        specifier: workspace:*
+        version: link:../providers/claude-code-shuttle
       '@loom/transport-types':
         specifier: workspace:*
         version: link:../transport-types

@@ -1,13 +1,20 @@
 // FinalizeStage interpreter — FSM terminator.
 //
-// Refuses to complete a task whose verdict is null (the inconsistent-
-// finalize invariant the spec calls `INV_inconsistent-finalize`).
+// A natural arrival at finalize with no verdict recorded means the flow
+// advanced cleanly to its end — the rejection / abandon exits set their
+// verdict explicitly through an `on_resume` `complete` or a recovery
+// action and never reach here. So an unset verdict resolves to
+// `accepted`, the same default the runFSM loop-exit applies; finalize
+// persists it alongside completion so the stored row and the wire
+// directive agree.
+//
 // Closes any non-terminal phase rows idempotently — phases left in
 // `pending` or `in_progress` at the finalize boundary get marked
 // `skipped` with a reason explaining the early termination, so
-// audit log readers can see what state the kernel walked over.
-// Then sets `pipeline_state.status = 'completed'` and
-// `ended_at = tx.now` before returning the `complete` directive.
+// audit log readers can see what state the kernel walked over. Writing
+// the resolved verdict and the phase sweep in this one transaction keeps
+// the `verdict != null → every phase terminal` invariant satisfied on
+// commit.
 
 import { getKernelTx } from "../fsm.js";
 import type { StageContext } from "../types/context.js";
@@ -19,16 +26,7 @@ export async function interpretFinalize(
   state: PipelineState,
   ctx: StageContext,
 ): Promise<StageResult> {
-  if (state.verdict === null) {
-    return {
-      type: "halt",
-      directive: {
-        code: "INV_INCONSISTENT_FINALIZE",
-        message: "FinalizeStage entered with verdict=null",
-        recovery_options: [],
-      },
-    };
-  }
+  const verdict = state.verdict ?? "accepted";
 
   const tx = getKernelTx(ctx);
 
@@ -43,22 +41,23 @@ export async function interpretFinalize(
   }
 
   await tx.exec(
-    "UPDATE pipeline_state SET status = 'completed', ended_at = ? WHERE id = 1",
-    [ctx.now],
+    "UPDATE pipeline_state SET status = 'completed', verdict = ?, ended_at = ? WHERE id = 1",
+    [verdict, ctx.now],
   );
 
   // Mutate the in-memory state so the outer loop sees the terminal
   // status immediately — the runFSM caller treats the `complete`
   // directive as the exit signal regardless.
   state.status = "completed";
+  state.verdict = verdict;
   state.ended_at = ctx.now;
 
   return {
     type: "complete",
     directive: {
       task_id: state.task_id,
-      verdict: state.verdict,
-      summary: `task complete (verdict=${state.verdict})`,
+      verdict,
+      summary: `task complete (verdict=${verdict})`,
     },
   };
 }

@@ -18,7 +18,9 @@
     "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
+    "@loom/bundle-code": "workspace:*",
     "@loom/kernel": "workspace:*",
+    "@loom/provider-claude-code-shuttle": "workspace:*",
     "@loom/transport-types": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
   }

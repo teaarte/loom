@@ -328,11 +328,14 @@ async function dispatch(
 }
 
 // Stdio entry. The module never connects automatically — the binary
-// entrypoint (a separate file once the CLI session lands) is the only
-// caller. Tests construct `createServer()` and exercise the `tools`
-// map directly, never reaching this function.
-export async function runStdioServer(): Promise<void> {
-  const handle = createServer();
+// entrypoint is the only caller, and it forwards the production
+// dependencies (registry resolver + allowlist path). Called with no
+// argument the read-only surface still works and the active-task tools
+// answer with a structured REGISTRY_UNAVAILABLE envelope. Tests
+// construct `createServer(deps)` and exercise the `tools` map directly,
+// never reaching this function.
+export async function runStdioServer(deps: ServerDeps = {}): Promise<void> {
+  const handle = createServer(deps);
   const transport = new StdioServerTransport();
   await handle.server.connect(transport);
 }

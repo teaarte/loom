@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pipeline-state.schema.json",
+  "title": "Pipeline State",
+  "description": "Single source of truth for an in-flight task. Orchestrator updates after every agent completion. /done parses mechanically — no LLM needed.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "bundle",
+    "task_id",
+    "task",
+    "complexity",
+    "started_at",
+    "phases",
+    "gates",
+    "agents_count"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.1" },
+    "bundle": {
+      "type": "string",
+      "description": "Which bundle this state belongs to. Selects the matching bundle-extension schema in templates/schemas/bundle-extensions/<bundle>.schema.json."
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^t-\\d{4}-\\d{2}-\\d{2}-[a-z0-9]{4,}(?:-[a-f0-9]{4})?$",
+      "description": "t-<YYYY-MM-DD>-<short-slug>"
+    },
+    "task": { "type": "string" },
+    "complexity": { "type": "string", "enum": ["simple", "medium", "complex"] },
+    "tests_mode": { "type": "string", "enum": ["tdd", "regression-only"] },
+    "stack": {
+      "type": "object",
+      "required": ["language"],
+      "properties": {
+        "language": { "type": "string" },
+        "package_manager": { "type": ["string", "null"] },
+        "test_command": { "type": ["string", "null"] },
+        "lint_command": { "type": ["string", "null"] },
+        "build_command": { "type": ["string", "null"] },
+        "project_type": { "type": ["string", "null"], "enum": [null, "frontend-app", "backend", "library", "monorepo"] }
+      },
+      "additionalProperties": true
+    },
+    "started_at": { "type": "string", "format": "date-time" },
+    "ended_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Item 11: set by pipeline_finish so the metrics row + post-hoc analysis can compute wall-clock duration."
+    },
+    "refs_loaded": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Senior-pattern reference paths resolved at STEP 1 (rule #24)."
+    },
+    "refs_dropped_due_to_cap": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "team_knowledge_refs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Project-scoped shared knowledge files injected into every agent prompt (item 7 of v2.2.5). Populated by pipeline_init from <project>/.claude/pipeline.config.json.team_knowledge_refs[]."
+    },
+    "phases": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "context": { "$ref": "#/$defs/phase_status" },
+        "planning": {
+          "allOf": [
+            { "$ref": "#/$defs/phase_status" },
+            {
+              "type": "object",
+              "properties": {
+                "gate1_revisions": { "type": "integer", "minimum": 0 },
+                "grounding_mismatches": { "type": "integer", "minimum": 0 }
+              }
+            }
+          ]
+        },
+        "test_first": {
+          "allOf": [
+            { "$ref": "#/$defs/phase_status" },
+            {
+              "type": "object",
+              "properties": {
+                "skipped_reason": {
+                  "type": ["string", "null"],
+                  "enum": [null, "regression-only", "no-test-framework-tdd-blocked", "user-override-no-tests"]
+                },
+                "test_spec_count_in_plan": { "type": ["integer", "null"], "minimum": 0 },
+                "tests_written_count": { "type": ["integer", "null"], "minimum": 0 },
+                "test_files_written": { "type": "array", "items": { "type": "string" } },
+                "test_files_hashes_post_red": {
+                  "type": "object",
+                  "description": "Map of test_file_path → sha256 hash, captured immediately after RED. Used by plan-conformance to detect implementer modification.",
+                  "additionalProperties": { "type": "string" }
+                }
+              }
+            }
+          ]
+        },
+        "implementation": {
+          "allOf": [
+            { "$ref": "#/$defs/phase_status" },
+            {
+              "type": "object",
+              "properties": {
+                "antipattern_candidates_count": { "type": "integer", "minimum": 0 },
+                "caller_context_sites_count": { "type": "integer", "minimum": 0 },
+                "gate2_revisions": { "type": "integer", "minimum": 0 },
+                "logic_vs_challenger_disagreement": { "type": "boolean", "default": false },
+                "plan_conformance": {
+                  "type": ["string", "null"],
+                  "enum": [null, "CONFORMS", "DRIFT", "PARTIAL"]
+                },
+                "drift_files_count": { "type": "integer", "minimum": 0 },
+                "test_files_modified_by_implementer": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Files in test_files_written whose post-GREEN hash differs from test_files_hashes_post_red. MUST be empty unless human approved at a gate. Non-empty → blocking."
+                },
+                "checkpoint_results": {
+                  "type": "array",
+                  "description": "Mechanical checkpoint runs by Implementer; failing-count must be monotonically non-increasing.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "step": { "type": "integer" },
+                      "failing_before": { "type": "integer" },
+                      "failing_after": { "type": "integer" },
+                      "test_files_hashed_match": { "type": "boolean" }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "validation": { "$ref": "#/$defs/phase_status" },
+        "final": { "$ref": "#/$defs/phase_status" }
+      }
+    },
+    "reviewer_verdicts": {
+      "type": "array",
+      "description": "Append-only per agent run. One entry per spawn.",
+      "items": {
+        "type": "object",
+        "required": ["agent", "iteration", "verdict"],
+        "properties": {
+          "agent": { "type": "string" },
+          "phase": {
+            "type": "string",
+            "description": "Pipeline phase this verdict came from. String-typed at the schema layer — runtime validates against the active flow's declared phases[]. Lets the same agent appear in multiple phases without verdicts collapsing into an indistinguishable bag."
+          },
+          "iteration": { "type": "integer", "minimum": 1 },
+          "verdict": { "type": "string" },
+          "blocking_issues": { "type": "integer", "minimum": 0 },
+          "non_blocking": { "type": "integer", "minimum": 0 },
+          "past_misses_applied": { "type": "integer", "minimum": 0 },
+          "past_miss_matches": { "type": "integer", "minimum": 0 },
+          "categories_seen": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "findings_path": {
+      "type": "string",
+      "description": "Pointer to .claude/findings.jsonl — append-only stream of all findings emitted across the run.",
+      "default": ".claude/findings.jsonl"
+    },
+    "files": {
+      "type": "object",
+      "properties": {
+        "created": { "type": "array", "items": { "type": "string" } },
+        "modified": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "properties": {
+        "gate0": { "type": "string", "enum": ["pending", "approved", "rejected", "skipped"], "default": "pending" },
+        "gate1": { "type": "string", "enum": ["pending", "approved", "rejected", "skipped"], "default": "pending" },
+        "gate2": { "type": "string", "enum": ["pending", "approved", "rejected", "skipped"], "default": "pending" },
+        "gate1_feedback": { "type": ["string", "null"] },
+        "gate2_feedback": { "type": ["string", "null"] }
+      }
+    },
+    "agents_count": { "type": "integer", "minimum": 0 },
+    "tests_written": {
+      "type": ["integer", "string", "null"],
+      "description": "Count of new test cases, 0, 'skip', or null if not yet known"
+    },
+    "blockers_found": { "type": "integer", "minimum": 0 },
+    "verdict": {
+      "type": ["string", "null"],
+      "enum": [null, "accepted", "rejected"]
+    },
+    "pipeline_violation": {
+      "type": ["string", "null"],
+      "description": "Set when pipeline integrity was breached (e.g. missing-state-file recovery)."
+    },
+    "owner_id": {
+      "type": ["string", "null"],
+      "description": "Opaque, platform-agnostic identifier of the entity that started this task. Populated at task start from the first non-empty owner/session env var the host transport supplies. Finalization paths compare against this to refuse cross-session completion. Transports (HTTP API, CLI, other providers) set their own owner_id via env vars; the substrate stays transport-agnostic."
+    }
+  },
+  "$defs": {
+    "phase_status": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "skipped"] },
+        "started_at": { "type": ["string", "null"], "format": "date-time" },
+        "completed_at": { "type": ["string", "null"], "format": "date-time" },
+        "agents": { "type": "array", "items": { "type": "string" } },
+        "open_spawns": {
+          "type": "array",
+          "description": "Spawns that have been begun (via pipeline_begin_agent) but not yet recorded. Must be empty before the phase can transition to 'completed' (INV_012).",
+          "items": {
+            "type": "object",
+            "required": ["id", "agent", "started_at"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^ar-[0-9a-f-]+$" },
+              "agent": { "type": "string" },
+              "model": { "type": ["string", "null"] },
+              "started_at": { "type": "string", "format": "date-time" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

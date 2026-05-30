@@ -1,1 +1,20 @@
-export {};
+// Package surface for the code bundle.
+//
+// The default export is the bundle the loader registers; the named
+// exports let a host wire the sandbox path-rules into the tool context
+// and let tests reach the invariant + resolver internals.
+
+export { default } from "./bundle.js";
+export { CODE_BUNDLE_SENSITIVE_PATH_RULES } from "./sandbox-rules.js";
+export { codePolicyResolver } from "./policy-resolver.js";
+export {
+  codeBundleInvariants,
+  invCode101,
+  invCode102,
+  invCode103,
+  invCode104,
+  invLintClean,
+  invTestsPass,
+  invTypecheckClean,
+  invSafetyFloorFinal,
+} from "./invariants.js";

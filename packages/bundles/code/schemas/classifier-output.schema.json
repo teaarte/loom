@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classifier-output.schema.json",
+  "title": "Classifier-agent output (v2.2.5 Item 9 + v2.2.6 C4 stack/change_kind extension)",
+  "description": "Structured JSON the classifier-agent emits in the context phase. Consumed by the classifier step which writes the fields into state.decisions + state.task_short. v2.2.6 extends the schema with `stack` and `change_kind` fields — the auto-spawn activation lands in v2.2.7 Item 1; this commit ships the schema substrate only.",
+  "type": "object",
+  "required": ["schema_version", "agent", "task_short", "refs_to_load", "security_needed", "antipattern_rules_applicable"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "enum": ["1.0", "1.1"] },
+    "agent": { "type": "string", "const": "classifier" },
+    "task_id": { "type": ["string", "null"] },
+    "task_short": {
+      "type": ["string", "null"],
+      "description": "Short kebab-case slug summarising the task — used for filenames, branch names, commit subjects.",
+      "maxLength": 60
+    },
+    "refs_to_load": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 5,
+      "description": "Senior-pattern references (filenames from agents/references/) to inject into agent prompts."
+    },
+    "security_needed": {
+      "type": "boolean",
+      "description": "Whether the security reviewer agent should run for this task."
+    },
+    "antipattern_rules_applicable": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Anti-pattern rule identifiers from CLAUDE.md that the implementer should respect."
+    },
+    "stack": {
+      "type": ["object", "null"],
+      "description": "LLM-picked stack identification. v2.2.6 substrate — populated by classifier in v2.2.7 Item 1. When present, classifier's picks override the deterministic resolveStack() defaults; when null, the table-driven detector is the source of truth.",
+      "required": ["language", "package_manager"],
+      "additionalProperties": true,
+      "properties": {
+        "language": { "type": "string", "description": "Picked from templates/stack-candidates.yaml.languages[*].name." },
+        "package_manager": { "type": ["string", "null"], "description": "Picked from stack-candidates.yaml.package_managers[*].name for the chosen language, or null when no PM applies." },
+        "test_command": { "type": ["string", "null"] },
+        "lint_command": { "type": ["string", "null"] },
+        "build_command": { "type": ["string", "null"] },
+        "project_type": { "type": ["string", "null"], "enum": [null, "frontend-app", "backend", "library", "monorepo"] }
+      }
+    },
+    "change_kind": {
+      "type": ["string", "null"],
+      "enum": [null, "type-only", "logic", "ui", "perf-sensitive", "security-sensitive", "config-only", "docs-only"],
+      "description": "Classification of the task's diff shape. v2.2.7 Item 2 consumes this for reviewer selectivity (skip style/performance on type-only diffs). v2.2.6 substrate — emit but no downstream consumer yet."
+    }
+  }
+}

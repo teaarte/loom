@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reviewer-output.schema.json",
+  "title": "Reviewer Output Header",
+  "description": "JSON block emitted at the top of every reviewer/validator agent output. Markdown narrative follows below the block; this header is the machine-parseable surface.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "agent",
+    "task_id",
+    "iteration",
+    "verdict",
+    "findings",
+    "summary_line"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "agent": {
+      "type": "string",
+      "enum": [
+        "logic-reviewer",
+        "challenger-reviewer",
+        "style-reviewer",
+        "security",
+        "performance"
+      ]
+    },
+    "task_id": { "type": "string" },
+    "iteration": { "type": "integer", "minimum": 1 },
+    "verdict": {
+      "type": "string",
+      "enum": ["APPROVE", "REQUEST_CHANGES", "WARN"],
+      "description": "REQUEST_CHANGES iff at least one finding has severity=blocking. WARN allowed only for security/performance."
+    },
+    "summary_line": {
+      "type": "string",
+      "maxLength": 150,
+      "description": "Human-readable one-liner. Shown in pipeline-state and dashboards. The 150-char cap accommodates legitimate single-line summaries on complex tasks that exceed 100."
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "finding.schema.json" },
+      "description": "All issues found, blocking AND non-blocking. Drives metrics, clustering, past-miss promotion."
+    },
+    "past_misses_applied": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Count of past-miss patterns the reviewer was given to check against this run."
+    },
+    "past_miss_matches": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "pattern_ids of past-misses that matched this diff (subset of past_misses_applied)."
+    },
+    "ref_rules_consulted": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Senior-pattern reference anchors that contributed to findings (e.g. 'redis.md#hot-keys')."
+    }
+  }
+}

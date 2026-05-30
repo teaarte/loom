@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "state-extension.schema.json",
+  "title": "Code bundle — bundle_state extension",
+  "description": "Shape of the bundle_state JSON column for the code bundle. Every field is optional and populated as the flow progresses; the column is null before the first write.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "diff_snapshot": {
+      "type": "object",
+      "description": "Snapshot of the substrate's file accounting at the pre-review step. Reviewers read this for a stable, replayable picture of the change surface.",
+      "properties": {
+        "files_modified": { "type": "array", "items": { "type": "string" } },
+        "files_created": { "type": "array", "items": { "type": "string" } },
+        "modified_count": { "type": "integer", "minimum": 0 },
+        "created_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "test_files_modified_by_implementer": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Test/spec files the implementation run modified. Non-empty means the final gate must be human-approved (sacred-tests invariant)."
+    },
+    "test_files_written": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Test files authored during a test-first flow."
+    },
+    "lint_result": {
+      "$ref": "#/$defs/checkResult",
+      "description": "Deterministic lint result. Read by the safety floor when the final role's policy is auto; the writer is a deterministic lint shell-out the deployment supplies."
+    },
+    "test_run": {
+      "$ref": "#/$defs/checkResult",
+      "description": "Deterministic test-run result. Read by the safety floor under an auto final policy."
+    },
+    "typecheck": {
+      "$ref": "#/$defs/checkResult",
+      "description": "Deterministic typecheck result. Read by the safety floor under an auto final policy."
+    }
+  },
+  "$defs": {
+    "checkResult": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "failed", "skipped"] },
+        "summary": { "type": "string" }
+      },
+      "required": ["status"],
+      "additionalProperties": true
+    }
+  }
+}

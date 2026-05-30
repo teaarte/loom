@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "category-vocab.json",
+  "title": "Finding Category Controlled Vocabulary",
+  "description": "Per-agent allowlist of finding categories. The 'category' field on each Finding MUST match a value in this file for that agent. New patterns enter via /agent-feedback (proposed_new_category) and are promoted here after human review.",
+  "schema_version": "1.0",
+  "vocab": {
+    "logic-reviewer": [
+      "race-condition",
+      "off-by-one",
+      "error-swallowed",
+      "missing-edge-case",
+      "leak-or-cleanup-missing",
+      "ordering-assumption",
+      "type-confusion",
+      "over-engineering",
+      "duplicate-logic",
+      "regression-risk",
+      "unhandled-async",
+      "unbounded-recursion-or-loop",
+      "spec-deviation",
+      "scope-creep",
+      "coverage-gap",
+      "other"
+    ],
+    "challenger-reviewer": [
+      "concurrency-failure",
+      "hostile-input",
+      "downstream-failure-not-handled",
+      "ordering-violation",
+      "atomicity-gap",
+      "state-leak-across-requests",
+      "empty-or-null-input-failure",
+      "retry-or-replay-issue",
+      "boundary-mismatch",
+      "other"
+    ],
+    "style-reviewer": [
+      "naming-violation",
+      "duplication",
+      "anti-pattern-from-claude-md",
+      "dead-code",
+      "wrong-directory-or-layer",
+      "import-rule-violation",
+      "missing-export-pattern",
+      "loose-typing",
+      "inconsistent-with-context-doc",
+      "other"
+    ],
+    "security": [
+      "injection-sql-or-nosql",
+      "xss",
+      "auth-bypass",
+      "authorization-missing",
+      "jwt-pitfall",
+      "secret-in-log-or-bundle",
+      "csrf",
+      "cors-misconfig",
+      "sensitive-data-overreturn",
+      "rate-limit-missing",
+      "ssrf",
+      "path-traversal",
+      "dependency-vuln",
+      "public-cache-on-private-data",
+      "other"
+    ],
+    "performance": [
+      "n-plus-one",
+      "missing-index",
+      "full-table-scan",
+      "offset-pagination-on-large-table",
+      "hot-key-redis",
+      "cache-stampede-risk",
+      "unbounded-loop-or-collection",
+      "sync-call-in-async-path",
+      "missing-timeout",
+      "missing-pagination",
+      "memory-leak",
+      "react-rerender-storm",
+      "client-bundle-bloat",
+      "other"
+    ],
+    "acceptance": [
+      "lint-fail",
+      "typecheck-fail",
+      "test-fail",
+      "build-fail",
+      "missing-test-coverage",
+      "file-too-large",
+      "debug-statement-left",
+      "loose-typing-introduced",
+      "todo-or-hack-comment",
+      "ac-not-met",
+      "other"
+    ],
+    "plan-conformance": [
+      "drift-file-touched-outside-plan",
+      "drift-in-file-overreach",
+      "drift-not-in-scope-violation",
+      "partial-step-not-done",
+      "ac-not-satisfied-by-diff",
+      "auxiliary-touch",
+      "missing-test-coverage",
+      "ac-not-met",
+      "test-file-modified-by-implementer",
+      "other"
+    ],
+    "plan-grounding-check": [
+      "citation-file-not-found",
+      "citation-range-out-of-bounds",
+      "citation-claim-mismatch",
+      "unverified-marker",
+      "context-doc-cross-mismatch",
+      "missing-aaa-block",
+      "ac-not-met",
+      "other"
+    ],
+    "context-doc-verifier": [
+      "claim-not-found",
+      "claim-mismatch",
+      "naming-convention-mismatch",
+      "other"
+    ],
+    "ui-consistency": [
+      "spacing-violation",
+      "color-token-violation",
+      "typography-token-violation",
+      "component-not-from-system",
+      "responsive-breakpoint-issue",
+      "a11y-violation",
+      "other"
+    ],
+    "api-contract": [
+      "type-mismatch",
+      "missing-field",
+      "extra-field",
+      "breaking-change",
+      "version-skew",
+      "other"
+    ],
+    "playwright": [
+      "selector-flaky",
+      "missing-step-from-plan",
+      "timing-or-race",
+      "test-data-leak",
+      "other"
+    ],
+    "test": [
+      "skeleton-compile-error",
+      "test-unexpectedly-passes",
+      "missing-aaa-block",
+      "mock-misconfigured",
+      "framework-detection-failed",
+      "non-aaa-spec",
+      "test-spec-count-mismatch",
+      "other"
+    ],
+    "implementer": [
+      "test-modification-needed",
+      "plan-step-ambiguous",
+      "plan-references-nonexistent-code",
+      "checkpoint-regression",
+      "other"
+    ]
+  },
+  "promotion_rules": {
+    "to_promote_other_into_vocab": "When a finding has category='other' with proposed_new_category set and the same proposed_new_category appears in /agent-feedback for the same agent ≥3 times confirmed by human, add it to vocab[<agent>].",
+    "to_retire_unused": "Categories with zero matches across the last 100 tasks for an agent are candidates for removal — surfaced by /learn but not auto-removed."
+  }
+}

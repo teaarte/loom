@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "validator-output.schema.json",
+  "title": "Validator Output Header",
+  "description": "JSON block for validator agents (Acceptance, Plan Conformance, Plan Grounding Check, Context-Doc Verifier). Verdict vocabulary differs from reviewers; agent-specific extensions live in 'details'.",
+  "type": "object",
+  "required": ["schema_version", "agent", "task_id", "verdict", "summary_line"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "agent": {
+      "type": "string",
+      "enum": [
+        "acceptance",
+        "plan-conformance",
+        "plan-grounding-check",
+        "context-doc-verifier",
+        "ui-consistency",
+        "api-contract",
+        "playwright",
+        "test"
+      ]
+    },
+    "task_id": { "type": "string" },
+    "iteration": { "type": "integer", "minimum": 1 },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "PASS", "FAIL", "PASS_WITH_WARNINGS",
+        "CONFORMS", "DRIFT", "PARTIAL",
+        "GROUNDED", "NEEDS_REVISION", "NO_CITATIONS",
+        "VERIFIED", "NEEDS_RERUN", "WARN",
+        "APPROVE", "REQUEST_CHANGES",
+        "RED", "ERROR"
+      ]
+    },
+    "summary_line": { "type": "string", "maxLength": 150 },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "finding.schema.json" }
+    },
+    "details": {
+      "type": "object",
+      "description": "Agent-specific structured details. Examples: plan-conformance → drift_files/unfinished_steps/ac_coverage; grounding-check → mismatches; verifier → claim_check_count.",
+      "additionalProperties": true
+    }
+  }
+}

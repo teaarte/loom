@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-feedback.schema.json",
+  "title": "Agent Feedback Entry",
+  "description": "One row in metrics/agent-feedback.jsonl. Logged when an agent missed an issue that was caught later. Drives past-misses injection and category vocab evolution.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "feedback_id",
+    "date",
+    "agent",
+    "category",
+    "pattern_to_look_for",
+    "severity",
+    "found_by",
+    "human_confirmed"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "feedback_id": {
+      "type": "string",
+      "pattern": "^fb-\\d{4}-\\d{2}-\\d{2}-[a-z0-9]{4,}$",
+      "description": "fb-<YYYY-MM-DD>-<short>"
+    },
+    "date": { "type": "string", "format": "date" },
+    "task_id": {
+      "type": ["string", "null"],
+      "description": "Optional: link back to the pipeline.jsonl row that ran this agent. Triggers reviewer_misses_post_merge++ on that row when set."
+    },
+    "agent": {
+      "type": "string",
+      "enum": [
+        "logic-reviewer",
+        "challenger-reviewer",
+        "style-reviewer",
+        "security",
+        "performance",
+        "acceptance",
+        "plan-conformance",
+        "plan-grounding-check",
+        "context-doc-verifier",
+        "ui-consistency",
+        "api-contract",
+        "playwright",
+        "test",
+        "implementer"
+      ]
+    },
+    "category": {
+      "type": "string",
+      "description": "MUST be a value from category-vocab.json under vocab[<agent>]. If a new pattern, set 'other' and populate proposed_new_category."
+    },
+    "proposed_new_category": {
+      "type": ["string", "null"],
+      "maxLength": 60,
+      "description": "When category='other'. Reviewed by /learn for vocab promotion (≥3 confirmed instances → permanent)."
+    },
+    "pattern_to_look_for": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Short, grep-friendly pattern. The string injected into reviewer prompts on future runs as past-miss data."
+    },
+    "missed_issue_summary": { "type": "string", "maxLength": 300 },
+    "severity": { "type": "string", "enum": ["high", "medium", "low"] },
+    "found_by": {
+      "type": "string",
+      "enum": ["prod-incident", "human-review", "another-agent", "test", "other"]
+    },
+    "example_file_line": { "type": ["string", "null"] },
+    "human_confirmed": {
+      "type": "boolean",
+      "description": "True iff a human reviewed and accepted that this is a real miss. Only confirmed entries count toward vocab promotion and pattern auto-promotion."
+    },
+    "action_taken": {
+      "type": ["string", "null"],
+      "enum": [null, "vocab-added", "agent-prompt-updated", "logged-only"]
+    }
+  }
+}

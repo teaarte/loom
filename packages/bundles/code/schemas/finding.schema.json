@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "finding.schema.json",
+  "title": "Finding",
+  "description": "A single issue surfaced by a reviewer or validator. Designed for clustering, metrics, and self-learning.",
+  "type": "object",
+  "required": ["schema_version", "id", "agent", "severity", "category", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Schema version. Bump on breaking field changes; orchestrator switches by version."
+    },
+    "id": {
+      "type": "string",
+      "description": "Stable id: f-<YYYY-MM-DD>-<random6>",
+      "pattern": "^f-\\d{4}-\\d{2}-\\d{2}-[a-z0-9]{6}$"
+    },
+    "agent": {
+      "type": "string",
+      "enum": [
+        "logic-reviewer",
+        "challenger-reviewer",
+        "style-reviewer",
+        "security",
+        "performance",
+        "acceptance",
+        "plan-conformance",
+        "plan-grounding-check",
+        "context-doc-verifier",
+        "ui-consistency",
+        "api-contract",
+        "playwright",
+        "test",
+        "implementer"
+      ]
+    },
+    "iteration": { "type": "integer", "minimum": 1 },
+    "task_id": {
+      "type": "string",
+      "description": "Links to pipeline-state.json task_id"
+    },
+    "file": {
+      "type": ["string", "null"],
+      "description": "Path relative to repo root, or null when finding is not file-bound (e.g. plan-level issue)"
+    },
+    "line_start": { "type": ["integer", "null"], "minimum": 1 },
+    "line_end": { "type": ["integer", "null"], "minimum": 1 },
+    "severity": {
+      "type": "string",
+      "enum": ["blocking", "warn", "info"]
+    },
+    "category": {
+      "type": "string",
+      "description": "Controlled vocab — must match an entry in templates/schemas/category-vocab.json for the finding's agent. If a new pattern is being recorded, use 'other' and populate proposed_new_category."
+    },
+    "proposed_new_category": {
+      "type": ["string", "null"],
+      "description": "When category='other', describe the proposed new vocab entry. Reviewed via /agent-feedback before being added to vocab.",
+      "maxLength": 60
+    },
+    "pattern_id": {
+      "type": ["string", "null"],
+      "description": "When this finding matches a known past-miss pattern: <agent>:<category>:<short-slug>. null if novel."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One-line description of the issue. <=200 chars.",
+      "maxLength": 200
+    },
+    "evidence_excerpt": {
+      "type": ["string", "null"],
+      "description": "Short code excerpt anchoring the finding. Trim to <=400 chars.",
+      "maxLength": 400
+    },
+    "suggested_fix": {
+      "type": ["string", "null"],
+      "description": "Concrete proposed fix or pointer to an approach. <=300 chars.",
+      "maxLength": 300
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "fixed", "accepted_by_human", "dismissed"],
+      "default": "open"
+    },
+    "ref_rule_id": {
+      "type": ["string", "null"],
+      "description": "When the finding cites a senior-pattern reference rule (e.g. 'redis.md#hot-keys'), include the anchor for traceability."
+    }
+  }
+}

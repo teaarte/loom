@@ -11,7 +11,10 @@
 import { writeFile } from "node:fs/promises";
 import { sep } from "node:path";
 
-import { resolveSafePath } from "../sandbox/resolve-safe-path.js";
+import {
+  KERNEL_SENSITIVE_PATH_RULES,
+  resolveSafePath,
+} from "../sandbox/resolve-safe-path.js";
 import type { ToolContext, ToolDefinition, ToolResult } from "../types/tool.js";
 
 // The kernel's state DB plus the SQLite sidecar files that share its
@@ -51,7 +54,11 @@ export const fileWriteTool: ToolDefinition = {
     const path = typeof input.path === "string" ? input.path : "";
     const content = typeof input.content === "string" ? input.content : "";
 
-    const resolved = await resolveSafePath(path, ctx.project_dir);
+    const resolved = await resolveSafePath(
+      path,
+      ctx.project_dir,
+      ctx.sensitive_path_rules ?? KERNEL_SENSITIVE_PATH_RULES,
+    );
     if (!resolved.ok) {
       ctx.audit_emit({
         type: "tool-call",

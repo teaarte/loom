@@ -9,7 +9,10 @@
 
 import { readFile } from "node:fs/promises";
 
-import { resolveSafePath } from "../sandbox/resolve-safe-path.js";
+import {
+  KERNEL_SENSITIVE_PATH_RULES,
+  resolveSafePath,
+} from "../sandbox/resolve-safe-path.js";
 import type { ToolContext, ToolDefinition, ToolResult } from "../types/tool.js";
 
 export const fileReadTool: ToolDefinition = {
@@ -30,7 +33,11 @@ export const fileReadTool: ToolDefinition = {
     ctx: ToolContext,
   ): Promise<ToolResult> {
     const path = typeof input.path === "string" ? input.path : "";
-    const resolved = await resolveSafePath(path, ctx.project_dir);
+    const resolved = await resolveSafePath(
+      path,
+      ctx.project_dir,
+      ctx.sensitive_path_rules ?? KERNEL_SENSITIVE_PATH_RULES,
+    );
     if (!resolved.ok) {
       ctx.audit_emit({
         type: "tool-call",

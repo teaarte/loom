@@ -11,7 +11,10 @@
 import { readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 
-import { resolveSafePath } from "../sandbox/resolve-safe-path.js";
+import {
+  KERNEL_SENSITIVE_PATH_RULES,
+  resolveSafePath,
+} from "../sandbox/resolve-safe-path.js";
 import { walkProjectFiles } from "./walk-project-files.js";
 import type { ToolContext, ToolDefinition, ToolResult } from "../types/tool.js";
 
@@ -55,11 +58,12 @@ export const grepTool: ToolDefinition = {
     }
 
     const files = await walkProjectFiles(ctx.project_dir, "absolute");
+    const rules = ctx.sensitive_path_rules ?? KERNEL_SENSITIVE_PATH_RULES;
 
     const hits: { path: string; line: number; text: string }[] = [];
     for (const full of files) {
       const rel = relative(ctx.project_dir, full);
-      const resolved = await resolveSafePath(rel, ctx.project_dir);
+      const resolved = await resolveSafePath(rel, ctx.project_dir, rules);
       if (!resolved.ok) continue;
       let text: string;
       try {

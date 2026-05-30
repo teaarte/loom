@@ -9,7 +9,10 @@
 
 import { sep } from "node:path";
 
-import { resolveSafePath } from "../sandbox/resolve-safe-path.js";
+import {
+  KERNEL_SENSITIVE_PATH_RULES,
+  resolveSafePath,
+} from "../sandbox/resolve-safe-path.js";
 import { walkProjectFiles } from "./walk-project-files.js";
 import type { ToolContext, ToolDefinition, ToolResult } from "../types/tool.js";
 
@@ -65,6 +68,7 @@ export const fileGlobTool: ToolDefinition = {
   ): Promise<ToolResult> {
     const pattern = typeof input.pattern === "string" ? input.pattern : "";
     const re = globToRegExp(pattern);
+    const rules = ctx.sensitive_path_rules ?? KERNEL_SENSITIVE_PATH_RULES;
 
     const found = await walkProjectFiles(ctx.project_dir, "relative");
 
@@ -74,7 +78,7 @@ export const fileGlobTool: ToolDefinition = {
       if (!re.test(posix)) continue;
       // Re-validate: a matched path must still clear the path discipline so
       // sensitive files never surface in a listing.
-      const resolved = await resolveSafePath(rel, ctx.project_dir);
+      const resolved = await resolveSafePath(rel, ctx.project_dir, rules);
       if (!resolved.ok) continue;
       matches.push(posix);
     }

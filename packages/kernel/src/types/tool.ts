@@ -3,6 +3,7 @@
 // claude-code-shuttle uses CC's own tool inventory and does not pass
 // ToolDefinition through.
 
+import type { SensitivePathRules } from "../sandbox/resolve-safe-path.js";
 import type { Sandbox } from "./plugins.js";
 
 export interface ToolDefinition {
@@ -36,6 +37,15 @@ export interface ToolContext {
   project_dir: string;
   sandbox: Sandbox;
   audit_emit(payload: Record<string, unknown>): void;
+  // Path-discipline ruleset the file tools consult. The substrate's own
+  // floor is domain-neutral; the active bundle contributes ecosystem
+  // patterns (a code bundle adds `.npmrc`, `~/.kube`, …). The merged set
+  // is bound here ONCE when the per-task tool context is assembled, so
+  // every tool call inherits the same blocklist without the catalog
+  // having to know which bundle is active. Omitted → the tool falls back
+  // to the bare kernel floor (fail-safe: protection exists with zero
+  // bundle rules loaded).
+  sensitive_path_rules?: SensitivePathRules;
 }
 
 export type ToolResult =

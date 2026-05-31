@@ -1,148 +1,211 @@
-# loom
+<div align="center">
 
-> A small, generic FSM kernel for multi-agent LLM workflows. Atomic state. Replay-deterministic. Policy-as-function autonomy. SQLite-backed. No framework, no inversion of control.
+# 🧵 loom
 
-**Status:** `v0.1.0`, published to npm under `@loomfsm/*`. The `code` bundle runs end to end through an MCP host — classify → plan → implement → review → finalize, with human gates and replay-deterministic state. Early and evolving; one bundle today. See [WHITEPAPER.md](WHITEPAPER.md) for the design.
+**Durable, auditable orchestration for LLM agents.**
+
+Multi-step agent work — code review, implementation, any review-gated task — driven as a
+replay-deterministic state machine, with human approval gates and safety guarantees
+enforced at commit time, not hoped for from the model.
+
+[![npm](https://img.shields.io/npm/v/@loomfsm/pipeline.svg?logo=npm&label=%40loomfsm%2Fpipeline&color=cb3837)](https://www.npmjs.com/package/@loomfsm/pipeline)
+[![license](https://img.shields.io/badge/license-Apache--2.0-3da639.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%E2%89%A5%2022-339933.svg?logo=node.js&logoColor=white)](.nvmrc)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg?logo=typescript&logoColor=white)](#)
+
+[Quickstart](#quickstart) · [Why loom](#why-loom) · [What you can build](#what-you-can-build) · [How it works](#how-it-works) · [Whitepaper](WHITEPAPER.md)
+
+</div>
 
 ---
 
-## What it is
+## The one-minute version
 
-A kernel that holds the authoritative state of a multi-agent workflow in atomic SQLite transactions, drives it via a five-variant `Stage` discriminated union, and decides autonomy via policy functions — not mode flags. Domain knowledge (agents, phases, gate semantics, finding categories) lives in **bundles**, not in the kernel. The v1 MVP ships one bundle: `code` — multi-agent code-review and implementation pipeline.
+You hand loom a task. It drives a sequence of LLM agents through phases —
+**classify → plan → implement → review → finalize** — committing every step
+atomically to a local SQLite database. Humans approve at the gates that matter. The
+whole run is recorded and replayable, and a set of invariants makes certain failures
+*structurally impossible*: an agent can't sign off while a blocking issue is open, or
+rewrite the tests it's being judged by and self-approve.
 
-The kernel exposes three plug axes:
+Think **"Temporal for LLM agents"** — but with human-in-the-loop, structured review,
+and provable safety as first-class primitives, not bolted on.
 
-- **Bundles** — domain. The `code` bundle ships first. Other domains (research, VFX, ops) are additive.
-- **Providers** — LLM backend. `claude-code-shuttle`, `anthropic-sdk`, `openrouter`. Capability-driven, not name-driven.
-- **Transports** — wire shape. `mcp-server`, `cli`, daemon (planned).
+It runs inside your existing agent host (e.g. Claude Code) over MCP. No new app to
+learn: you type `/task …`, approve gates as they come, and `/done` shows the result.
 
-The name reflects the design: state is the **warp**, agents are the **weft**, providers are the **shuttle**. One FSM tick = one pick of the loom, committed atomically.
+> The name reflects the design: state is the **warp**, agents are the **weft**,
+> providers are the **shuttle**. One state-machine tick = one pick of the loom,
+> committed atomically.
 
-## What it isn't
+## Why loom
 
-- Not a prompt-template framework. Templates live in bundles, typed and validated.
-- Not an agent IDE. It runs underneath your IDE / shell / MCP host.
-- Not a distributed runtime. Single in-flight task per project, by design.
-- Not "AGI plumbing." A finite-state machine that survives crashes and tells the operator what happened.
+**🔁 Replay-deterministic and fully auditable.** State lives in atomic SQLite
+transactions with a single timestamp token threaded through every step, so a run is
+reproducible bit-for-bit. Every spawn, finding, verdict, and gate is recorded — open
+the database and see exactly what happened and why. You can even replay a recorded run
+against a *changed* invariant to ask "what if". The audit trail is the product, not an
+afterthought.
 
-## Quick facts
+**🛡️ Safety enforced at commit time, not promised by a prompt.** Invariants run inside
+the transaction and roll it back on violation. The `code` bundle ships ones like
+*"acceptance cannot pass while a blocking finding is open"* and *"if an agent touched
+the test files, the final gate must be human-approved"* — so an autonomous agent can't
+quietly rewrite the tests it's judged by and approve itself. Structural guarantees, not
+behavioral hopes.
+
+**🎚️ Human-in-the-loop, on a dial.** Gates are a primitive, and a policy decides each
+one: `human` (approve every step), `on-blockers` (ask only when there's a real blocker
+— the default), or `auto` (full autonomy, backed by a deterministic safety floor that
+only wakes up in auto mode). One bundle scales from "approve everything" to "let it
+run" — a built-in trust ramp you tighten or loosen as you go.
+
+**🔌 Pluggable by design.** Three orthogonal axes: **bundles** (the domain — agents,
+phases, gates, invariants), **providers** (the LLM backend), **transports** (the wire).
+Any combination is valid at the kernel boundary. A new domain is a new bundle; the
+kernel never changes.
+
+**🚀 Zero-config to start, no lock-in.** The default provider runs through your agent
+host — no API key, no network setup. State is plain SQLite you own. The kernel contains
+no vendor, model, or transport names (enforced by CI). Apache 2.0.
+
+**💥 Crash-safe.** Same `(state, timestamp, ledger)` → same trajectory. Recovery is
+"restart and let the idempotency ledger dedup" — no half-applied steps, no reconciliation
+loop.
+
+> **What it guarantees — honestly.** loom guarantees the *process*: the declared review
+> ran, nothing was bypassed, irreversible steps got a human. It does **not** guarantee
+> the model's *output* is correct — that's the agents' job. What you get is the ability
+> to *prove* which process ran and to *see* every decision behind a result.
+
+## Quickstart
+
+```bash
+npm i -g @loomfsm/pipeline
+```
+
+Register it with your agent host and authorize a project:
+
+```bash
+loom setup            # writes the MCP server config + installs the /task and /done commands
+loom allowlist add    # authorize the current project (run once per project)
+```
+
+Then, from your MCP host (e.g. Claude Code), inside that project:
+
+```
+/task add rate limiting to the login endpoint
+```
+
+loom classifies the task, plans it, implements it, runs a reviewer panel, validates,
+and surfaces each approval gate for your decision. `/done` shows the summary. State
+lives at `<project>/.claude/state.db` — a plain SQLite file.
+
+```
+loom setup [--user|--project] [--dry-run] [--force]   register the server + install /task,/done
+loom allowlist add [path] [--dry-run]                 authorize a project directory
+loom allowlist list                                   show authorized directories
+loom init [--dry-run]                                 ensure .claude/ + authorize this project
+loom --help | --version
+```
+
+Setup is idempotent — re-running changes nothing and never overwrites a command you've
+edited. The allowlist is default-deny and operator-authored: the server never enrolls a
+project on its own.
+
+## What you can build
+
+loom is for **high-stakes, multi-step, review-gated work where being wrong is
+expensive** — not throwaway one-shot prompts. The shipping `code` bundle does
+multi-agent code review and implementation; the same substrate fits any domain where
+process, review, and audit matter:
+
+- **Code review & implementation** *(ships today)* — plan-grounding checks, an
+  adversarial reviewer panel, a final human gate.
+- **Regulated / compliance work** (finance, KYC, records) — the replayable audit trail
+  and enforced gates are the deliverable.
+- **Legal / clause review** — draft → per-clause fanout → compliance invariant → human gate.
+- **Incident runbooks** — deterministic stages with human gates on irreversible actions.
+- **Content & publishing** — draft → fact-check → style → legal → publish gate.
+- **Data migrations** — discover → transform in isolation → verify gate.
+
+A new domain is a new bundle (agents + flows + invariants, authored as data). The kernel
+doesn't change.
+
+## How it works
+
+- **Stage** — one of five variants (`SpawnStage`, `FanoutStage`, `GateStage`,
+  `StepStage`, `FinalizeStage`). A bundle's `flows` map names sequences of stages.
+- **Gate** — a checkpoint whose outcome a **Policy** decides. Roles: `classify`, `plan`,
+  `final` (kernel-recognized; bundles add more).
+- **Policy** — a function `(state, role, ctx) → Decision`. The kernel never switches on
+  policy names; the function *is* the contract. Stock factories: `human`, `on-blockers`,
+  `auto`.
+- **Invariant** — a pure function over state, called in-transaction; a violation rolls
+  the transaction back. Kernel-generic ones plus bundle-declared safety rules.
+- **Provider** — the LLM backend, chosen by *capability*, not name. Per-agent / per-phase
+  routing.
+
+Full design rationale in [WHITEPAPER.md](WHITEPAPER.md).
+
+## At a glance
 
 | | |
 |---|---|
-| Kernel size (target) | ~12-15k LOC |
 | Language | TypeScript (Node 22+, pnpm workspaces) |
-| State store | SQLite WAL, `BEGIN IMMEDIATE` |
-| Determinism | Replay-deterministic via persisted `NowToken` |
-| Atomicity | Single `StateBackend.withTransaction` per kernel call |
+| State | SQLite (WAL, `BEGIN IMMEDIATE`), atomic per kernel call |
+| Determinism | Replay-deterministic via a persisted timestamp token |
 | Idempotency | Co-committed ledger keyed per boundary-crossing op |
-| Invariants | 13 kernel-generic + bundle-declared, in-tx, rollback on violation |
-| Autonomy model | `Policy = (state, role, ctx) → Decision` — kernel does not switch on policy names |
-| Default policy preset | `gates-on-blockers` (asks human only if blocking findings exist) |
-| Threat model (v1) | Curated trust: no third-party bundles; runtime isolation is planned. |
+| Autonomy | `Policy = (state, role, ctx) → Decision` — three stock factories |
+| Default policy | `on-blockers` — asks a human only when a blocking finding exists |
+| Providers | `claude-code-shuttle` (zero-config), `anthropic-sdk`, `openrouter` |
+| Transports | `mcp-server` (stdio), `cli`; daemon planned |
 | License | Apache 2.0 |
 
 ## Repository layout
 
 ```
 packages/
-  kernel/                       FSM, invariants, ledger, gate-policy, types
-  mcp-server/                   MCP transport (stdio + remote)
-  cli/                          `loom` binary — power-user transport
+  kernel/                  FSM, invariants, ledger, gate-policy, types — no vendor names
+  mcp-server/              MCP transport (stdio); the /task and /done commands
+  cli/                     the `loom` install binary (setup / allowlist / init)
+  pipeline/                @loomfsm/pipeline — the one-step `npm i -g` meta-package
   providers/
-    claude-code-shuttle/        Default shuttle provider (no API key needed)
-    anthropic-sdk/              Direct Anthropic with prompt-caching + idempotent_spawn
-    openrouter/                 Multi-model routing
+    claude-code-shuttle/   default provider, no API key needed
+    anthropic-sdk/         direct Anthropic with prompt-caching + idempotent spawn
+    openrouter/            multi-model routing
   bundles/
-    code/                       Code-review / implementation bundle (MVP)
-
-WHITEPAPER.md                   Design rationale and architecture
-README.md                       This file
-LICENSE                         Apache 2.0
+    code/                  the code-review / implementation bundle
 ```
 
-npm packages are published under the `@loomfsm/*` scope: `@loomfsm/kernel`, `@loomfsm/mcp-server`, `@loomfsm/cli`, `@loomfsm/provider-anthropic-sdk`, `@loomfsm/provider-claude-code-shuttle`, `@loomfsm/provider-openrouter`, `@loomfsm/bundle-code`.
+Published under the `@loomfsm/*` scope: `@loomfsm/pipeline` (install this), plus
+`@loomfsm/{kernel,mcp-server,cli,bundle-code,provider-claude-code-shuttle,provider-anthropic-sdk,provider-openrouter}`.
 
-## Getting started
+## What it isn't
 
-Install the CLI and the runtime in one step:
+- Not a prompt-template framework — templates live in bundles, typed and validated.
+- Not an agent IDE — it runs underneath your IDE / shell / MCP host.
+- Not a distributed runtime — single in-flight task per project, by design.
+- Not "AGI plumbing" — a finite-state machine that survives crashes and tells you what happened.
 
-```bash
-npm i -g @loomfsm/pipeline
-```
+## Status & roadmap
 
-Register it with your agent host — this writes the MCP server config and installs the
-`/task` and `/done` commands — then authorize a project:
-
-```bash
-loom setup            # idempotent; --user (default) or --project; --dry-run to preview
-loom allowlist add    # authorize the current project (run once per project)
-```
-
-Then, from your MCP host (e.g. Claude Code), inside an authorized project:
-
-```
-/task fix the typo in the module header comment
-```
-
-The host runs each spawned agent with the prompt the server provides, surfaces every
-approval gate for your decision, and drives the work to completion; `/done` shows the
-summary. State lives in `<project>/.claude/state.db` — a plain SQLite file.
-
-### CLI commands
-
-```
-loom setup [--user|--project] [--dry-run] [--force]   register the server + install /task,/done
-loom allowlist add [path] [--dry-run]                 authorize a project directory
-loom allowlist list                                   show authorized directories
-loom init [--dry-run]                                 ensure .claude/ + authorize the current project
-loom --help | --version
-```
-
-Setup is idempotent: re-running changes nothing and never overwrites a command you have
-edited (`--force` to override). The allowlist is default-deny and operator-authored — the
-server never enrolls a project on its own.
-
-Working from source instead? `pnpm install && pnpm -r build`, then run
-`packages/cli/dist/src/bin/loom.js` (or `pnpm --filter @loomfsm/cli exec pnpm link --global`).
-
-## Concept primer
-
-- **Stage** — one of five variants (`SpawnStage`, `FanoutStage`, `GateStage`, `StepStage`, `FinalizeStage`). A `Bundle.flows` map names sequences of stages.
-- **Gate** — a checkpoint whose outcome is decided by a `Policy`. Roles: `classify`, `plan`, `final` (kernel-recognized; bundles add more).
-- **Policy** — function `(state, role, ctx) → Decision`. Decision is one of: `human-required`, `auto-approve`, `auto-reject`. Five YAML presets compose the three stock factories.
-- **Hook** — post-commit subscriber. Side-effect-only (no state writes). Declared `idempotent: true`; loader refuses otherwise.
-- **Invariant** — pure function over state, called in-transaction. Violation rolls the tx back.
-- **NowToken** — branded ISO timestamp captured once per tick, persisted, replayed.
-
-Full vocabulary in [WHITEPAPER.md](WHITEPAPER.md) §4.
-
-## Design highlights
-
-- **Atomicity, not coordination.** A single `StateBackend.withTransaction` per kernel call eliminates state-sync between the orchestrator and the disk. No reconciliation loop, no observer pattern.
-- **Replay-deterministic FSM.** Same `(state, NowToken, ledger)` → same trajectory. Crash recovery is "restart and let the ledger dedup."
-- **Honest autonomy.** A bundle that wants `"auto"` on the `final` gate must ship deterministic safety-floor invariants (lint-clean, tests-pass, typecheck-clean). Bundle-loader refuses otherwise. Acceptance verdicts from an LLM are not a safety boundary.
-- **No vendor strings in the kernel.** Enforced by CI grep. `@loomfsm/kernel` contains no provider names, transport names, or model names.
-- **Operator-debuggable.** The state is a plain SQLite file — open it, tail the audit log, query it with `sqlite3` / `jq`. The runtime does not hide.
-
-## Roadmap
-
-| Phase | Scope | Status |
-|---|---|---|
-| Now | Kernel + `code` bundle + 3 providers + mcp-server/cli; one task per project | Shipping (`v0.1.0` on npm) |
-| Planned | Bundle runtime isolation (worker fence), memory subsystem, daemon transport, more bundles | — |
-| Later | Third-party bundle marketplace + signed manifests + observability backends | — |
+`v0.1.0`: kernel + the `code` bundle + three providers + mcp-server & cli; one task per
+project; published on npm. Early and evolving. On the near horizon: richer host/driver
+integration, more bundles, bundle runtime isolation, a cross-task memory subsystem, and
+a daemon transport. The substrate is *additive* to all of these — none reshapes the kernel.
 
 ## Contributing
 
-- `pnpm -r typecheck` and `pnpm -r test` must be green before a change is done — that's the floor.
+- `pnpm -r typecheck` and `pnpm -r test` must be green before a change is done — the floor.
 - Tests ship with the code they cover. No "tests later."
 - Conventional-commit subjects (`feat:` / `fix:` / `chore:` / `refactor:` / `docs:`).
 - The kernel carries no provider, transport, or model names — a CI grep enforces it.
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE). Permissive with an explicit patent grant.
+Apache 2.0 — see [LICENSE](LICENSE). Permissive, with an explicit patent grant.
 
 ## Further reading
 
-- [WHITEPAPER.md](WHITEPAPER.md) — the design, in prose. ~12 KB. Read this before opening a PR.
+- [WHITEPAPER.md](WHITEPAPER.md) — the design, in prose. Read this before opening a PR.

@@ -22,12 +22,14 @@
 // errors throw.
 
 import {
+  archiveStateDb,
   assertProjectDirAllowed,
   captureNow,
   initializeTask,
   KernelError,
   loadState,
   openDb,
+  peekArchiveSlot,
   readLedgerRow,
   runFSM,
   TransactionImpl,
@@ -91,6 +93,21 @@ export function createRunTaskTool(
     // 3. Replay — return the cached creation envelope verbatim.
     const cached = await readCachedCreation(input.project_dir, input.client_idempotency_uuid);
     if (cached !== null) return cached;
+
+    // 3b. Free a finished slot before creating the next task. A single-task
+    //     store holds one task at a time, so a prior task's TERMINAL record
+    //     is rotated into history here — the belt-and-suspenders path for a
+    //     user who never ran the graceful finish. An in-progress task is
+    //     NEVER auto-rotated; the create tx below refuses it with a typed
+    //     PROJECT_TASK_ACTIVE error rather than discarding a live run.
+    try {
+      const slot = await peekArchiveSlot(input.project_dir);
+      if (slot !== null && (slot.status === "completed" || slot.status === "abandoned")) {
+        await archiveStateDb(input.project_dir, captureNow(), { reason: "auto-rotate" });
+      }
+    } catch (err) {
+      return refusal(err);
+    }
 
     if (deps.resolveRegistry === undefined) {
       return {

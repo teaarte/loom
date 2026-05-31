@@ -23,6 +23,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@loomfsm/kernel':
+        specifier: workspace:*
+        version: link:../kernel
       '@loomfsm/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server

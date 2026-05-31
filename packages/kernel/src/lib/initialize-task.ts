@@ -76,6 +76,31 @@ export async function initializeTask(
     };
   }
 
+  // Occupied-slot pre-check. The aggregate row is single-identity by
+  // construction (the `id = 1` CHECK), so a project store holds one task at
+  // a time. A surviving row here — past the replay branch above, so under a
+  // FRESH client uuid — means a prior task still owns the slot. A blind
+  // INSERT would trip the row-identity CHECK and surface a raw backend
+  // error to the caller; refuse with a typed, actionable code instead. The
+  // transport rotates a FINISHED slot into history before reaching this
+  // point, so a row that survives to here is either a live task or a
+  // finished one a caller declined to rotate.
+  const occupied = await tx.queryRow<{ status: unknown }>(
+    "SELECT status FROM pipeline_state WHERE id = 1",
+  );
+  if (occupied !== null) {
+    const status = String(occupied.status);
+    const remediation =
+      status === "in_progress"
+        ? "a task is already running in this project — finish it, recover it, or reset the project"
+        : "a finished task still occupies this project — archive it (reset the project) before starting a new one";
+    throw new KernelError({
+      code: "PROJECT_TASK_ACTIVE",
+      message: remediation,
+      detail: { status },
+    });
+  }
+
   // Bundle resolution (v3 MVP): first enabled bundle, ordered by id.
   // When the registry's config-driven flow selection lands this point
   // re-binds; the refusal stays the same.

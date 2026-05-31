@@ -302,6 +302,33 @@ export interface RestoreResponse {
 }
 
 // ---------------------------------------------------------------------
+// pipeline_archive_and_reset
+// ---------------------------------------------------------------------
+
+export interface ArchiveResetInput {
+  project_dir: string;
+  // Archive a still-in-progress task instead of refusing. Default false:
+  // an in-progress task is refused (PROJECT_TASK_ACTIVE) so a live run is
+  // never discarded by accident. A terminal task archives without force.
+  force?: boolean;
+  // Opaque, unverified caller string — audit only.
+  client_identifier_unverified?: string;
+}
+
+// `archived` is true when a live store was rotated into history; false on
+// a no-op (no live task) or a refusal. `task_id` / `history_path` are set
+// only on a successful archive. `error` carries the typed code on a
+// refusal (PROJECT_DIR_NOT_ALLOWED / PROJECT_TASK_ACTIVE). `ts` is the
+// threaded NowToken on every path.
+export interface ArchiveResetResponse {
+  archived: boolean;
+  task_id: string | null;
+  history_path: string | null;
+  ts: string;
+  error?: { code: string; message: string };
+}
+
+// ---------------------------------------------------------------------
 // Tool handler primitive — same shape used in the server's `tools` map.
 // Tests construct a handler and call it directly, bypassing MCP wire
 // framing; the SDK's request dispatcher wraps the same callable on the

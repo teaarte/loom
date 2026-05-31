@@ -79,13 +79,28 @@ function makeResolver(
 ): (projectDir: string) => Promise<Registry> {
   return function assemble(projectDir: string): Promise<Registry> {
     const key = resolve(projectDir);
-    const cached = cache.get(key);
-    if (cached !== undefined) return cached;
 
-    const building = buildRegistry(projectDir, providers).catch((err: unknown) => {
-      cache.delete(key);
-      throw err;
-    });
+    // Re-reconcile the manifest on EVERY call, before returning the registry
+    // (cached or freshly built). The task store is single-task: finishing a
+    // task rotates the whole store into history and frees the slot, which
+    // also drops the project's installed-extensions rows. Without a
+    // re-reconcile the next task would open a fresh, bundle-less store and
+    // refuse with "no enabled bundle". The reconcile is idempotent and
+    // cheap (it runs once per tool call, not per FSM tick), so restoring the
+    // manifest each time is safe; the expensive registry object — the loaded
+    // bundle with every agent template read off disk — is still built once
+    // per process and cached.
+    const ensured = ensureProjectReconciled(projectDir);
+
+    const cached = cache.get(key);
+    if (cached !== undefined) return ensured.then(() => cached);
+
+    const building = ensured
+      .then(() => buildRegistry(projectDir, providers))
+      .catch((err: unknown) => {
+        cache.delete(key);
+        throw err;
+      });
     cache.set(key, building);
     return building;
   };
@@ -104,30 +119,33 @@ export function assembleRegistry(projectDir: string): Promise<Registry> {
   return defaultResolver(projectDir);
 }
 
+// Ensure the project store exists (migrations apply on first open) and
+// carries the bundle manifest row. Idempotent: an unchanged manifest is
+// left as-is. Run on every resolver call so a store that was rotated away
+// since the last build is restored before the loader / the next task reads
+// the installed-extensions table.
+async function ensureProjectReconciled(projectDir: string): Promise<void> {
+  openDb(projectDir);
+  await reconcileExtensions({
+    manifests: [{ path: BUNDLE_MANIFEST_SOURCE, raw: codeManifest }],
+    project_dir: projectDir,
+    now: captureNow(),
+  });
+}
+
 async function buildRegistry(
   projectDir: string,
   providers: LLMProvider[],
 ): Promise<Registry> {
-  const now = captureNow();
-
-  // Open the project DB so kernel migrations apply before the loader
-  // reads the installed-extensions table.
-  openDb(projectDir);
-
-  // Idempotent: an unchanged manifest row is left as-is.
-  await reconcileExtensions({
-    manifests: [{ path: BUNDLE_MANIFEST_SOURCE, raw: codeManifest }],
-    project_dir: projectDir,
-    now,
-  });
-
+  // The manifest is already reconciled by `ensureProjectReconciled` before
+  // this runs; the loader reads the installed-extensions row it left.
   return await loadBundle({
     bundle: codeBundle,
     bundle_source_dir: bundleSourceDir,
     project_dir: projectDir,
     providers,
     providers_config: readProvidersConfig(projectDir),
-    now,
+    now: captureNow(),
   });
 }
 

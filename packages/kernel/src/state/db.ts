@@ -372,6 +372,32 @@ export function closeDb(projectDir: string): void {
   closeAll(projectDir);
 }
 
+// Open an arbitrary on-disk SQLite file (NOT a pooled project DB) just
+// long enough to read its canonical task id, then close it. The archival
+// path uses this to confirm a freshly-copied history snapshot opens and
+// carries the expected task BEFORE the live DB is removed — so an
+// interruption between copy and delete can never lose the record. Kept
+// here so the node:sqlite import stays confined to this one module.
+//
+// Returns the stored task_id, or null when the row carries none. Throws
+// (propagating the driver error) when the file cannot be opened or the
+// canonical table is absent — the caller treats that as "unverifiable,
+// keep the live DB" rather than deleting on faith.
+export function readArchivedTaskId(dbPath: string): string | null {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db
+      .prepare("SELECT task_id FROM pipeline_state WHERE id = 1")
+      .get() as { task_id?: unknown } | undefined;
+    if (row === undefined || row.task_id === null || row.task_id === undefined) {
+      return null;
+    }
+    return String(row.task_id);
+  } finally {
+    db.close();
+  }
+}
+
 // Introspection for tests (connection reuse / fd-leak assertions). Not
 // re-exported from the package barrel — kernel-internal only.
 export function poolStats(projectDir: string): PoolStats | null {

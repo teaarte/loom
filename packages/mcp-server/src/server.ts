@@ -11,6 +11,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
+import { createArchiveResetTool } from "./tools/archive-reset.js";
 import { createBackupTool } from "./tools/backup.js";
 import { createContinueTaskTool } from "./tools/continue-task.js";
 import { createExtensionsListTool } from "./tools/extensions-list.js";
@@ -22,6 +23,8 @@ import { createRestoreTool } from "./tools/restore.js";
 import { createRunTaskTool } from "./tools/run-task.js";
 import { createStateGetTool } from "./tools/state-get.js";
 import type {
+  ArchiveResetInput,
+  ArchiveResetResponse,
   BackupInput,
   BackupResponse,
   ContinueTaskRequestInput,
@@ -72,6 +75,7 @@ export interface ToolRegistry {
   >;
   pipeline_backup: ToolHandler<BackupInput, BackupResponse>;
   pipeline_restore: ToolHandler<RestoreInput, RestoreResponse>;
+  pipeline_archive_and_reset: ToolHandler<ArchiveResetInput, ArchiveResetResponse>;
 }
 
 export interface CreateServerHandle {
@@ -274,6 +278,24 @@ const TOOL_DESCRIPTORS = [
       required: ["project_dir", "from", "format"],
     },
   },
+  {
+    name: "pipeline_archive_and_reset",
+    description:
+      "Archives this project's finished task into .claude/history/ and frees " +
+      "the single-task slot so the next task starts clean. A terminal task " +
+      "archives cleanly; an in-progress task is refused (PROJECT_TASK_ACTIVE) " +
+      "unless force:true. Works even when the slot is jammed (a finished task " +
+      "that was never cleared); a project with no active task is a no-op.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_dir: { type: "string" },
+        force: { type: "boolean" },
+        client_identifier_unverified: { type: "string" },
+      },
+      required: ["project_dir"],
+    },
+  },
 ];
 
 export function createServer(deps: ServerDeps = {}): CreateServerHandle {
@@ -288,6 +310,7 @@ export function createServer(deps: ServerDeps = {}): CreateServerHandle {
     pipeline_issue_cross_owner_marker: createIssueCrossOwnerMarkerTool(deps),
     pipeline_backup: createBackupTool(deps),
     pipeline_restore: createRestoreTool(deps),
+    pipeline_archive_and_reset: createArchiveResetTool(deps),
   };
 
   const server = new Server(
@@ -348,6 +371,9 @@ async function dispatch(
   }
   if (name === "pipeline_restore") {
     return await tools.pipeline_restore(args as unknown as RestoreInput);
+  }
+  if (name === "pipeline_archive_and_reset") {
+    return await tools.pipeline_archive_and_reset(args as unknown as ArchiveResetInput);
   }
   throw new Error(`unknown tool: ${name}`);
 }

@@ -141,6 +141,37 @@ describe("initializeTask", () => {
     assert.equal(Number(phaseCount?.c), 1);
   });
 
+  it("refuses an occupied slot with typed PROJECT_TASK_ACTIVE, not a raw constraint error", async () => {
+    dir = await freshProject();
+    await withStateTransaction(dir, FIXED_NOW, (tx) =>
+      initializeTask(tx, {
+        project_dir: dir,
+        task: "first task",
+        client_idempotency_uuid: "uuid-occupied-1",
+        phases: ["context"],
+      }),
+    );
+
+    // A SECOND create under a DIFFERENT client uuid (a new task, not a
+    // replay) finds the single-task slot already taken. The blind INSERT
+    // would otherwise trip the row-identity CHECK and surface a raw backend
+    // error; the pre-check converts it into a typed, actionable refusal.
+    await assert.rejects(
+      withStateTransaction(dir, FIXED_NOW, (tx) =>
+        initializeTask(tx, {
+          project_dir: dir,
+          task: "second task",
+          client_idempotency_uuid: "uuid-occupied-2",
+          phases: ["context"],
+        }),
+      ),
+      (err: unknown) =>
+        err instanceof KernelError &&
+        err.code === "PROJECT_TASK_ACTIVE" &&
+        err.detail?.["status"] === "in_progress",
+    );
+  });
+
   it("refuses when no enabled bundle is installed", async () => {
     dir = await freshProject({ seedBundle: false });
     await assert.rejects(

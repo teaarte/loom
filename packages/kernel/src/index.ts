@@ -28,6 +28,7 @@ export * from "./lib/build-agent-result.js";
 export * from "./lib/ledger.js";
 export * from "./lib/project-dir.js";
 export * from "./lib/initialize-task.js";
+export * from "./lib/archive-state.js";
 export * from "./lib/deliver-continue.js";
 export * from "./lib/recover-task.js";
 export * from "./lib/bypass-marker.js";

@@ -5,6 +5,7 @@
 
 import { allowlistAdd, allowlistList } from "./commands/allowlist.js";
 import { init } from "./commands/init.js";
+import { history, reset } from "./commands/reset.js";
 import { setup } from "./commands/setup.js";
 import { processEnv, type CliEnv } from "./lib/env.js";
 import { readCliVersion } from "./version.js";
@@ -27,6 +28,13 @@ Usage:
   loom init [--dry-run]
       Ensure this project's .claude/ exists and authorize it, then point at /task.
 
+  loom reset [path] [--force] [--dry-run]
+      Archive this project's finished task into .claude/history/ and free the
+      slot so the next task starts clean (default: current directory).
+      An in-progress task is refused unless --force is given.
+  loom history [path]
+      List the archived tasks for this project.
+
   loom --help | --version
 
 Typical first run:
@@ -35,7 +43,10 @@ Typical first run:
   loom allowlist add        # in each project you want to use
 `;
 
-export function run(argv: string[], env: CliEnv = processEnv()): number {
+// Returns a number for the synchronous (filesystem-only) commands, or a
+// Promise for the commands that open the project store (`reset`). The bin
+// awaits either form; tests of the sync commands keep asserting a number.
+export function run(argv: string[], env: CliEnv = processEnv()): number | Promise<number> {
   const [command, ...rest] = argv;
 
   if (command === undefined || command === "--help" || command === "-h" || command === "help") {
@@ -52,6 +63,10 @@ export function run(argv: string[], env: CliEnv = processEnv()): number {
       return setup(rest, env);
     case "init":
       return init(rest, env);
+    case "reset":
+      return reset(rest, env);
+    case "history":
+      return history(rest, env);
     case "allowlist": {
       const [sub, ...subRest] = rest;
       if (sub === "add") return allowlistAdd(subRest, env);

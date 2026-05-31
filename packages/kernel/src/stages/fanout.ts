@@ -14,13 +14,16 @@
 // `persistAgentResult` — runs later, under the
 // `pipeline_continue_task({type:"agents-results"})` delivery path.
 
+import { KERNEL_BUDGET_CEILINGS } from "../budgets.js";
 import { getKernelTx } from "../fsm.js";
 import { spawnGuard } from "../guards.js";
 import { buildPrompt } from "../prompt-renderer.js";
+import type { AttemptBudget } from "../types/budget.js";
 import type { StageContext } from "../types/context.js";
 import type { FanoutStage, StageResult } from "../types/plugins.js";
 import type { ProviderShuttleIntent } from "../types/provider.js";
 import type { PipelineState } from "../types/state.js";
+import type { Transaction } from "../types/transaction.js";
 
 export async function interpretFanout(
   stage: FanoutStage,
@@ -32,6 +35,28 @@ export async function interpretFanout(
   }
 
   const rawTx = getKernelTx(ctx);
+
+  // Iteration budget — bound how many times a walk-back loop may re-enter
+  // this fanout. The per-stage counter lives in
+  // `driver_state.scratch.fanout_iter_<stage>`; on reaching the cap the
+  // stage takes its `on_exhaustion` branch instead of spawning again. This
+  // is a SECOND ceiling on the rework loop alongside the gate's auto-reject
+  // replan cap — see the iteration-budget × replan-cap ADR for how they
+  // compose. Checked before spawning so an exhausted fanout never re-issues.
+  const budget = stage.iteration_budget;
+  if (budget !== undefined) {
+    const scratchKey = `fanout_iter_${stage.name}`;
+    const count = readFanoutIterCount(state, scratchKey);
+    const cap = Math.min(
+      budget.max_iterations,
+      budget.kernel_ceiling ?? KERNEL_BUDGET_CEILINGS.fanout_iteration,
+    );
+    if (count >= cap) {
+      return fanoutExhaustionResult(stage, budget, count, cap, state);
+    }
+    await bumpFanoutIterCount(rawTx, state, scratchKey, count + 1);
+  }
+
   const changeKind =
     typeof ctx.state.decisions["change_kind"] === "string"
       ? (ctx.state.decisions["change_kind"] as string)
@@ -106,4 +131,70 @@ export async function interpretFanout(
   }
 
   return { type: "shuttle-batch", spawns };
+}
+
+// Read the per-stage fanout iteration counter off the driver scratch
+// snapshot. Absent / non-numeric → 0 (first entry).
+function readFanoutIterCount(state: PipelineState, key: string): number {
+  const raw = state.driver.scratch[key];
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+}
+
+// Persist the incremented counter into driver_state.scratch (read-modify-
+// write over the loaded snapshot, single-writer under this tx) AND mirror it
+// onto the in-memory snapshot so a later read in the same pass agrees.
+async function bumpFanoutIterCount(
+  tx: Transaction,
+  state: PipelineState,
+  key: string,
+  next: number,
+): Promise<void> {
+  const merged = { ...state.driver.scratch, [key]: next };
+  await tx.exec("UPDATE driver_state SET scratch = ? WHERE id = 1", [
+    JSON.stringify(merged),
+  ]);
+  state.driver.scratch = merged;
+}
+
+// Map an exhausted fanout budget to a StageResult. `audit-only` proceeds
+// without re-spawning (findings from the last round stay open for the gate
+// to weigh — the bump-to-cap counter on `driver_state.scratch` is the
+// durable record that the loop stopped here); `human` halts for operator
+// intervention (a fanout carries no gate schema, so there is no ask-user
+// form — the halt is the honest surface); `abandon` completes the task
+// rejected.
+function fanoutExhaustionResult(
+  stage: FanoutStage,
+  budget: AttemptBudget,
+  count: number,
+  cap: number,
+  state: PipelineState,
+): StageResult {
+  const detail = `fanout '${stage.name}' exhausted its iteration budget (count=${count}, cap=${cap})`;
+  switch (budget.on_exhaustion) {
+    case "audit-only":
+      return { type: "advance" };
+    case "human":
+      return {
+        type: "halt",
+        directive: {
+          code: "FANOUT_ITERATION_BUDGET_EXHAUSTED",
+          message: detail,
+          recovery_options: [],
+        },
+      };
+    case "abandon":
+      return {
+        type: "complete",
+        directive: {
+          task_id: state.task_id,
+          verdict: "rejected",
+          summary: detail,
+        },
+      };
+    default: {
+      const _exhaustive: never = budget.on_exhaustion;
+      return _exhaustive;
+    }
+  }
 }

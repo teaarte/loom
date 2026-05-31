@@ -17,6 +17,7 @@
 // commit.
 
 import { getKernelTx } from "../fsm.js";
+import { completeTask } from "../lib/complete-task.js";
 import type { StageContext } from "../types/context.js";
 import type { FinalizeStage, StageResult } from "../types/plugins.js";
 import type { PipelineState } from "../types/state.js";
@@ -30,20 +31,9 @@ export async function interpretFinalize(
 
   const tx = getKernelTx(ctx);
 
-  // Sweep any non-terminal phase rows. Idempotent: a phase already
-  // marked `completed` or `skipped` is left as-is.
-  for (const phase of state.phases) {
-    if (phase.status === "completed" || phase.status === "skipped") continue;
-    await tx.exec(
-      "UPDATE phases SET status = ?, skipped_reason = ?, updated_at = ? WHERE name = ?",
-      ["skipped", "swept by finalize", ctx.now, phase.name],
-    );
-  }
-
-  await tx.exec(
-    "UPDATE pipeline_state SET status = 'completed', verdict = ?, ended_at = ? WHERE id = 1",
-    [verdict, ctx.now],
-  );
+  // Sweep non-terminal phases + write the verdict in one tx so the
+  // `verdict != null → every phase terminal` invariant holds on commit.
+  await completeTask(tx, state.phases, verdict, ctx.now, "swept by finalize");
 
   // Mutate the in-memory state so the outer loop sees the terminal
   // status immediately — the runFSM caller treats the `complete`

@@ -15,4 +15,10 @@
 export const KERNEL_BUDGET_CEILINGS = Object.freeze({
   replan: 10,
   fanout_concurrency_global: 8,
+  // Absolute ceiling on `FanoutStage.iteration_budget.max_iterations`. A
+  // fanout re-entered by a walk-back loop bounds its re-spawns at
+  // `min(max_iterations, fanout_iteration)`; once reached the stage takes
+  // its `on_exhaustion` branch instead of spawning forever. The hard cap
+  // fires even if a bundle author leaves `max_iterations` untuned.
+  fanout_iteration: 10,
 });

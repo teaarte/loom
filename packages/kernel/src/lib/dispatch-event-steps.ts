@@ -26,7 +26,7 @@ export async function dispatchEventSteps(
   tx: Transaction,
   ops: BundleOp[],
   phase: Phase = "",
-): Promise<void> {
+): Promise<BundleOp[]> {
   const matches: StepStage[] = [];
   for (const stage of ctx.registry.stages.values()) {
     if (stage.kind !== "step") continue;
@@ -37,6 +37,13 @@ export async function dispatchEventSteps(
     matches.push(stage);
   }
 
+  // Accumulate every op drained here so the caller can mirror them onto
+  // the in-memory snapshot too. Without this an event-position Step's
+  // `set_decision` / `set_bundle_state_field` lands on disk but stays
+  // invisible to a later same-pass stage (the interpreter buffer is
+  // cleared before runFSM captures it). Returned so the FSM loop unions
+  // these into the ops it feeds `syncStateFromOps`.
+  const drained: BundleOp[] = [];
   for (const step of matches) {
     if (step.applies_to && !step.applies_to(ctx.state)) continue;
     if (step.run) {
@@ -48,9 +55,11 @@ export async function dispatchEventSteps(
     // threaded so a finding the Step buffers lands under it.
     if (ops.length > 0) {
       await applyBundleOps(tx, ops, phase);
+      drained.push(...ops);
       ops.length = 0;
     }
   }
+  return drained;
 }
 
 function eventNameMatches(declared: HookEvent, actual: HookEvent): boolean {

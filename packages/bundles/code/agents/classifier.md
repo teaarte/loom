@@ -23,6 +23,7 @@ A single fenced JSON code block. No prose outside. Schema:
   "agent": "classifier",
   "task_id": "<canonical task_id from spawn context's 'Canonical identifiers' section>",
   "task_short": "<short kebab-case slug, ≤60 chars, summarising the task>",
+  "complexity": "<simple | medium | complex>",
   "refs_to_load": ["agents/references/<file>.md", "..."],
   "security_needed": true,
   "antipattern_rules_applicable": ["<rule-id>", "..."],
@@ -42,6 +43,10 @@ A single fenced JSON code block. No prose outside. Schema:
 
 - **`task_id`** — copy the canonical id from the spawn context's "Canonical identifiers" section verbatim. Do NOT extract a task_id from the task description prose (Item 6 / Q-task_id-drift safety).
 - **`task_short`** — kebab-case, lowercase ASCII; describes the *intent* of the task in 3-6 hyphenated words. Examples: `doc-drift-fix`, `cache-invalidation-bug`, `gate-mirror-refactor`. **No transliteration** — if the task is in a non-Latin script, render the *concept* in English. If you genuinely cannot summarise, emit `null`.
+- **`complexity`** — assess the SCOPE OF THE ACTUAL CHANGE, not how long the brief is. A verbose description of a mechanical one-file edit is `simple`; a terse description of a cross-cutting redesign is `complex`. This is the signal the engine uses to pick the flow — `simple` routes to a lean path (one reviewer, no fanout, fewer agents), `complex` runs the full adversarial panel. Always emit one of:
+  - `simple` — a localized, low-risk change: a single module/file, a rename, a typo, a small bug fix, a doc/config tweak. No new architecture, no contract change, no security surface.
+  - `medium` — a normal feature/fix spanning a few files, some new logic, but no architectural redesign or high-stakes surface.
+  - `complex` — cross-cutting or high-stakes: architecture/redesign, a migration, a security/auth/crypto surface, a public-contract change, or work touching many layers/modules. When in doubt between two levels, pick the higher one — the cost of an over-thorough review is lower than a missed risk.
 - **`refs_to_load`** — up to **5** ref filenames that materially help the agents listed in Active agents. Skip refs whose `when_to_load` clearly doesn't match the task. Empty array if nothing fits.
 - **`security_needed`** — `true` ONLY when the task plausibly touches authentication, authorization, secrets, tokens, sessions, PII, or input-validation surfaces. Default `false`.
 - **`antipattern_rules_applicable`** — rule identifiers (strings) from CLAUDE.md whose pattern the implementer might violate while working on this task. Empty array if no anti-pattern documentation exists or none apply.
@@ -62,13 +67,13 @@ A single fenced JSON code block. No prose outside. Schema:
 - Every entry in `refs_to_load` MUST be an exact filename from the supplied catalog. Do not invent paths.
 - Every entry in `antipattern_rules_applicable` MUST come from the supplied rule list (or be empty).
 - `stack.language` MUST be in `stack-candidates.yaml.languages[*].name`. `stack.package_manager` MUST be in `stack-candidates.yaml.package_managers[*].name` (or `null`). Do not invent.
-- If any field is genuinely indeterminate, emit a safe default (`null` for `task_short` / `stack` / `change_kind`, empty arrays, `false` for boolean) — never guess.
+- If any field is genuinely indeterminate, emit a safe default (`null` for `task_short` / `stack` / `change_kind`, empty arrays, `false` for boolean, `medium` for `complexity`) — never guess.
 - Cap your reasoning at the JSON object. Do not explain "why".
 
 ## Failure mode
 
 If the spawn context lacks the inputs above, emit the JSON with all-defaults:
 ```json
-{ "schema_version": "1.1", "agent": "classifier", "task_id": null, "task_short": null, "refs_to_load": [], "security_needed": false, "antipattern_rules_applicable": [], "stack": null, "change_kind": null }
+{ "schema_version": "1.1", "agent": "classifier", "task_id": null, "task_short": null, "complexity": "medium", "refs_to_load": [], "security_needed": false, "antipattern_rules_applicable": [], "stack": null, "change_kind": null }
 ```
 The pipeline treats this as a clean signal to skip downstream LLM-derived decisions and fall back to deterministic defaults.

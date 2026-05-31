@@ -35,6 +35,17 @@ export interface Bundle {
   gate_roles: Record<string, GateRole>;
   declared_change_kinds?: string[];
 
+  // Optional complexity → flow routing. The task starts on `default_flow`;
+  // once the FSM advances past `after_stage` the kernel re-selects the
+  // active flow ONCE from `map`, keyed on `decisions[decision_key]`. All
+  // flows named in `map`, plus `default_flow`, MUST share an identical
+  // prefix up to and including `after_stage` so `step_index` stays aligned
+  // across the switch — the loader refuses a map that breaks this
+  // (COMPLEXITY_FLOW_PREFIX_MISMATCH). Writing `driver.flow_name` is
+  // driver-internal; bundle code never touches it — the kernel performs
+  // the switch from this declared map.
+  complexity_flows?: ComplexityFlowMap;
+
   extends_vocab?: {
     error_classes?: string[];
     output_kinds?: string[];
@@ -55,6 +66,16 @@ export interface Bundle {
   // shape; the renderer reads the files and formats them generically (it
   // never imports the bundle, same as template materialization).
   spawn_context_assets?: SpawnContextAsset[];
+}
+
+// Declarative complexity → flow routing. `decision_key` names the decision
+// the choice keys on (e.g. "complexity"); `after_stage` is the flow stage
+// after which the kernel switches the active flow once; `map` routes a
+// decision value to a flow name. See `Bundle.complexity_flows`.
+export interface ComplexityFlowMap {
+  decision_key: string;
+  after_stage: string;
+  map: Record<string, string>;
 }
 
 // A bundle-declared block of static context surfaced under the heading

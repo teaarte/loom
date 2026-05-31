@@ -265,6 +265,19 @@ export default defineBundle({
   phases: ["context", "planning", "test_first", "implementation", "validation", "final"],
   default_flow: "medium",
 
+  // Complexity → flow routing. The task starts on `medium`; once the
+  // classifier-agent's `complexity` has merged into decisions (right after
+  // `classify-agent`), the kernel re-selects the flow ONCE: a `simple`
+  // task drops to the lean flow (single reviewer, no fanout), `complex`
+  // takes the full panel. The three flows share the
+  // [initialize, classify, classify-agent] prefix so the switch keeps
+  // step_index aligned (the loader verifies this).
+  complexity_flows: {
+    decision_key: "complexity",
+    after_stage: "classify-agent",
+    map: { simple: "simple", medium: "medium", complex: "complex" },
+  },
+
   // Honest baseline: every role gates on open blockers. A deployment may
   // override any role to `auto` (full-autonomous) per task or via preset;
   // the policyResolver + safety-floor invariants below make that path
@@ -467,6 +480,10 @@ export default defineBundle({
       filter_by_change_kind: true,
       iteration_budget: { kind: "attempt", max_iterations: 3, on_exhaustion: "audit-only" },
     },
+    // Lean single-reviewer spawn for the `simple` flow — a routine change
+    // gets one logic review instead of the full adversarial fanout. The
+    // fanout `review` stays for the medium/complex flows.
+    "review-light": { kind: "spawn", name: "review-light", phase: "implementation", agent: "logic-reviewer" },
     reconcile: { kind: "step", name: "reconcile", phase: "implementation", position: "positional", effects: [] },
     iterate: { kind: "step", name: "iterate", phase: "implementation", position: "positional", effects: [] },
     "sacred-tests": {
@@ -502,10 +519,16 @@ export default defineBundle({
   },
 
   flows: {
+    // Lean path for routine work: one planner, one implementer, ONE
+    // reviewer (review-light), acceptance, the final gate, finalize. No
+    // gate-classify, no plan-review/review fanouts, no enrich/architect —
+    // ~5 agents vs medium's ~10+. Shares the [initialize, classify,
+    // classify-agent] prefix with the other flows so the complexity switch
+    // lands here without misaligning step_index.
     simple: [
       "initialize", "classify", "classify-agent",
-      "plan", "plan-grounding", "implement", "git-diff", "pre-review",
-      "review", "final-checks", "gate-final", "finish-summary", "finalize",
+      "plan", "implement", "git-diff", "pre-review",
+      "review-light", "final-checks", "gate-final", "finish-summary", "finalize",
     ],
     medium: [
       "initialize", "classify", "classify-agent", "gate-classify",

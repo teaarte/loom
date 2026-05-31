@@ -39,6 +39,7 @@ import type { Registry } from "../types/registry.js";
 import { readInstalledManifest } from "./installed-manifest.js";
 import { buildProviderRegistry } from "./provider-registry.js";
 import { validateAutoPolicy } from "./validators/auto-policy.js";
+import { validateComplexityFlows } from "./validators/complexity-flows.js";
 import { validateGateRoles } from "./validators/gate-roles.js";
 import { validateHookGraph } from "./validators/hooks.js";
 import { validateImportScope } from "./validators/import-scope.js";
@@ -73,6 +74,11 @@ export async function loadBundle(opts: LoadBundleOptions): Promise<Registry> {
 
   // 2..6 + 8 — declarative-shape validation against the Stage union.
   validateStages(bundle);
+
+  // 6b — complexity → flow map: shared-prefix invariant (after validateStages
+  //      confirms the flows + default_flow exist). Refuses a map whose flows
+  //      would misalign step_index at the switch boundary.
+  validateComplexityFlows(bundle);
 
   // 7 — gate-role lookup against bundle + extends_vocab.
   validateGateRoles(bundle);

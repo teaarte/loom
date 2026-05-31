@@ -23,14 +23,21 @@
 //
 // Wall-clock discipline: every timestamp comes from `tx.now`.
 
+import { buildStageContext } from "../fsm.js";
 import { KernelError } from "../state/db.js";
+import { loadState } from "../state/load.js";
 import { assertVocabKnown } from "../vocabularies.js";
 import type { ContinueTaskInput } from "../types/continue-task.js";
-import type { AgentOutputKind } from "../types/plugins.js";
+import type { AgentOutputKind, StageResult } from "../types/plugins.js";
+import type { Registry } from "../types/registry.js";
+import type { PipelineState } from "../types/state.js";
 import type { Transaction } from "../types/transaction.js";
+import type { UserAnswer } from "../types/user-answer.js";
 import type { KernelVocabularies } from "../types/vocabulary.js";
 
+import { applyBundleOps } from "./apply-bundle-ops.js";
 import { buildAgentResult } from "./build-agent-result.js";
+import { completeTask } from "./complete-task.js";
 import { readLedgerRow, writeLedgerRow } from "./ledger.js";
 import { persistAgentResult } from "./persist-agent-result.js";
 
@@ -46,6 +53,12 @@ export interface DeliverContinueArgs {
   // decision's `decided_by`. Optional for the same reason
   // `resolveOutputKind` is — the production delivery path supplies it.
   vocabularies?: KernelVocabularies;
+  // Full registry — required for the human-answer path to resolve the
+  // gate stage's `on_resume` and the active flow (for a `walk_back_to`
+  // target). When absent (hand-built fixtures that don't thread one), the
+  // user-answer path falls back to a bare advance; production transports
+  // always supply it so human revise/abandon honor the gate's resume.
+  registry?: Registry;
 }
 
 export async function deliverContinue(
@@ -174,10 +187,8 @@ async function deliverUserAnswer(
   const existing = await readLedgerRow(tx, key);
   if (existing !== null) return; // replay — already delivered
 
-  const driverRow = await tx.queryRow<{ pending_user_answer: unknown }>(
-    "SELECT pending_user_answer FROM driver_state WHERE id = 1",
-  );
-  const pending = parsePendingUserAnswer(driverRow?.pending_user_answer ?? null);
+  const state = await loadState(tx);
+  const pending = state.driver.pending_user_answer;
   if (pending === null || pending.gate_event_id !== input.gate_event_id) {
     throw new KernelError({
       code: "GATE_EVENT_STALE",
@@ -204,9 +215,16 @@ async function deliverUserAnswer(
     [pending.gate, status, decidedBy, input.message ?? null, tx.now],
   );
 
-  await tx.exec(
-    "UPDATE driver_state SET pending_user_answer = NULL, step_index = step_index + 1 WHERE id = 1",
-  );
+  // Honor the gate's on_resume: a human "revise"/"abandon" must walk back
+  // or complete-reject, NOT advance like an accept. Resolve the result the
+  // answer drives and apply it (advance / walk_back / complete) inside this
+  // delivery tx — co-committed with the gate row + the ledger row.
+  const answer: UserAnswer = { decision: input.decision };
+  if (input.reject_intent !== undefined) answer.reject_intent = input.reject_intent;
+  if (input.message !== undefined) answer.message = input.message;
+
+  const result = await resolveGateResume(tx, args, state, pending.gate, answer);
+  await applyGateResult(tx, args, state, result);
 
   const taskId = await readTaskId(tx);
   await writeLedgerRow(tx, key, {
@@ -214,6 +232,95 @@ async function deliverUserAnswer(
     task_id: taskId,
     response_blob: null,
   });
+}
+
+// Resolve the StageResult a human gate answer drives. With a registry
+// threaded, runs the gate stage's `on_resume` (or the no-on_resume default:
+// accept→advance, reject→walk_back to the gate); without one (hand-built
+// fixtures), falls back to a bare advance — the legacy behavior.
+async function resolveGateResume(
+  tx: Transaction,
+  args: DeliverContinueArgs,
+  state: PipelineState,
+  gateName: string,
+  answer: UserAnswer,
+): Promise<StageResult> {
+  const registry = args.registry;
+  if (registry === undefined) return { type: "advance" };
+
+  const stage = registry.stages.get(gateName);
+  if (stage === undefined || stage.kind !== "gate") return { type: "advance" };
+
+  if (stage.on_resume === undefined) {
+    if (answer.decision === "accept") return { type: "advance" };
+    return {
+      type: "walk_back_to",
+      step: gateName,
+      reason: "reject without bundle-supplied on_resume",
+    };
+  }
+
+  const { ctx, ops } = await buildStageContext(state, registry, tx);
+  const result = await stage.on_resume(ctx.state, answer, ctx);
+  // Drain ops the resume body may have pushed (the code bundle's resumes
+  // push none, but a general resume may set decisions / bundle_state).
+  if (ops.length > 0) {
+    await applyBundleOps(tx, ops, stage.phase);
+    ops.length = 0;
+  }
+  return result;
+}
+
+// Apply a gate-resume StageResult inside the delivery tx. Clears the
+// pending answer in every branch so the parked gate is released.
+async function applyGateResult(
+  tx: Transaction,
+  args: DeliverContinueArgs,
+  state: PipelineState,
+  result: StageResult,
+): Promise<void> {
+  switch (result.type) {
+    case "advance":
+      await tx.exec(
+        "UPDATE driver_state SET pending_user_answer = NULL, step_index = step_index + 1 WHERE id = 1",
+      );
+      return;
+    case "walk_back_to": {
+      const flow = args.registry?.flows.get(state.driver.flow_name);
+      const target = flow ? flow.indexOf(result.step) : -1;
+      if (target < 0) {
+        throw new KernelError({
+          code: "WALK_BACK_TARGET_NOT_FOUND",
+          message: `gate on_resume walk_back target '${result.step}' is not in flow '${state.driver.flow_name}'`,
+          detail: { target: result.step, reason: result.reason },
+        });
+      }
+      await tx.exec(
+        "UPDATE driver_state SET pending_user_answer = NULL, step_index = ? WHERE id = 1",
+        [target],
+      );
+      return;
+    }
+    case "complete":
+      // Sweep phases + write the verdict atomically (INV_007). The human
+      // abandon path lands here with verdict='rejected' — never reaching
+      // finalize, so finalize's `?? "accepted"` default cannot mislabel it.
+      await completeTask(
+        tx,
+        state.phases,
+        result.directive.verdict,
+        tx.now,
+        "swept on gate completion",
+      );
+      await tx.exec("UPDATE driver_state SET pending_user_answer = NULL WHERE id = 1");
+      return;
+    default:
+      throw new KernelError({
+        code: "UNSUPPORTED_GATE_RESUME_RESULT",
+        message: `gate on_resume returned unsupported result '${result.type}' on the human-answer path`,
+        detail: { result_type: result.type },
+      });
+  }
 }
 
 // Advance past the satisfied spawn / fanout stage once its pending set
@@ -279,32 +386,4 @@ async function mergeFileColumn(
     `UPDATE pipeline_state SET ${column} = ? WHERE id = 1`,
     [JSON.stringify(merged)],
   );
-}
-
-interface PendingUserAnswer {
-  gate: string;
-  gate_event_id?: string;
-}
-
-function parsePendingUserAnswer(raw: unknown): PendingUserAnswer | null {
-  if (raw === null || raw === undefined) return null;
-  const text = typeof raw === "string" ? raw : String(raw);
-  if (text.length === 0) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const obj = parsed as Record<string, unknown>;
-  const gate = typeof obj["gate"] === "string" ? (obj["gate"] as string) : null;
-  if (gate === null) return null;
-  const out: PendingUserAnswer = { gate };
-  if (typeof obj["gate_event_id"] === "string") {
-    out.gate_event_id = obj["gate_event_id"] as string;
-  }
-  return out;
 }

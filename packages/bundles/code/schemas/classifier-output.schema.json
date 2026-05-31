@@ -4,12 +4,17 @@
   "title": "Classifier-agent output (v2.2.5 Item 9 + v2.2.6 C4 stack/change_kind extension)",
   "description": "Structured JSON the classifier-agent emits in the context phase. Consumed by the classifier step which writes the fields into state.decisions + state.task_short. v2.2.6 extends the schema with `stack` and `change_kind` fields — the auto-spawn activation lands in v2.2.7 Item 1; this commit ships the schema substrate only.",
   "type": "object",
-  "required": ["schema_version", "agent", "task_short", "refs_to_load", "security_needed", "antipattern_rules_applicable"],
+  "required": ["schema_version", "agent", "task_short", "refs_to_load", "security_needed", "antipattern_rules_applicable", "complexity"],
   "additionalProperties": false,
   "properties": {
     "schema_version": { "type": "string", "enum": ["1.0", "1.1"] },
     "agent": { "type": "string", "const": "classifier" },
     "task_id": { "type": ["string", "null"] },
+    "complexity": {
+      "type": "string",
+      "enum": ["simple", "medium", "complex"],
+      "description": "Scope assessment of the actual change (NOT brief length): the signal the engine uses to pick the flow — `simple` routes to a lean flow (single reviewer, no fanout), `complex` to the full panel. Always emit one; this overrides the deterministic length seed."
+    },
     "task_short": {
       "type": ["string", "null"],
       "description": "Short kebab-case slug summarising the task — used for filenames, branch names, commit subjects.",

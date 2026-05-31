@@ -1561,3 +1561,110 @@ describe("loadBundle — ProviderRegistry.resolve", () => {
     );
   });
 });
+
+// ============================================================================
+// complexity_flows — the shared-prefix invariant (C1b)
+// ============================================================================
+
+describe("loadBundle — complexity_flows shared-prefix invariant", () => {
+  let projectDir: string;
+  beforeEach(() => { projectDir = freshProject(); });
+  afterEach(() => cleanup(projectDir));
+
+  // Three flows that share the [init, classify, classify-agent] prefix and
+  // diverge after, plus one that breaks the prefix at index 0.
+  function flowFixtureBundle(map: Record<string, string>, afterStage = "classify-agent"): Bundle {
+    const base = makeBundle({
+      stages: {
+        init: stepStage({ name: "init" }),
+        classify: stepStage({ name: "classify" }),
+        "classify-agent": stepStage({ name: "classify-agent" }),
+        "plan-m": stepStage({ name: "plan-m" }),
+        "plan-s": stepStage({ name: "plan-s" }),
+        "plan-b": stepStage({ name: "plan-b" }),
+      },
+      flows: {
+        medium: ["init", "classify", "classify-agent", "plan-m"],
+        simple: ["init", "classify", "classify-agent", "plan-s"],
+        // 'bad' breaks the shared prefix — classify before init at index 0.
+        bad: ["classify", "init", "classify-agent", "plan-b"],
+      },
+      default_flow: "medium",
+    });
+    return {
+      ...base,
+      complexity_flows: { decision_key: "complexity", after_stage: afterStage, map },
+    };
+  }
+
+  it("loads a map whose flows all share the prefix up to after_stage", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, makeManifest(), now);
+
+    const registry = await loadBundle({
+      bundle: flowFixtureBundle({ simple: "simple", medium: "medium" }),
+      project_dir: projectDir,
+      providers: [stubProvider()],
+      now,
+    });
+    assert.ok(registry.bundle.complexity_flows !== undefined);
+    assert.equal(registry.bundle.complexity_flows?.map["simple"], "simple");
+  });
+
+  it("refuses a map whose flow breaks the shared prefix (COMPLEXITY_FLOW_PREFIX_MISMATCH)", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, makeManifest(), now);
+
+    await assert.rejects(
+      loadBundle({
+        bundle: flowFixtureBundle({ simple: "bad", medium: "medium" }),
+        project_dir: projectDir,
+        providers: [stubProvider()],
+        now,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError);
+        assert.equal((err as KernelError).code, "COMPLEXITY_FLOW_PREFIX_MISMATCH");
+        return true;
+      },
+    );
+  });
+
+  it("refuses a map pointing at an unregistered flow (COMPLEXITY_FLOW_UNKNOWN)", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, makeManifest(), now);
+
+    await assert.rejects(
+      loadBundle({
+        bundle: flowFixtureBundle({ simple: "ghost" }),
+        project_dir: projectDir,
+        providers: [stubProvider()],
+        now,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError);
+        assert.equal((err as KernelError).code, "COMPLEXITY_FLOW_UNKNOWN");
+        return true;
+      },
+    );
+  });
+
+  it("refuses an after_stage not present in default_flow (COMPLEXITY_FLOW_AFTER_STAGE_UNKNOWN)", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, makeManifest(), now);
+
+    await assert.rejects(
+      loadBundle({
+        bundle: flowFixtureBundle({ simple: "simple" }, "nonexistent-stage"),
+        project_dir: projectDir,
+        providers: [stubProvider()],
+        now,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError);
+        assert.equal((err as KernelError).code, "COMPLEXITY_FLOW_AFTER_STAGE_UNKNOWN");
+        return true;
+      },
+    );
+  });
+});

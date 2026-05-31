@@ -18,6 +18,7 @@ import { getKernelTx } from "../fsm.js";
 import { resolveGatePolicy } from "../gate-policy.js";
 import { makeGateEventId } from "../ids.js";
 import { buildPolicyContext } from "../policies/index.js";
+import { assertVocabKnown } from "../vocabularies.js";
 import type { StageContext } from "../types/context.js";
 import type { GatePolicyResult } from "../types/policy.js";
 import type { GateStage, StageResult } from "../types/plugins.js";
@@ -75,10 +76,17 @@ export async function interpretGate(
   }
 
   // Auto path: synthesize a UserAnswer the bundle's on_resume can
-  // act on. The gate_decision audit + the gate-row write land via
-  // the user-answer delivery path (handled out of this interpreter
-  // — alongside the answer-delivery surface); the on_resume return
-  // value drives the FSM here.
+  // act on. An auto-decided gate never takes the user-answer delivery
+  // path, so the `gates` row + audit are written HERE (mirroring the
+  // human path's row) — otherwise an auto-approved / auto-rejected gate
+  // would leave a counter but no audit/display row. `decided_by` is
+  // validated against the registered decider vocabulary, the same
+  // insert-time discipline the human path applies. The on_resume return
+  // value drives the FSM below.
+  const autoStatus = decision.type === "auto-approve" ? "auto-approved" : "auto-rejected";
+  assertVocabKnown(ctx.registry.vocabularies.decided_by, "auto-policy", "decided_by");
+  await writeAutoGateRow(getKernelTx(ctx), stage.name, autoStatus, decision.feedback ?? null, ctx.now);
+
   const answer: UserAnswer = decision.type === "auto-approve"
     ? { decision: "accept" }
     : autoRejectAnswer(decision);
@@ -92,6 +100,27 @@ export async function interpretGate(
     return { type: "walk_back_to", step: stage.name, reason: "auto-reject without bundle-supplied on_resume" };
   }
   return stage.on_resume(ctx.state, answer, ctx);
+}
+
+// Record the auto-decided gate row inside the gate tx. UPSERT on the
+// gate name (a re-entered gate that flips its auto verdict overwrites the
+// prior row) so a walk-back loop leaves one current row per gate, the
+// same shape the human path's UPSERT produces.
+async function writeAutoGateRow(
+  tx: Transaction,
+  gate: string,
+  status: "auto-approved" | "auto-rejected",
+  feedback: string | null,
+  now: string,
+): Promise<void> {
+  await tx.exec(
+    "INSERT INTO gates (name, status, decided_by, feedback, decided_at) " +
+      "VALUES (?, ?, 'auto-policy', ?, ?) " +
+      "ON CONFLICT(name) DO UPDATE SET " +
+      "status = excluded.status, decided_by = excluded.decided_by, " +
+      "feedback = excluded.feedback, decided_at = excluded.decided_at",
+    [gate, status, feedback, now],
+  );
 }
 
 // Increment the per-role auto-rejection counter. The row is seeded on the

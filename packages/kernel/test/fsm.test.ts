@@ -1442,6 +1442,390 @@ function phaseStatusOf(state: PipelineState, name: string): string | undefined {
   return state.phases.find((p) => p.name === name)?.status;
 }
 
+// ============================================================================
+// W1 — auto-decided gates write a `gates` row
+// ============================================================================
+
+describe("runFSM — auto-gate row (W1)", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    _resetInvariantsForTest();
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  it("an auto-approved gate writes a gates row with status + decided_by", async () => {
+    const stages: Record<string, Stage> = {
+      g1: {
+        kind: "gate",
+        name: "g1",
+        phase: "p1",
+        message: () => "ok?",
+        valid_answers: () => ({ options: [] }),
+      },
+      finalize: { kind: "finalize", name: "finalize" },
+    };
+    const registry = buildRegistry({
+      stages,
+      flow: ["g1", "finalize"],
+      policies: { human: autoApprovePolicyFactory },
+    });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    const out = await runFSM(state, registry);
+    assert.equal(out.directive.kind, "complete");
+
+    const final = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    const gate = final.gates["g1"];
+    assert.ok(gate, "auto-approved gate must leave a gates row");
+    assert.equal(gate?.status, "auto-approved");
+    assert.equal(gate?.decided_by, "auto-policy");
+  });
+
+  it("an auto-rejected gate writes a gates row with status auto-rejected", async () => {
+    const stages: Record<string, Stage> = {
+      g1: {
+        kind: "gate",
+        name: "g1",
+        phase: "p1",
+        message: () => "ok?",
+        valid_answers: () => ({ options: [] }),
+        // Advance on the auto-reject so the test does not spin the
+        // walk-back loop — we only care that the row landed.
+        on_resume: async () => ({ type: "advance" as const }),
+      },
+      finalize: { kind: "finalize", name: "finalize" },
+    };
+    const registry = buildRegistry({
+      stages,
+      flow: ["g1", "finalize"],
+      policies: { human: autoRejectRevisePolicyFactory },
+    });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    await runFSM(state, registry);
+
+    const final = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    const gate = final.gates["g1"];
+    assert.ok(gate, "auto-rejected gate must leave a gates row");
+    assert.equal(gate?.status, "auto-rejected");
+    assert.equal(gate?.decided_by, "auto-policy");
+  });
+});
+
+// ============================================================================
+// W2 — event-Step ops are mirrored to the in-memory snapshot
+// ============================================================================
+
+describe("runFSM — event-Step op mirror (W2)", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    _resetInvariantsForTest();
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  it("an event-Step's set_decision is visible to a later same-pass stage", async () => {
+    const stages: Record<string, Stage> = {
+      // Fires on before-gate, sets a decision via the scratch façade.
+      "evt-writer": {
+        kind: "step",
+        name: "evt-writer",
+        position: "event",
+        event: "before-gate",
+        effects: [{ kind: "decisions.set", key: "evt_flag" }],
+        run: async (_s, ctx) => {
+          ctx.tx.set_decision?.("evt_flag", "set");
+        },
+      },
+      g1: {
+        kind: "gate",
+        name: "g1",
+        phase: "p1",
+        message: () => "ok?",
+        valid_answers: () => ({ options: [] }),
+      },
+      // Later positional stage: records what it saw of the event-Step write.
+      reader: {
+        kind: "step",
+        name: "reader",
+        phase: "p1",
+        position: "positional",
+        effects: [{ kind: "decisions.set", key: "reader_saw" }],
+        run: async (_s, ctx) => {
+          if (ctx.state.decisions["evt_flag"] === "set") {
+            ctx.tx.set_decision?.("reader_saw", "yes");
+          }
+        },
+      },
+      finalize: { kind: "finalize", name: "finalize" },
+    };
+    const registry = buildRegistry({
+      stages,
+      flow: ["g1", "reader", "finalize"],
+      policies: { human: autoApprovePolicyFactory },
+    });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    await runFSM(state, registry);
+
+    const final = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    // The before-gate event-Step set evt_flag; the reader stage one tick
+    // later saw it (only possible if event-Step ops are mirrored onto the
+    // in-memory snapshot — reverting the mirror leaves reader_saw unset).
+    assert.equal(final.decisions["evt_flag"], "set");
+    assert.equal(final.decisions["reader_saw"], "yes");
+  });
+});
+
+// ============================================================================
+// F1 — fanout iteration budget
+// ============================================================================
+
+describe("runFSM — fanout iteration budget (F1)", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    _resetInvariantsForTest();
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  it("a fanout re-entered at its budget takes on_exhaustion (audit-only) instead of re-spawning", async () => {
+    const stages: Record<string, Stage> = {
+      f1: {
+        kind: "fanout",
+        name: "f1",
+        phase: "p1",
+        agents: ["a1"],
+        iteration_budget: { kind: "attempt", max_iterations: 2, on_exhaustion: "audit-only" },
+      } as FanoutStage,
+      finalize: { kind: "finalize", name: "finalize" },
+    };
+    const registry = buildRegistry({
+      stages,
+      flow: ["f1", "finalize"],
+      agents: [makeAgent("a1")],
+    });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+    // The fanout has already run its 2 allowed rounds.
+    state.driver.scratch = { fanout_iter_f1: 2 };
+
+    const out = await runFSM(state, registry);
+    // audit-only → advance past the fanout (no shuttle-batch) to finalize.
+    assert.equal(out.directive.kind, "complete");
+
+    const final = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(final.pending_agents.length, 0, "exhausted fanout must not spawn");
+  });
+
+  it("an under-budget fanout increments its scratch counter and spawns", async () => {
+    const stages: Record<string, Stage> = {
+      f1: {
+        kind: "fanout",
+        name: "f1",
+        phase: "p1",
+        agents: ["a1"],
+        iteration_budget: { kind: "attempt", max_iterations: 2, on_exhaustion: "audit-only" },
+      } as FanoutStage,
+    };
+    const registry = buildRegistry({
+      stages,
+      flow: ["f1"],
+      agents: [makeAgent("a1")],
+    });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    const out = await runFSM(state, registry);
+    assert.equal(out.directive.kind, "shuttle-batch");
+
+    const final = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(
+      final.driver.scratch["fanout_iter_f1"],
+      1,
+      "first fanout entry must bump the iteration counter to 1",
+    );
+  });
+
+  it("a fanout with on_exhaustion=human halts at its budget instead of spawning", async () => {
+    const stages: Record<string, Stage> = {
+      f1: {
+        kind: "fanout",
+        name: "f1",
+        phase: "p1",
+        agents: ["a1"],
+        iteration_budget: { kind: "attempt", max_iterations: 1, on_exhaustion: "human" },
+      } as FanoutStage,
+    };
+    const registry = buildRegistry({
+      stages,
+      flow: ["f1"],
+      agents: [makeAgent("a1")],
+    });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+    state.driver.scratch = { fanout_iter_f1: 1 };
+
+    const out = await runFSM(state, registry);
+    assert.equal(out.directive.kind, "error");
+    if (out.directive.kind === "error") {
+      assert.equal(out.directive.code, "FANOUT_ITERATION_BUDGET_EXHAUSTED");
+    }
+  });
+});
+
+// ============================================================================
+// H1 — human answers honor the gate's on_resume
+// ============================================================================
+
+describe("runFSM — human gate on_resume (H1)", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    _resetInvariantsForTest();
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  // Walk the FSM to its parked human gate, returning the issued event id.
+  // runFSM advances step_index only in memory (the transport persists it
+  // after the tick); mirror that here so the delivery path's loadState sees
+  // the parked gate position, not the seeded 0.
+  async function parkAtGate(registry: Registry, state: PipelineState): Promise<string> {
+    const out = await runFSM(state, registry);
+    assert.equal(out.directive.kind, "ask-user", "expected the gate to park for a human");
+    await withStateTransaction(projectDir, captureNow(), (tx) =>
+      tx.exec("UPDATE driver_state SET step_index = ? WHERE id = 1", [state.driver.step_index]),
+    );
+    return out.directive.kind === "ask-user" ? out.directive.gate_event_id : "";
+  }
+
+  function gateResume(): GateStage["on_resume"] {
+    return async (_s, answer): Promise<StageResult> => {
+      if (answer.decision === "accept") return { type: "advance" };
+      if (answer.reject_intent === "abandon") {
+        return {
+          type: "complete",
+          directive: { task_id: _s.task_id, verdict: "rejected", summary: "abandoned by human" },
+        };
+      }
+      return { type: "walk_back_to", step: "plan-x", reason: "revise" };
+    };
+  }
+
+  function buildGateRegistry(): Registry {
+    const stages: Record<string, Stage> = {
+      m1: { kind: "step", name: "m1", phase: "p1", position: "positional", effects: [] },
+      "plan-x": { kind: "step", name: "plan-x", phase: "p1", position: "positional", effects: [] },
+      "g-plan": {
+        kind: "gate",
+        name: "g-plan",
+        phase: "p1",
+        message: () => "Approve the plan?",
+        valid_answers: () => ({ options: [] }),
+        on_resume: gateResume(),
+      },
+      finalize: { kind: "finalize", name: "finalize" },
+    };
+    // Default human policy parks at the gate.
+    return buildRegistry({ stages, flow: ["m1", "plan-x", "g-plan", "finalize"] });
+  }
+
+  it("human revise walks back (step_index regresses), NOT advances", async () => {
+    const registry = buildGateRegistry();
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    const gid = await parkAtGate(registry, state);
+    // Parked at g-plan (index 2).
+    assert.equal(state.driver.step_index, 2);
+
+    await withStateTransaction(projectDir, captureNow(), (tx) =>
+      deliverContinue(tx, {
+        input: { type: "user-answer", gate_event_id: gid, decision: "reject", reject_intent: "revise", message: "redo" },
+        driver_state_id: state.driver_state_id,
+        registry,
+      }),
+    );
+
+    const after = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    // Walked back to plan-x (index 1) — NOT advanced to 3.
+    assert.equal(after.driver.step_index, 1);
+    assert.equal(after.driver.pending_user_answer, null);
+    assert.equal(after.gates["g-plan"]?.status, "rejected");
+  });
+
+  it("human abandon completes rejected, NOT accepted", async () => {
+    const registry = buildGateRegistry();
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    const gid = await parkAtGate(registry, state);
+
+    await withStateTransaction(projectDir, captureNow(), (tx) =>
+      deliverContinue(tx, {
+        input: { type: "user-answer", gate_event_id: gid, decision: "reject", reject_intent: "abandon" },
+        driver_state_id: state.driver_state_id,
+        registry,
+      }),
+    );
+
+    const after = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(after.status, "completed");
+    assert.equal(after.verdict, "rejected");
+    assert.notEqual(after.verdict, "accepted");
+    // Phases swept terminal so INV_007 held on commit.
+    assert.ok(after.phases.every((p) => p.status === "completed" || p.status === "skipped"));
+  });
+
+  it("human accept advances past the gate", async () => {
+    const registry = buildGateRegistry();
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    const gid = await parkAtGate(registry, state);
+
+    await withStateTransaction(projectDir, captureNow(), (tx) =>
+      deliverContinue(tx, {
+        input: { type: "user-answer", gate_event_id: gid, decision: "accept" },
+        driver_state_id: state.driver_state_id,
+        registry,
+      }),
+    );
+
+    const after = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(after.driver.step_index, 3, "accept advances g-plan (index 2) → 3");
+    assert.equal(after.gates["g-plan"]?.status, "approved");
+  });
+
+  it("replaying the same user-answer is a no-op (no double walk-back)", async () => {
+    const registry = buildGateRegistry();
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    const gid = await parkAtGate(registry, state);
+
+    const deliver = () =>
+      withStateTransaction(projectDir, captureNow(), (tx) =>
+        deliverContinue(tx, {
+          input: { type: "user-answer", gate_event_id: gid, decision: "reject", reject_intent: "revise" },
+          driver_state_id: state.driver_state_id,
+          registry,
+        }),
+      );
+    await deliver();
+    const afterFirst = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    await deliver(); // replay — ledger row already present
+    const afterReplay = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+
+    assert.equal(afterFirst.driver.step_index, 1);
+    assert.equal(afterReplay.driver.step_index, 1, "replay must not walk back a second time");
+  });
+});
+
 // Suppress unused-import warnings for fixture-side types that the
 // type system needs for the test fixtures above but the runtime
 // path doesn't reference directly.

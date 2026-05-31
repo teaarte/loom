@@ -719,3 +719,145 @@ describe("first-run hardening — end to end", () => {
     }
   });
 });
+
+// ============================================================================
+// C1 — complexity → flow selection (the classifier's signal routes the flow)
+// ============================================================================
+
+// Drive a task to terminal, returning the classifier-supplied `complexity`
+// in its output so the kernel's post-classify flow switch keys on it. Every
+// other spawn gets the canonical clean output.
+async function driveWithComplexity(
+  h: Harness,
+  task: string,
+  uuid: string,
+  complexity: "simple" | "medium" | "complex",
+): Promise<{ trace: string[]; verdict: string | null }> {
+  const deps = { resolveRegistry: assembleRegistry, allowlistPath: h.allowlistPath };
+  const run = createRunTaskTool(deps);
+  const cont = createContinueTaskTool(deps);
+
+  const classifierOutput = JSON.stringify({
+    schema_version: "1.1",
+    agent: "classifier",
+    task_short: "fixture",
+    complexity,
+    refs_to_load: [],
+    security_needed: true,
+    antipattern_rules_applicable: [],
+  });
+
+  const first = await run({ project_dir: h.dir, task, client_idempotency_uuid: uuid });
+  const dsid = first.driver_state_id ?? "";
+  let resp: TransportResponse = first.response;
+  const trace: string[] = [];
+
+  for (let step = 0; step < 120; step++) {
+    if (resp.status === "complete") {
+      trace.push(`complete:${resp.verdict}`);
+      return { trace, verdict: resp.verdict };
+    }
+    if (resp.status === "error") {
+      assert.fail(`loop hit error: ${resp.code} — ${resp.message}; trace=${trace.join(" -> ")}`);
+    }
+    let input: Parameters<ReturnType<typeof createContinueTaskTool>>[0]["input"];
+    if (resp.status === "spawn-agent") {
+      trace.push(`spawn:${resp.agent}`);
+      input = {
+        type: "agent-result",
+        agent_run_id: resp.agent_run_id,
+        agent_output: resp.agent === "classifier" ? classifierOutput : CANONICAL_AGENT_OUTPUT,
+      };
+    } else if (resp.status === "spawn-agents-parallel") {
+      trace.push(`parallel:[${resp.spawns.map((s) => s.agent).join(",")}]`);
+      input = {
+        type: "agents-results",
+        results: resp.spawns.map((s) => ({
+          agent_run_id: s.agent_run_id,
+          agent_output: CANONICAL_AGENT_OUTPUT,
+        })),
+      };
+    } else if (resp.status === "ask-user") {
+      trace.push(`gate:${resp.gate}`);
+      input = { type: "user-answer", gate_event_id: resp.gate_event_id, decision: "accept" };
+    } else {
+      throw new Error(`driveWithComplexity cannot answer status '${(resp as { status: string }).status}'`);
+    }
+    const next = await cont({ project_dir: h.dir, driver_state_id: dsid, input });
+    resp = next.response;
+  }
+  assert.fail(`driveWithComplexity did not terminate; trace=${trace.join(" -> ")}`);
+}
+
+function readComplexity(dir: string): unknown {
+  const db = openDb(dir);
+  const row = db.prepare("SELECT decisions FROM pipeline_state WHERE id = 1").get() as
+    | { decisions: string | null }
+    | undefined;
+  const parsed = JSON.parse(row?.decisions ?? "{}") as Record<string, unknown>;
+  return parsed["complexity"];
+}
+
+describe("complexity → flow selection (C1)", () => {
+  // A LONG (>400 char) but mechanical brief: the deterministic length seed
+  // (`len > 400` → complex) would route this to the full panel, but the
+  // classifier judges the actual change `simple`. Proves the SIGNAL — not
+  // the plumbing — routes the flow.
+  const VERBOSE_ROUTINE_TASK =
+    "Update the copyright header year from 2025 to 2026 in the license banner comment at the top of " +
+    "every source file in the utils directory. This is a purely mechanical text substitution: open each " +
+    "file, find the single comment line that reads the old year, replace the four digits with the new " +
+    "year, and save. No logic changes, no behavioral changes, no new dependencies, no test changes are " +
+    "expected — only the comment banner is touched across the listed files in that one directory.";
+
+  it("a verbose-but-routine task the classifier judges `simple` runs the lean flow to complete", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("c1-simple");
+    try {
+      assert.ok(VERBOSE_ROUTINE_TASK.length > 400, "the task must be verbose enough to seed `complex`");
+      const res = await driveWithComplexity(h, VERBOSE_ROUTINE_TASK, "c1-simple-1", "simple");
+
+      assert.equal(res.verdict, "accepted", `should complete accepted; trace=${res.trace.join(" -> ")}`);
+      // The agent's `simple` overrode the length seed and routed the LEAN
+      // flow: no classify/plan gates, and NO reviewer fanout at all.
+      assert.equal(readComplexity(h.dir), "simple", "the classifier's complexity must win over the seed");
+      assert.ok(!res.trace.includes("gate:gate-classify"), `lean flow has no gate-classify; trace=${res.trace.join(" -> ")}`);
+      assert.ok(!res.trace.includes("gate:gate-plan"), `lean flow has no gate-plan; trace=${res.trace.join(" -> ")}`);
+      assert.ok(
+        !res.trace.some((t) => t.startsWith("parallel:")),
+        `lean flow runs no fanout; trace=${res.trace.join(" -> ")}`,
+      );
+      // It still reviews (single logic-reviewer) and gates final + finishes.
+      assert.ok(res.trace.includes("spawn:logic-reviewer"), "lean flow runs the single reviewer");
+      assert.ok(res.trace.includes("gate:gate-final"), "lean flow still gates the final");
+      // The heavy panel-only agents never spawn.
+      assert.ok(!res.trace.includes("spawn:architect"), "lean flow does not run the architect");
+      assert.ok(!res.trace.includes("spawn:code-analyzer"), "lean flow does not run enrich/code-analyzer");
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("a task the classifier judges `complex` runs the full panel to complete", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("c1-complex");
+    try {
+      const res = await driveWithComplexity(h, "small tidy", "c1-complex-1", "complex");
+
+      assert.equal(res.verdict, "accepted", `should complete accepted; trace=${res.trace.join(" -> ")}`);
+      assert.equal(readComplexity(h.dir), "complex");
+      // The full panel: all three gates + at least one reviewer fanout + the
+      // complexity-gated architect (applies_to complexity==='complex').
+      assert.ok(res.trace.includes("gate:gate-classify"), `complex runs gate-classify; trace=${res.trace.join(" -> ")}`);
+      assert.ok(res.trace.includes("gate:gate-plan"), `complex runs gate-plan; trace=${res.trace.join(" -> ")}`);
+      assert.ok(res.trace.includes("gate:gate-final"), `complex runs gate-final; trace=${res.trace.join(" -> ")}`);
+      assert.ok(
+        res.trace.some((t) => t.startsWith("parallel:")),
+        `complex runs a reviewer fanout; trace=${res.trace.join(" -> ")}`,
+      );
+      assert.ok(res.trace.includes("spawn:architect"), `complex runs the architect; trace=${res.trace.join(" -> ")}`);
+    } finally {
+      h.dispose();
+    }
+  });
+});

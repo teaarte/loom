@@ -84,6 +84,17 @@ export async function runFSM(
     const now: NowToken = opts.replay_now_token ?? captureNow();
     state.now = now;
 
+    // Complexity → flow: once the flow has advanced past the bundle's
+    // declared switch boundary (e.g. after classify-agent, where the
+    // classifier's complexity has merged into decisions), re-select the
+    // active flow ONCE from the bundle's complexity_flows map. Switching
+    // here — before the flow lookup — means the rest of this tick runs the
+    // chosen flow; the change is persisted in the stage tx below so it
+    // survives the host round-trip. The shared-prefix invariant (verified
+    // at load) keeps step_index aligned across the switch.
+    const switchedFlow = selectComplexityFlow(state, registry);
+    if (switchedFlow !== null) state.driver.flow_name = switchedFlow;
+
     const flow = registry.flows.get(state.driver.flow_name);
     if (!flow) {
       return {
@@ -142,6 +153,15 @@ export async function runFSM(
         // Drive the phase walk for the stage about to run: settle the
         // phase the flow just left and open the current one, co-committed
         // with this stage's effects.
+        // Persist a complexity-driven flow switch co-committed with this
+        // stage's effects (driver_state is the FSM loop's to own — bundle
+        // code never writes flow_name). Runs before the phase walk so the
+        // walk reads the chosen flow.
+        if (switchedFlow !== null) {
+          await tx.exec("UPDATE driver_state SET flow_name = ? WHERE id = 1", [
+            switchedFlow,
+          ]);
+        }
         await advancePhaseProgress(
           tx,
           state,
@@ -150,7 +170,13 @@ export async function runFSM(
           registry.stages,
         );
         const { ctx, ops } = await buildStageContext(state, registry, tx);
-        await dispatchEventSteps(`before-${stage.kind}`, ctx, tx, ops, activePhase);
+        const eventOps = await dispatchEventSteps(
+          `before-${stage.kind}`,
+          ctx,
+          tx,
+          ops,
+          activePhase,
+        );
         const result = await interpretStage(stage, state, ctx);
         if (result.type === "ask_user") {
           // A human-required gate parks the tick until a user answers.
@@ -167,7 +193,10 @@ export async function runFSM(
         // A throw here aborts the outer tx — invariants on commit
         // catch what mutators alone cannot.
         await applyBundleOps(tx, ops, activePhase);
-        appliedOps = ops.slice();
+        // Mirror BOTH the event-Step ops drained above and the
+        // interpreter's ops — an event-position Step's write must reach a
+        // later same-pass stage just as an interpreter Step's does.
+        appliedOps = [...eventOps, ...ops];
         ops.length = 0;
         return result;
       },
@@ -292,6 +321,34 @@ export async function interpretStage(
       return _exhaustive;
     }
   }
+}
+
+// Complexity → flow selection. Returns the flow name to switch to, or null
+// when no switch applies. Fires exactly when the flow position reaches the
+// post-`after_stage` boundary (step_index === indexOf(after_stage)+1) and
+// the bundle's complexity_flows map routes the current decision value to a
+// DIFFERENT, registered flow. Idempotent: once flow_name equals the target
+// the map returns the same name → no re-switch, and a walk-back never
+// returns step_index below the boundary (walk-backs target post-divergence
+// stages). The shared-prefix invariant (loader) guarantees switching at the
+// boundary keeps step_index aligned.
+function selectComplexityFlow(
+  state: PipelineState,
+  registry: Registry,
+): string | null {
+  const cf = registry.bundle.complexity_flows;
+  if (cf === undefined) return null;
+  const currentFlow = registry.flows.get(state.driver.flow_name);
+  if (currentFlow === undefined) return null;
+  const switchIndex = currentFlow.indexOf(cf.after_stage) + 1;
+  if (switchIndex === 0) return null; // after_stage not in this flow
+  if (state.driver.step_index !== switchIndex) return null;
+  const value = state.decisions[cf.decision_key];
+  if (typeof value !== "string") return null;
+  const target = cf.map[value];
+  if (target === undefined || target === state.driver.flow_name) return null;
+  if (!registry.flows.has(target)) return null;
+  return target;
 }
 
 // Mirror committed BundleOps onto the in-memory PipelineState so a later

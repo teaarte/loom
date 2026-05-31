@@ -114,6 +114,10 @@ export function createContinueTaskTool(
           driver_state_id: driverStateId,
           resolveOutputKind: (agent) => registry.agents.get(agent)?.output_kind,
           vocabularies: registry.vocabularies,
+          // The human-answer path resolves the gate's on_resume + the active
+          // flow from here, so a revise walks back and an abandon completes
+          // rejected instead of advancing like an accept.
+          registry,
         });
         const taskId = await readTaskId(tx);
         await writeAuditRow(tx, "pipeline_continue_task", taskId, driverStateId, {

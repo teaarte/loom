@@ -108,6 +108,44 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
     assert.ok(registry.vocabularies.gate_roles.has("classify"));
   });
 
+  it("declares a complexity→flow map and a lean `simple` flow (loads cleanly past the prefix invariant)", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, now);
+
+    const registry = await loadBundle({
+      bundle: codeBundle,
+      bundle_source_dir: PKG_ROOT,
+      project_dir: projectDir,
+      providers: [shuttleStub()],
+      now,
+    });
+
+    // The map routes complexity → flow, switching after classify-agent.
+    const cf = registry.bundle.complexity_flows;
+    assert.ok(cf !== undefined, "bundle must declare complexity_flows");
+    assert.equal(cf?.decision_key, "complexity");
+    assert.equal(cf?.after_stage, "classify-agent");
+    assert.deepEqual(cf?.map, { simple: "simple", medium: "medium", complex: "complex" });
+
+    // The three flows share the [initialize, classify, classify-agent]
+    // prefix (the invariant the loader enforced to admit this bundle).
+    const sharedPrefix = ["initialize", "classify", "classify-agent"];
+    for (const name of ["simple", "medium", "complex"]) {
+      assert.deepEqual(
+        registry.flows.get(name)?.slice(0, 3),
+        sharedPrefix,
+        `flow '${name}' must share the switch prefix`,
+      );
+    }
+
+    // The `simple` flow is genuinely lean: a single reviewer, NO fanout.
+    const simple = registry.flows.get("simple") ?? [];
+    assert.ok(simple.includes("review-light"), "lean flow runs the single review-light spawn");
+    assert.ok(!simple.includes("review"), "lean flow drops the review fanout");
+    assert.ok(!simple.includes("plan-review"), "lean flow drops the plan-review fanout");
+    assert.ok(!simple.includes("gate-classify"), "lean flow drops the classify gate");
+  });
+
   it("materializes the declared spawn-context assets and injects them into the classifier prompt", async () => {
     const now = captureNow();
     await installManifest(projectDir, now);

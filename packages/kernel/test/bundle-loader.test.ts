@@ -40,6 +40,7 @@ import type {
 } from "../src/types/policy.js";
 import type { LLMProvider } from "../src/types/provider.js";
 import type { GateRole } from "../src/types/row-types.js";
+import type { PipelineState } from "../src/types/state.js";
 
 // ============================================================================
 // Fixtures
@@ -254,6 +255,92 @@ describe("loadBundle — happy path", () => {
     assert.ok(registry.policyFactories.has("on-blockers"));
     assert.ok(registry.policyFactories.has("auto"));
     assert.ok(registry.policyFactories.has("custom-rule"));
+  });
+});
+
+// ============================================================================
+// providers_config — per-agent / per-phase provider + model routing
+// ============================================================================
+
+describe("loadBundle — providers_config routing", () => {
+  let projectDir: string;
+  beforeEach(() => { projectDir = freshProject(); });
+  afterEach(() => cleanup(projectDir));
+
+  const anyState = {} as unknown as PipelineState;
+
+  it("routes a per-agent provider + tier model; an unrouted agent falls to the default", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, makeManifest(), now);
+
+    const bundle = makeBundle({
+      agents: [noopAgent("classifier"), noopAgent("reviewer")],
+      stages: {
+        classify: spawnStage("classify", "classifier"),
+        review: spawnStage("review", "reviewer"),
+      },
+      flows: { default: ["classify", "review"] },
+    });
+
+    const registry = await loadBundle({
+      bundle,
+      project_dir: projectDir,
+      providers: [stubProvider("fast"), stubProvider("deep")],
+      providers_config: {
+        agent_routing: { reviewer: { provider: "deep", tier: "big" } },
+        tier_aliases: { big: { model: "deep-xl" } },
+        default_provider: "fast",
+      },
+      now,
+    });
+
+    // reviewer → routed provider + the tier's model.
+    assert.equal(registry.providers.resolve("reviewer", anyState).name, "deep");
+    assert.equal(registry.providers.resolveModel?.("reviewer", anyState), "deep-xl");
+    // classifier → default_provider, no tier → null model (spawn falls back
+    // to the agent default).
+    assert.equal(registry.providers.resolve("classifier", anyState).name, "fast");
+    assert.equal(registry.providers.resolveModel?.("classifier", anyState), null);
+  });
+
+  it("with no providers_config, every agent resolves to providers[0] (unchanged)", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, makeManifest(), now);
+
+    const registry = await loadBundle({
+      bundle: makeBundle({ agents: [noopAgent("classifier")] }),
+      project_dir: projectDir,
+      providers: [stubProvider("only")],
+      now,
+    });
+
+    assert.equal(registry.providers.resolve("classifier", anyState).name, "only");
+    assert.equal(registry.providers.resolveModel?.("classifier", anyState), null);
+  });
+
+  it("a route to an unregistered provider is refused when that agent resolves", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, makeManifest(), now);
+
+    const registry = await loadBundle({
+      bundle: makeBundle({ agents: [noopAgent("classifier")] }),
+      project_dir: projectDir,
+      providers: [stubProvider("only")],
+      providers_config: {
+        agent_routing: { classifier: { provider: "ghost", tier: "t" } },
+        tier_aliases: { t: { model: "m" } },
+      },
+      now,
+    });
+
+    assert.throws(
+      () => registry.providers.resolve("classifier", anyState),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError);
+        assert.equal((err as KernelError).code, "PROVIDER_NOT_FOUND");
+        return true;
+      },
+    );
   });
 });
 

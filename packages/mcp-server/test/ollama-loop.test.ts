@@ -20,16 +20,21 @@
 //     node --experimental-sqlite --test dist/test/ollama-loop.test.js
 
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { closeDb, type ContinueTaskInput, type ProviderSpawnRequest } from "@loom/kernel";
+import { claudeCodeShuttleProvider } from "@loom/provider-claude-code-shuttle";
 import { ollamaProvider } from "@loom/provider-ollama";
 import type { TransportResponse } from "@loom/transport-types";
 
-import { _resetRegistryCacheForTest, assembleRegistry } from "../src/bootstrap.js";
+import {
+  _resetRegistryCacheForTest,
+  assembleRegistry,
+  createAssembleRegistry,
+} from "../src/bootstrap.js";
 import { createContinueTaskTool, createRunTaskTool } from "../src/index.js";
 
 // Opt-in by an explicit model env var — empty means "skip", so a normal
@@ -152,6 +157,141 @@ describe("ollama loop (opt-in: requires a local Ollama + model)", () => {
         if (resp.status === "complete") {
           assert.equal(resp.verdict, "accepted");
         }
+      } finally {
+        try {
+          closeDb(dir);
+        } catch {
+          /* ignore */
+        }
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    "routes ONLY the classifier to ollama via .claude/providers.json; the rest use the shuttle",
+    { timeout: 900_000 },
+    async (t) => {
+      if (MODEL === "") {
+        t.skip("opt-in — set LOOM_OLLAMA_MODEL=<model> to run on a local model");
+        return;
+      }
+      const avail = await ollamaAvailable();
+      if (!avail.ok) {
+        t.skip(`${avail.reason} — set OLLAMA_HOST / LOOM_OLLAMA_MODEL and pull the model to run`);
+        return;
+      }
+
+      _resetRegistryCacheForTest();
+      const dir = mkdtempSync(join(tmpdir(), "loom-ollama-route-"));
+      const allowlistPath = join(dir, "projects.allow");
+      writeFileSync(allowlistPath, `${realpathSync(dir)}\n`, "utf8");
+
+      // Project routing: classifier → ollama (real model), everything else
+      // → the shuttle default (the host echoes those). The provider SET is
+      // the deployment's choice (injected below); the per-agent mapping is
+      // this project's `.claude/providers.json`.
+      mkdirSync(join(dir, ".claude"), { recursive: true });
+      writeFileSync(
+        join(dir, ".claude", "providers.json"),
+        JSON.stringify({
+          agent_routing: { classifier: { provider: "ollama", tier: "local" } },
+          tier_aliases: { local: { model: MODEL } },
+          default_provider: "claude-code-shuttle",
+        }),
+        "utf8",
+      );
+
+      const resolveRegistry = createAssembleRegistry([
+        claudeCodeShuttleProvider,
+        ollamaProvider,
+      ]);
+      const deps = { resolveRegistry, allowlistPath };
+      const run = createRunTaskTool(deps);
+      const cont = createContinueTaskTool(deps);
+
+      const CANON = JSON.stringify({ verdict: "pass", findings: [] });
+      try {
+        const first = await run({
+          project_dir: dir,
+          task: TASK,
+          client_idempotency_uuid: "ollama-route-1",
+        });
+        const dsid = first.driver_state_id ?? "";
+        let resp: TransportResponse = first.response;
+        const trace: string[] = [];
+        let classifierProvider = "";
+        let classifierModel = "";
+        let classifierSample = "";
+
+        for (let i = 0; i < 80; i++) {
+          if (resp.status === "complete") {
+            trace.push(`complete:${resp.verdict}`);
+            break;
+          }
+          if (resp.status === "error") {
+            assert.fail(`loop hit error: ${resp.code} — ${resp.message}`);
+          }
+
+          let input: ContinueTaskInput;
+          if (resp.status === "spawn-agent") {
+            const sr = resp.spawn_request;
+            const provider = (sr.extras?.["provider"] as string | undefined) ?? "";
+            trace.push(`spawn:${resp.agent}@${provider}`);
+            let out: string;
+            if (provider === "ollama") {
+              // Run the ROUTED model on the raw kernel prompt (A2 supplies
+              // the spawn context; no host-side injection).
+              const r = await ollamaProvider.spawn({
+                agent: resp.agent,
+                agent_run_id: resp.agent_run_id,
+                phase: "context",
+                model: sr.model ?? MODEL,
+                prompt: sr.prompt,
+                extras: { max_tokens: MAX_TOKENS },
+              });
+              if (r.type !== "result") throw new Error(`expected a result, got '${r.type}'`);
+              out = r.output;
+              if (resp.agent === "classifier") {
+                classifierProvider = provider;
+                classifierModel = sr.model ?? "";
+                classifierSample = out.slice(0, 300);
+              }
+            } else {
+              out = CANON; // shuttle-routed agents are echoed by the host
+            }
+            input = { type: "agent-result", agent_run_id: resp.agent_run_id, agent_output: out };
+          } else if (resp.status === "spawn-agents-parallel") {
+            trace.push(`parallel:[${resp.spawns.map((s) => s.agent).join(",")}]`);
+            input = {
+              type: "agents-results",
+              results: resp.spawns.map((s) => ({
+                agent_run_id: s.agent_run_id,
+                agent_output: CANON,
+              })),
+            };
+          } else if (resp.status === "ask-user") {
+            trace.push(`gate:${resp.gate}`);
+            input = { type: "user-answer", gate_event_id: resp.gate_event_id, decision: "accept" };
+          } else {
+            throw new Error(`unexpected status '${(resp as { status: string }).status}'`);
+          }
+
+          const next = await cont({ project_dir: dir, driver_state_id: dsid, input });
+          resp = next.response;
+        }
+
+        console.log(`\n[ollama-route:${MODEL}] classifier provider=${classifierProvider} model=${classifierModel}`);
+        console.log(`trace: ${trace.join(" -> ")}`);
+        console.log(`classifier output (first 300 chars):\n${classifierSample}\n`);
+
+        // The classifier was routed to ollama with the configured model; the
+        // flow still completed (other agents used the shuttle echo).
+        assert.equal(classifierProvider, "ollama", "classifier should route to ollama");
+        assert.equal(classifierModel, MODEL, "classifier directive should carry the routed model");
+        assert.ok(classifierSample.length > 0, "classifier produced real model output");
+        assert.equal(resp.status, "complete", `expected complete; trace=${trace.join(" -> ")}`);
+        if (resp.status === "complete") assert.equal(resp.verdict, "accepted");
       } finally {
         try {
           closeDb(dir);

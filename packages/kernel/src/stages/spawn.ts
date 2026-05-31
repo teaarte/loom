@@ -53,8 +53,15 @@ export async function interpretSpawn(
   await spawnGuard(getKernelTx(ctx), stage.agent, stage.phase);
 
   const agent_run_id = await ctx.begin_spawn(stage.agent, stage.phase);
-  const provider = ctx.resolve_provider(stage.agent);
-  const model = agent.default_model ?? "default";
+  // Provider AND model come from the same route (resolved over agent +
+  // phase), so a routing config can send this agent to a specific provider
+  // and the directive carries the matching model. No route → the bundle
+  // default provider and the agent's own model (then the generic fallback).
+  const provider = ctx.registry.providers.resolve(stage.agent, state, stage.phase);
+  const model =
+    ctx.registry.providers.resolveModel?.(stage.agent, state, stage.phase) ??
+    agent.default_model ??
+    "default";
 
   const extras: Record<string, unknown> = { provider: provider.name };
   if (agent.template_path.length > 0) {

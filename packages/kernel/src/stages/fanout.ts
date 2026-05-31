@@ -64,8 +64,13 @@ export async function interpretFanout(
       fanout_agent_run_id: agent_run_id,
     });
 
-    const provider = ctx.resolve_provider(agentName);
-    const model = agent.default_model ?? "default";
+    // Provider + model from the same route (agent + phase), mirroring the
+    // single-spawn path; falls back to the agent default then the generic.
+    const provider = ctx.registry.providers.resolve(agentName, state, stage.phase);
+    const model =
+      ctx.registry.providers.resolveModel?.(agentName, state, stage.phase) ??
+      agent.default_model ??
+      "default";
 
     const extras: Record<string, unknown> = { provider: provider.name };
     if (agent.template_path.length > 0) {

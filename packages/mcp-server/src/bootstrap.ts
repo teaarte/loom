@@ -26,8 +26,9 @@
 // This lives in the transport package for now; a shared runtime home is
 // the natural next move once a second entrypoint wants the same wiring.
 
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import codeBundle, { codeManifest } from "@loom/bundle-code";
 import {
@@ -35,6 +36,8 @@ import {
   loadBundle,
   openDb,
   reconcileExtensions,
+  type LLMProvider,
+  type ProvidersConfig,
   type Registry,
 } from "@loom/kernel";
 import { claudeCodeShuttleProvider } from "@loom/provider-claude-code-shuttle";
@@ -53,26 +56,58 @@ const bundleSourceDir = dirname(
 // validation fails, which cannot happen for the curated bundle manifest).
 const BUNDLE_MANIFEST_SOURCE = "@loom/bundle-code:manifest";
 
-const registryByProject = new Map<string, Promise<Registry>>();
-
-// Resolve (building + caching on first touch) the FSM registry for a
-// project. Concurrent first calls share one in-flight build via the
-// cached promise.
-export function assembleRegistry(projectDir: string): Promise<Registry> {
-  const key = resolve(projectDir);
-  const cached = registryByProject.get(key);
-  if (cached !== undefined) return cached;
-
-  const building = buildRegistry(projectDir).catch((err: unknown) => {
-    // Evict the rejected build so the next call retries from scratch.
-    registryByProject.delete(key);
-    throw err;
-  });
-  registryByProject.set(key, building);
-  return building;
+// Build a per-project registry resolver over a fixed provider set. The
+// provider SET is a deployment choice the entrypoint owns — the generic
+// server bundles only the zero-config shuttle default; a deployment that
+// wants other backends (a local model, a hosted API) injects them here
+// rather than the server hardcoding every provider package. Per-agent /
+// per-phase routing among the registered set is then a project-level
+// `.claude/providers.json` (read at build).
+//
+// Concurrent first calls share one in-flight build via the cached promise;
+// a rejected build is evicted so a transient failure does not poison later
+// calls.
+export function createAssembleRegistry(
+  providers: LLMProvider[],
+): (projectDir: string) => Promise<Registry> {
+  return makeResolver(providers, new Map<string, Promise<Registry>>());
 }
 
-async function buildRegistry(projectDir: string): Promise<Registry> {
+function makeResolver(
+  providers: LLMProvider[],
+  cache: Map<string, Promise<Registry>>,
+): (projectDir: string) => Promise<Registry> {
+  return function assemble(projectDir: string): Promise<Registry> {
+    const key = resolve(projectDir);
+    const cached = cache.get(key);
+    if (cached !== undefined) return cached;
+
+    const building = buildRegistry(projectDir, providers).catch((err: unknown) => {
+      cache.delete(key);
+      throw err;
+    });
+    cache.set(key, building);
+    return building;
+  };
+}
+
+// The default resolver's cache is module-level so the test seam can clear
+// it; resolvers from `createAssembleRegistry` own private caches.
+const defaultResolverCache = new Map<string, Promise<Registry>>();
+const defaultResolver = makeResolver([claudeCodeShuttleProvider], defaultResolverCache);
+
+// The production resolver the stdio entrypoint injects: zero-config shuttle
+// only. Per-agent provider routing still works for any provider in this
+// set; to route to other backends, an entrypoint builds its own resolver
+// via `createAssembleRegistry([...])`.
+export function assembleRegistry(projectDir: string): Promise<Registry> {
+  return defaultResolver(projectDir);
+}
+
+async function buildRegistry(
+  projectDir: string,
+  providers: LLMProvider[],
+): Promise<Registry> {
   const now = captureNow();
 
   // Open the project DB so kernel migrations apply before the loader
@@ -90,13 +125,35 @@ async function buildRegistry(projectDir: string): Promise<Registry> {
     bundle: codeBundle,
     bundle_source_dir: bundleSourceDir,
     project_dir: projectDir,
-    providers: [claudeCodeShuttleProvider],
+    providers,
+    providers_config: readProvidersConfig(projectDir),
     now,
   });
 }
 
-// Test seam: drop the per-project cache so a suite can rebuild a registry
-// for a reused project path. Not part of the production call surface.
+// Optional per-project provider routing, read from `.claude/providers.json`
+// (the same `.claude/` dir the state DB lives in). Absent → no routing
+// (every agent resolves to the default provider). Present-but-malformed is
+// surfaced as an error rather than silently ignored; the kernel router
+// validates the parsed shape and refuses unknown providers/tiers.
+function readProvidersConfig(projectDir: string): ProvidersConfig | undefined {
+  const path = join(projectDir, ".claude", "providers.json");
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return undefined; // absent → no routing config
+  }
+  try {
+    return JSON.parse(raw) as ProvidersConfig;
+  } catch (err) {
+    throw new Error(`invalid provider routing config at ${path}: ${(err as Error).message}`);
+  }
+}
+
+// Test seam: drop the default resolver's per-project cache so a suite can
+// rebuild a registry for a reused project path. Resolvers built via
+// `createAssembleRegistry` own their own caches (fresh per construction).
 export function _resetRegistryCacheForTest(): void {
-  registryByProject.clear();
+  defaultResolverCache.clear();
 }

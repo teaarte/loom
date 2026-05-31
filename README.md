@@ -29,10 +29,11 @@ whole run is recorded and replayable, and a set of invariants makes certain fail
 rewrite the tests it's being judged by and self-approve.
 
 ```mermaid
-flowchart LR
-    T(["/task …"]) --> C["classify"] --> G1{{"gate · you"}}
-    G1 --> P["plan"] --> G2{{"gate · you"}}
-    G2 --> I["implement"] --> R["review<br/>(agent panel)"] --> V["validate"] --> G3{{"gate · you"}}
+flowchart TB
+    T(["/task …"]) --> C["classify"] --> G1{{"👤 gate"}}
+    G1 --> P["plan"] --> G2{{"👤 gate"}}
+    G2 --> I["implement"] --> R["review · agent panel"]
+    R --> V["validate"] --> G3{{"👤 gate"}}
     G3 --> F(["complete · /done"])
 ```
 
@@ -145,6 +146,41 @@ A new domain is a new bundle (agents + flows + invariants, authored as data). Th
 doesn't change.
 
 ## How it works
+
+The kernel is generic — it knows nothing about code review or any domain. Three
+orthogonal axes plug into it: **bundles** (the domain), **providers** (the LLM backend),
+and **transports** (the wire). Any combination is valid.
+
+```mermaid
+flowchart TB
+    subgraph Transports["🔌 Transports · the wire shape"]
+        direction LR
+        MCP["mcp-server"]
+        CLI["cli"]
+        DMN["daemon · planned"]
+    end
+
+    KERNEL["⚙️ @loomfsm/kernel — generic FSM<br/>(no domain or vendor names)<br/>·<br/>runFSM · 5-variant Stage interpreter<br/>withTransaction · atomic state<br/>invariants · in-tx, rollback on violation<br/>gate-policy dispatcher · policy-as-function<br/>idempotency ledger · replay dedup<br/>NowToken clock-as-data · append-only audit"]
+
+    subgraph Bundles["📦 Bundles · the domain"]
+        direction LR
+        CODE["code"]
+        YOURS["your bundle …"]
+    end
+
+    subgraph Providers["🧠 Providers · the LLM backend"]
+        direction LR
+        SH["claude-code-shuttle"]
+        AN["anthropic-sdk"]
+        OR["openrouter"]
+    end
+
+    Transports ==>|"KernelDirective ⇄ TransportResponse"| KERNEL
+    KERNEL ==> Bundles
+    KERNEL ==> Providers
+```
+
+And the core vocabulary:
 
 - **Stage** — one of five variants (`SpawnStage`, `FanoutStage`, `GateStage`,
   `StepStage`, `FinalizeStage`). A bundle's `flows` map names sequences of stages.

@@ -37,37 +37,84 @@ The principles are constraints, not aspirations. Each one is paired with a way t
 
 ## 3. Architecture — kernel + three plug axes
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  Transports                                 │
-│  (mcp-server · cli · daemon — orthogonal wire shapes)       │
-└──────────────────┬──────────────────────────────────────────┘
-                   │  KernelDirective ⇄ TransportResponse
-                   ▼
-┌─────────────────────────────────────────────────────────────┐
-│                Kernel  (@loomfsm/kernel)                       │
-│                                                             │
-│   runFSM ── Stage interpreter (5 variants)                  │
-│        ├── StateBackend.withTransaction (atomic)            │
-│        ├── HookRunner (post-commit subscribers)             │
-│        ├── Idempotency ledger (replay dedup)                │
-│        ├── Invariants (in-tx assertions)                    │
-│        ├── Gate-policy dispatcher (policy-as-function)      │
-│        ├── NowToken (replay-deterministic clock)            │
-│        └── Audit log (append-only, in-tx)                   │
-└──────┬─────────────────────────────┬────────────────────────┘
-       │                             │
-       ▼                             ▼
-┌──────────────────────┐      ┌──────────────────────────────┐
-│      Bundles         │      │       LLM Providers          │
-│  (domain knowledge)  │      │   (anthropic-sdk · openai ·  │
-│  agents · phases ·   │      │    claude-code-shuttle · …)  │
-│  hooks · invariants  │      │   capability-driven lookup   │
-│  policy resolver     │      └──────────────────────────────┘
-└──────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Transports["🔌 Transports · the wire shape"]
+        direction LR
+        MCP["mcp-server"]
+        CLI["cli"]
+        DMN["daemon · planned"]
+    end
+
+    KERNEL["⚙️ @loomfsm/kernel — generic FSM<br/>(no domain or vendor names)<br/>·<br/>runFSM · 5-variant Stage interpreter<br/>withTransaction · atomic state<br/>invariants · in-tx, rollback on violation<br/>gate-policy dispatcher · policy-as-function<br/>idempotency ledger · replay dedup<br/>NowToken clock-as-data · append-only audit"]
+
+    subgraph Bundles["📦 Bundles · the domain"]
+        direction LR
+        CODE["code"]
+        YOURS["your bundle …"]
+    end
+
+    subgraph Providers["🧠 Providers · the LLM backend"]
+        direction LR
+        SH["claude-code-shuttle"]
+        AN["anthropic-sdk"]
+        OR["openrouter"]
+    end
+
+    Transports <==>|"KernelDirective ⇄ TransportResponse"| KERNEL
+    KERNEL ==> Bundles
+    KERNEL ==> Providers
 ```
 
 The three plug axes — **Bundles**, **Providers**, **Transports** — are orthogonal. Any (transport × provider × bundle) combination is valid at the kernel boundary. The v1 MVP ships one bundle (code review), three providers (claude-code-shuttle, anthropic-sdk, openrouter), and two transports (mcp-server, cli; daemon planned).
+
+### A run, end to end
+
+The kernel never executes an agent. It emits a **directive** ("spawn this agent", "ask the user this"); the host runs the agent or surfaces the gate and **delivers the result back**, which the kernel commits atomically before emitting the next directive. The loop is the same for one agent or a fan-out of many.
+
+```mermaid
+sequenceDiagram
+    actor U as You
+    participant H as Agent host
+    participant S as loom · mcp-server
+    participant K as Kernel · FSM
+    participant A as Agent · LLM
+
+    U->>H: /task "add rate limiting…"
+    H->>S: run_task
+    S->>K: tick
+    K-->>S: directive — spawn classifier
+    S-->>H: run this agent (with prompt)
+    H->>A: execute
+    A-->>H: result
+    H->>S: continue (agent result)
+    Note over K: one atomic commit —<br/>state + ledger + audit;<br/>invariants checked, rollback on violation
+    S->>K: tick
+    K-->>S: directive — ask user (gate)
+    S-->>U: approve the plan? (shown verbatim)
+    U-->>S: approve
+    S->>K: tick
+    K-->>S: … implement → review → validate …
+    K-->>S: directive — complete (verdict)
+    S-->>U: summary (/done)
+```
+
+### What the `code` bundle does
+
+The kernel knows nothing about code review — the flow below lives entirely in the `code` bundle as data (agents, a sequence of stages, gate roles, invariants). A different domain is a different bundle over the same kernel.
+
+```mermaid
+flowchart LR
+    C["classify"] --> G1{{"gate · classify"}}
+    G1 --> PL["plan"] --> RP["review plan<br/>(grounding · logic)"]
+    RP --> G2{{"gate · plan"}}
+    G2 --> IM["implement"] --> RV["review fan-out<br/>(logic · challenger · style · perf)"]
+    RV --> VA["validate<br/>(acceptance · typecheck / test / lint)"]
+    VA --> G3{{"gate · final"}}
+    G3 --> FN["finalize → complete"]
+```
+
+Each `gate` is resolved by a **policy**, not hard-coded: `human` (ask every time), `on-blockers` (ask only when a blocking finding exists — the default), or `auto` (no human, backed by a deterministic safety floor). The same flow runs hands-on or hands-off depending on the policy map.
 
 ## 4. Core primitives
 
@@ -82,6 +129,20 @@ The smallest correct shape for an autonomy decision. The kernel hands the policy
 ### `StateBackend.withTransaction(now, fn)`
 
 One verb. One law: atomicity. The default backend is SQLite WAL with `BEGIN IMMEDIATE`. Alternative backends (in-memory, libSQL, replicated) implement the same single interface. State mutation outside a transaction is a typing error — `tx` is the only handle that exposes writes.
+
+One tick lands entirely, or not at all:
+
+```mermaid
+flowchart TB
+    R["read state snapshot"] --> I["interpret the current Stage"]
+    I --> E["compute the effect<br/>(spawn · fan-out · gate · step · finalize)"]
+    E --> TX{{"withTransaction"}}
+    TX -->|commit together| W["state&nbsp;+&nbsp;idempotency&nbsp;ledger&nbsp;+&nbsp;audit"]
+    W --> D["emit KernelDirective"]
+    TX -.->|invariant violated| RB["rollback — nothing lands"]
+```
+
+There is no window in which the state advanced but the ledger didn't, or the audit log recorded an effect the transaction rolled back. That single property is what makes crash recovery "restart and let the ledger dedup" instead of a reconciliation protocol.
 
 ### `NowToken`
 

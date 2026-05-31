@@ -28,6 +28,18 @@ whole run is recorded and replayable, and a set of invariants makes certain fail
 *structurally impossible*: an agent can't sign off while a blocking issue is open, or
 rewrite the tests it's being judged by and self-approve.
 
+```mermaid
+flowchart LR
+    T(["/task …"]) --> C["classify"] --> G1{{"gate · you"}}
+    G1 --> P["plan"] --> G2{{"gate · you"}}
+    G2 --> I["implement"] --> R["review<br/>(agent panel)"] --> V["validate"] --> G3{{"gate · you"}}
+    G3 --> F(["complete · /done"])
+```
+
+*Each `gate` is a policy decision — you approve (the default), or hand the dial to
+`on-blockers` or full `auto` with a deterministic safety floor. Every step commits
+atomically to SQLite and is replayable later.*
+
 Think **"Temporal for LLM agents"** — but with human-in-the-loop, structured review,
 and provable safety as first-class primitives, not bolted on.
 

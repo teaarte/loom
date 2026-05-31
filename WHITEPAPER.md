@@ -67,7 +67,7 @@ The principles are constraints, not aspirations. Each one is paired with a way t
 └──────────────────────┘
 ```
 
-The three plug axes — **Bundles**, **Providers**, **Transports** — are orthogonal. Any (transport × provider × bundle) combination is valid at the kernel boundary. The v1 MVP ships one bundle (code review), three providers (claude-code-shuttle, anthropic-sdk, openrouter), and two transports (mcp-server, cli; daemon deferred to v1.1).
+The three plug axes — **Bundles**, **Providers**, **Transports** — are orthogonal. Any (transport × provider × bundle) combination is valid at the kernel boundary. The v1 MVP ships one bundle (code review), three providers (claude-code-shuttle, anthropic-sdk, openrouter), and two transports (mcp-server, cli; daemon planned).
 
 ## 4. Core primitives
 
@@ -107,29 +107,28 @@ Pure functions over state, called inside `runInvariants(tx)` at exactly three si
 
 ## 6. What this design deliberately doesn't ship in v1.0
 
-Scope honesty matters more than feature counting. The following are deferred to v1.1+:
+Scope honesty matters more than feature counting. The following are intentionally out of this release — additive, planned for later:
 
 - **Bundle runtime isolation (worker-thread fence).** v1 MVP runs bundles in-process under curated trust. Manifest declares capabilities; the bundle-loader checks them at load. The *runtime* fence (separate worker, RPC marshalling of `BundleOp[]`) lands when the third-party marketplace lands. The MVP threat model has zero third-party bundles.
 - **Memory subsystem.** Cross-task and cross-project memory is a deferred plugin. Substrate reserves the capability vocabulary and the `memory_query` MCP tool slot.
-- **Daemon-mode transport.** The transport interface accommodates it; the daemon binary is post-MVP. Single-process CLI + MCP-server are the v1.0 surface.
+- **Daemon-mode transport.** The transport interface accommodates it; the daemon binary is planned. Single-process CLI + MCP-server are the current surface.
 - **Multi-bundle parallelism in one project directory.** v1 enforces one bundle per project. The architecture admits more; the substrate doesn't ship the orchestration for it.
-- **Observability backends beyond local logs and `/metrics`.** OTel attributes are declared but the production-grade collector wiring is post-MVP.
+- **Observability backends beyond local logs and `/metrics`.** OTel attributes are declared but the production-grade collector wiring is planned.
 
 The substrate is *additive* to all of these. None requires re-shaping the kernel. That property is what most of the architectural rigour is paying for.
 
 ## 7. Honest scope and timeline
 
 - **Kernel size**: ~12-15k LOC, before the bundle.
-- **Bundle authoring**: ~7-12 days of focused work for a new bundle, given the substrate.
-- **Build envelope**: 38-44 days realistic, 46-52 conservative, distributed across 19 packages (K1-K19). The plan ships its own scope-checkpoint at the 45% mark, with named cuts in priority order.
-- **Validation**: a real-task validation bridge of 4-5 `/task` invocations after the integration phase. Expected API spend $5-10.
+- **Bundle authoring**: a new bundle is a focused, self-contained effort given the substrate — agents, flows, and invariants as data, no kernel changes.
+- **Validation**: the `code` bundle has driven real `/task` runs end to end through an MCP host to `complete:accepted`, with the audit log recording every spawn, finding, verdict, and gate.
 
-The kernel is not "production-ready" because of architectural elegance; it is production-ready because the validation bridge exercises it on real work and the audit log lets an operator see what happened. Architectural elegance is the precondition, not the proof.
+The kernel is not "production-ready" because of architectural elegance; it is production-ready because it is exercised on real work and the audit log lets an operator see what happened. Architectural elegance is the precondition, not the proof.
 
 ## 8. License and authorship
 
-Solo-authored. Licensed under Apache 2.0 (see [LICENSE](LICENSE)) — permissive, with an explicit patent grant suited to the AI/LLM space. Contributions welcome via PR with `[K<n>]` or `[spec]` prefix.
+Solo-authored. Licensed under Apache 2.0 (see [LICENSE](LICENSE)) — permissive, with an explicit patent grant suited to the AI/LLM space. Contributions welcome via PR with conventional-commit subjects.
 
 ---
 
-*Whitepaper version 1.0 · status: pre-implementation. The substrate is specified; K1-K19 build it.*
+*Whitepaper version 1.0 · status: `v0.1.0`, published to npm under `@loomfsm/*`.*

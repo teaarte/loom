@@ -2,7 +2,7 @@
 
 > A small, generic FSM kernel for multi-agent LLM workflows. Atomic state. Replay-deterministic. Policy-as-function autonomy. SQLite-backed. No framework, no inversion of control.
 
-**Status:** pre-implementation. The substrate is specified; K1-K19 build it. See [WHITEPAPER.md](WHITEPAPER.md) for the design.
+**Status:** `v0.1.0`, published to npm under `@loomfsm/*`. The `code` bundle runs end to end through an MCP host — classify → plan → implement → review → finalize, with human gates and replay-deterministic state. Early and evolving; one bundle today. See [WHITEPAPER.md](WHITEPAPER.md) for the design.
 
 ---
 
@@ -14,7 +14,7 @@ The kernel exposes three plug axes:
 
 - **Bundles** — domain. The `code` bundle ships first. Other domains (research, VFX, ops) are additive.
 - **Providers** — LLM backend. `claude-code-shuttle`, `anthropic-sdk`, `openrouter`. Capability-driven, not name-driven.
-- **Transports** — wire shape. `mcp-server`, `cli`, daemon (deferred to v1.1).
+- **Transports** — wire shape. `mcp-server`, `cli`, daemon (planned).
 
 The name reflects the design: state is the **warp**, agents are the **weft**, providers are the **shuttle**. One FSM tick = one pick of the loom, committed atomically.
 
@@ -38,9 +38,7 @@ The name reflects the design: state is the **warp**, agents are the **weft**, pr
 | Invariants | 13 kernel-generic + bundle-declared, in-tx, rollback on violation |
 | Autonomy model | `Policy = (state, role, ctx) → Decision` — kernel does not switch on policy names |
 | Default policy preset | `gates-on-blockers` (asks human only if blocking findings exist) |
-| Threat model (MVP) | Curated trust: zero third-party bundles. Runtime fence deferred to v1.1. |
-| Build envelope | 38-44 days realistic, 46-52 days conservative |
-| Validation | 4-5 real-task bridge runs after integration phase |
+| Threat model (v1) | Curated trust: no third-party bundles; runtime isolation is planned. |
 | License | Apache 2.0 |
 
 ## Repository layout
@@ -66,27 +64,46 @@ npm packages are published under the `@loomfsm/*` scope: `@loomfsm/kernel`, `@lo
 
 ## Getting started
 
-> Repository is pre-implementation. The commands below describe the v1.0 surface; they will become real as K12 (mcp-server) and K17 (cli) land.
+Install the CLI and the runtime in one step:
 
 ```bash
-# Install (placeholder)
-pnpm install
-pnpm -r build
-
-# CLI — drive a task
-loom run "fix login bug" --bundle=code --policy=gates-on-blockers
-
-# Inspect state
-loom state --format=summary
-loom audit --since=1h
-loom findings --phase=implementation
-
-# Continue from a paused gate
-loom continue --gate-event-id=<id> --answer=approve
-
-# MCP server (for Claude Desktop / Claude Code integration)
-loom-mcp        # stdio transport
+npm i -g @loomfsm/pipeline
 ```
+
+Register it with your agent host — this writes the MCP server config and installs the
+`/task` and `/done` commands — then authorize a project:
+
+```bash
+loom setup            # idempotent; --user (default) or --project; --dry-run to preview
+loom allowlist add    # authorize the current project (run once per project)
+```
+
+Then, from your MCP host (e.g. Claude Code), inside an authorized project:
+
+```
+/task fix the typo in the module header comment
+```
+
+The host runs each spawned agent with the prompt the server provides, surfaces every
+approval gate for your decision, and drives the work to completion; `/done` shows the
+summary. State lives in `<project>/.claude/state.db` — a plain SQLite file.
+
+### CLI commands
+
+```
+loom setup [--user|--project] [--dry-run] [--force]   register the server + install /task,/done
+loom allowlist add [path] [--dry-run]                 authorize a project directory
+loom allowlist list                                   show authorized directories
+loom init [--dry-run]                                 ensure .claude/ + authorize the current project
+loom --help | --version
+```
+
+Setup is idempotent: re-running changes nothing and never overwrites a command you have
+edited (`--force` to override). The allowlist is default-deny and operator-authored — the
+server never enrolls a project on its own.
+
+Working from source instead? `pnpm install && pnpm -r build`, then run
+`packages/cli/dist/src/bin/loom.js` (or `pnpm --filter @loomfsm/cli exec pnpm link --global`).
 
 ## Concept primer
 
@@ -105,22 +122,22 @@ Full vocabulary in [WHITEPAPER.md](WHITEPAPER.md) §4.
 - **Replay-deterministic FSM.** Same `(state, NowToken, ledger)` → same trajectory. Crash recovery is "restart and let the ledger dedup."
 - **Honest autonomy.** A bundle that wants `"auto"` on the `final` gate must ship deterministic safety-floor invariants (lint-clean, tests-pass, typecheck-clean). Bundle-loader refuses otherwise. Acceptance verdicts from an LLM are not a safety boundary.
 - **No vendor strings in the kernel.** Enforced by CI grep. `@loomfsm/kernel` contains no provider names, transport names, or model names.
-- **Operator-debuggable.** Open the SQLite file. Tail the audit log. Inspect with `loom state --format=json | jq`. The runtime does not hide.
+- **Operator-debuggable.** The state is a plain SQLite file — open it, tail the audit log, query it with `sqlite3` / `jq`. The runtime does not hide.
 
 ## Roadmap
 
 | Phase | Scope | Status |
 |---|---|---|
-| v1.0 | Kernel + `code` bundle + 3 providers + mcp-server/cli; one task per project | In progress |
-| v1.1 | Bundle runtime isolation (worker fence), memory subsystem, daemon transport, second bundle | Deferred — additive |
-| v1.2 | Third-party bundle marketplace + signed manifests + observability backends | Deferred |
+| Now | Kernel + `code` bundle + 3 providers + mcp-server/cli; one task per project | Shipping (`v0.1.0` on npm) |
+| Planned | Bundle runtime isolation (worker fence), memory subsystem, daemon transport, more bundles | — |
+| Later | Third-party bundle marketplace + signed manifests + observability backends | — |
 
 ## Contributing
 
-- One package per session (K1-K19 ordering enforced).
-- Spec changes ship as `[spec]`-prefixed commits, separate from `[K<n>]` code commits.
-- Tests green before declaring DONE. `pnpm -r test` and `pnpm -r typecheck` are the floor.
-- No "tests later." Each package ships with the tests it claims.
+- `pnpm -r typecheck` and `pnpm -r test` must be green before a change is done — that's the floor.
+- Tests ship with the code they cover. No "tests later."
+- Conventional-commit subjects (`feat:` / `fix:` / `chore:` / `refactor:` / `docs:`).
+- The kernel carries no provider, transport, or model names — a CI grep enforces it.
 
 ## License
 

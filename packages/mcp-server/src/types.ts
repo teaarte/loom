@@ -170,6 +170,28 @@ export interface ContinueTaskResponse {
 }
 
 // ---------------------------------------------------------------------
+// pipeline_get_spawn_prompt
+// ---------------------------------------------------------------------
+
+export interface GetSpawnPromptInput {
+  project_dir: string;
+  driver_state_id: string;
+  agent_run_id: string;
+}
+
+// On success `prompt` is the rendered spawn prompt and `error` is
+// undefined; on a refusal (allowlist miss, unknown agent_run_id, no
+// registry) `prompt` is null and `error` carries the typed code. `model`
+// echoes the descriptor's model so the host has everything the inline form
+// would have carried.
+export interface GetSpawnPromptResponse {
+  prompt: string | null;
+  agent: string | null;
+  model: string | null;
+  error?: { code: string; message: string };
+}
+
+// ---------------------------------------------------------------------
 // pipeline_recover
 // ---------------------------------------------------------------------
 

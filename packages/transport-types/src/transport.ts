@@ -24,6 +24,15 @@ export type TransportResponse =
       status: "spawn-agents-parallel";
       driver_state_id: string;
       spawns: { agent_run_id: string; agent: string; spawn_request: SpawnRequest }[];
+      // When true, each `spawn_request` carries NO `prompt`: the host
+      // fetches each agent's prompt by reference (one small read-only call
+      // per `agent_run_id`) instead of receiving every full prompt inline.
+      // A wide fanout inlining N×~20k-char prompts blows past an MCP
+      // client's inline-response cap; by-reference keeps this envelope's
+      // size bounded by the agent count, not the prompt sizes. The model /
+      // extras the host needs to dispatch stay inline — only the bulky
+      // prompt moves behind the reference.
+      prompts_by_reference?: boolean;
     }
   | {
       status: "ask-user";
@@ -61,7 +70,10 @@ export interface TransportAdapter {
 export interface SpawnRequest {
   runner_hint: string;
   description: string;
-  prompt: string;
+  // The rendered prompt. Present on a single spawn-agent descriptor; on a
+  // by-reference fanout (see `prompts_by_reference`) it is omitted and the
+  // host fetches it with a small read-only call keyed by agent_run_id.
+  prompt?: string;
   model?: string;
   extras?: Record<string, unknown>;
 }

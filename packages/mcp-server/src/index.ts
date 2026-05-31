@@ -13,6 +13,8 @@ export { createRunTaskTool } from "./tools/run-task.js";
 export type { RunTaskDeps } from "./tools/run-task.js";
 export { createContinueTaskTool } from "./tools/continue-task.js";
 export type { ContinueTaskDeps } from "./tools/continue-task.js";
+export { createGetSpawnPromptTool } from "./tools/get-spawn-prompt.js";
+export type { GetSpawnPromptDeps } from "./tools/get-spawn-prompt.js";
 export { createRecoverTool } from "./tools/recover.js";
 export type { RecoverDeps } from "./tools/recover.js";
 export { createIssueCrossOwnerMarkerTool } from "./tools/issue-marker.js";
@@ -37,6 +39,8 @@ export type {
   ExtensionsListInput,
   ExtensionsListResponse,
   ExtensionStatus,
+  GetSpawnPromptInput,
+  GetSpawnPromptResponse,
   IssueCrossOwnerMarkerInput,
   IssueCrossOwnerMarkerResponse,
   MetaBundle,

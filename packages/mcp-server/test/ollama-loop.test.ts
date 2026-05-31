@@ -35,7 +35,11 @@ import {
   assembleRegistry,
   createAssembleRegistry,
 } from "../src/bootstrap.js";
-import { createContinueTaskTool, createRunTaskTool } from "../src/index.js";
+import {
+  createContinueTaskTool,
+  createGetSpawnPromptTool,
+  createRunTaskTool,
+} from "../src/index.js";
 
 // Opt-in by an explicit model env var — empty means "skip", so a normal
 // `pnpm test` never fires real inference even on a machine with Ollama up.
@@ -104,6 +108,7 @@ describe("ollama loop (opt-in: requires a local Ollama + model)", () => {
       const deps = { resolveRegistry: assembleRegistry, allowlistPath };
       const run = createRunTaskTool(deps);
       const cont = createContinueTaskTool(deps);
+      const getPrompt = createGetSpawnPromptTool(deps);
 
       try {
         const first = await run({ project_dir: dir, task: TASK, client_idempotency_uuid: "ollama-1" });
@@ -125,7 +130,7 @@ describe("ollama loop (opt-in: requires a local Ollama + model)", () => {
           let input: ContinueTaskInput;
           if (resp.status === "spawn-agent") {
             trace.push(`spawn:${resp.agent}`);
-            const out = await runViaOllama(resp.agent, resp.agent_run_id, resp.spawn_request.prompt);
+            const out = await runViaOllama(resp.agent, resp.agent_run_id, resp.spawn_request.prompt ?? "");
             modelCalls += 1;
             if (resp.agent === "classifier") classifierSample = out.slice(0, 300);
             input = { type: "agent-result", agent_run_id: resp.agent_run_id, agent_output: out };
@@ -133,7 +138,8 @@ describe("ollama loop (opt-in: requires a local Ollama + model)", () => {
             trace.push(`parallel:[${resp.spawns.map((s) => s.agent).join(",")}]`);
             const results: { agent_run_id: string; agent_output: string }[] = [];
             for (const s of resp.spawns) {
-              const out = await runViaOllama(s.agent, s.agent_run_id, s.spawn_request.prompt);
+              const fetched = await getPrompt({ project_dir: dir, driver_state_id: dsid, agent_run_id: s.agent_run_id });
+              const out = await runViaOllama(s.agent, s.agent_run_id, s.spawn_request.prompt ?? fetched.prompt ?? "");
               modelCalls += 1;
               results.push({ agent_run_id: s.agent_run_id, agent_output: out });
             }
@@ -247,7 +253,7 @@ describe("ollama loop (opt-in: requires a local Ollama + model)", () => {
                 agent_run_id: resp.agent_run_id,
                 phase: "context",
                 model: sr.model ?? MODEL,
-                prompt: sr.prompt,
+                prompt: sr.prompt ?? "",
                 extras: { max_tokens: MAX_TOKENS },
               });
               if (r.type !== "result") throw new Error(`expected a result, got '${r.type}'`);

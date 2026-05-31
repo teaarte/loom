@@ -24,7 +24,11 @@ import { closeDb, openDb } from "@loomfsm/kernel";
 import type { TransportResponse } from "@loomfsm/transport-types";
 
 import { _resetRegistryCacheForTest, assembleRegistry } from "../src/bootstrap.js";
-import { createContinueTaskTool, createRunTaskTool } from "../src/index.js";
+import {
+  createContinueTaskTool,
+  createGetSpawnPromptTool,
+  createRunTaskTool,
+} from "../src/index.js";
 
 // One payload that satisfies every kernel output kind: a parseable JSON
 // header carrying a verdict + an empty findings array. Reviewers and
@@ -67,9 +71,12 @@ async function driveToComplete(h: Harness, task: string): Promise<DriveResult> {
   const deps = { resolveRegistry: assembleRegistry, allowlistPath: h.allowlistPath };
   const run = createRunTaskTool(deps);
   const cont = createContinueTaskTool(deps);
+  const getPrompt = createGetSpawnPromptTool(deps);
 
   const trace: string[] = [];
   const spawnPrompts: { agent: string; prompt: string }[] = [];
+  const resolvePrompts = (resp: TransportResponse, driverStateId: string): Promise<void> =>
+    recordSpawnPrompts(resp, spawnPrompts, getPrompt, h.dir, driverStateId);
 
   const first = await run({
     project_dir: h.dir,
@@ -78,7 +85,7 @@ async function driveToComplete(h: Harness, task: string): Promise<DriveResult> {
   });
   const driverStateId = first.driver_state_id ?? "";
   let resp: TransportResponse = first.response;
-  recordSpawnPrompts(resp, spawnPrompts);
+  await resolvePrompts(resp, driverStateId);
 
   // Generous cap: the medium flow settles in well under this; the cap is
   // only a runaway guard so a regression fails fast instead of hanging.
@@ -96,7 +103,7 @@ async function driveToComplete(h: Harness, task: string): Promise<DriveResult> {
     trace.push(labelFor(resp));
     const next = await cont({ project_dir: h.dir, driver_state_id: driverStateId, input });
     resp = next.response;
-    recordSpawnPrompts(resp, spawnPrompts);
+    await resolvePrompts(resp, driverStateId);
   }
   assert.fail(`loop did not terminate within the step cap; trace=${trace.join(" -> ")}`);
 }
@@ -139,14 +146,32 @@ function labelFor(resp: TransportResponse): string {
   }
 }
 
-function recordSpawnPrompts(
+async function recordSpawnPrompts(
   resp: TransportResponse,
   into: { agent: string; prompt: string }[],
-): void {
+  getPrompt: ReturnType<typeof createGetSpawnPromptTool>,
+  projectDir: string,
+  driverStateId: string,
+): Promise<void> {
   if (resp.status === "spawn-agent") {
-    into.push({ agent: resp.agent, prompt: resp.spawn_request.prompt });
+    // Single spawns carry the prompt inline (no reference round trip).
+    into.push({ agent: resp.agent, prompt: resp.spawn_request.prompt ?? "" });
   } else if (resp.status === "spawn-agents-parallel") {
-    for (const s of resp.spawns) into.push({ agent: s.agent, prompt: s.spawn_request.prompt });
+    for (const s of resp.spawns) {
+      // By-reference fanout: fetch each prompt the way the router does.
+      const inline = s.spawn_request.prompt;
+      if (inline !== undefined) {
+        into.push({ agent: s.agent, prompt: inline });
+        continue;
+      }
+      const fetched = await getPrompt({
+        project_dir: projectDir,
+        driver_state_id: driverStateId,
+        agent_run_id: s.agent_run_id,
+      });
+      assert.equal(fetched.error, undefined, `prompt fetch for '${s.agent}' should not error`);
+      into.push({ agent: s.agent, prompt: fetched.prompt ?? "" });
+    }
   }
 }
 
@@ -189,7 +214,7 @@ describe("e2e shuttle — wired registry", () => {
       assert.equal(res.response.status, "spawn-agent");
       if (res.response.status === "spawn-agent") {
         assert.equal(res.response.agent, "classifier");
-        const prompt = res.response.spawn_request.prompt;
+        const prompt = res.response.spawn_request.prompt ?? "";
         // A unique substring of agents/classifier.md — present only when
         // the loader read the template body off disk.
         assert.ok(
@@ -276,6 +301,89 @@ describe("e2e shuttle — wired registry", () => {
           `agent '${sp.agent}' must not carry the stack registry`,
         );
       }
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("fanout directives carry prompts by reference — response size is bounded, not the sum of prompts", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("byref");
+    try {
+      const deps = { resolveRegistry: assembleRegistry, allowlistPath: h.allowlistPath };
+      const run = createRunTaskTool(deps);
+      const cont = createContinueTaskTool(deps);
+      const getPrompt = createGetSpawnPromptTool(deps);
+
+      const first = await run({
+        project_dir: h.dir,
+        task: "harden the auth layer against brute force",
+        client_idempotency_uuid: "e2e-byref-1",
+      });
+      const driverStateId = first.driver_state_id ?? "";
+      let resp: TransportResponse = first.response;
+
+      const fanouts: { count: number; bytes: number }[] = [];
+      // Body fetched by reference from the widest fanout, captured WHILE the
+      // fanout is pending (the host fetches before delivering — once the
+      // batch is delivered the pending row drains and the reference is gone).
+      let widestFetchedBody = "";
+      let widestCount = 0;
+
+      for (let step = 0; step < 80 && resp.status !== "complete" && resp.status !== "error"; step++) {
+        if (resp.status === "spawn-agents-parallel") {
+          // Every fanout entry must omit the inline prompt and flag the
+          // by-reference contract — the bulky prompt never rides the wire.
+          assert.equal(resp.prompts_by_reference, true, "fanout must set prompts_by_reference");
+          for (const s of resp.spawns) {
+            assert.equal(
+              s.spawn_request.prompt,
+              undefined,
+              `fanout spawn '${s.agent}' must not inline its prompt`,
+            );
+          }
+          fanouts.push({ count: resp.spawns.length, bytes: JSON.stringify(resp).length });
+          if (resp.spawns.length > widestCount) {
+            widestCount = resp.spawns.length;
+            const target = resp.spawns.find((s) => s.agent === "logic-reviewer") ?? resp.spawns[0]!;
+            const fetched = await getPrompt({
+              project_dir: h.dir,
+              driver_state_id: driverStateId,
+              agent_run_id: target.agent_run_id,
+            });
+            assert.equal(fetched.error, undefined, "by-reference prompt fetch should not error");
+            widestFetchedBody = fetched.prompt ?? "";
+          }
+        }
+        const next = await cont({
+          project_dir: h.dir,
+          driver_state_id: driverStateId,
+          input: echoInputFor(resp),
+        });
+        resp = next.response;
+      }
+
+      // The medium flow fans out at least twice (plan-review = 2 agents,
+      // review = up to 5). The widest must still be small: with prompts by
+      // reference the envelope is a list of {agent_run_id, agent, model,
+      // extras}, so a few hundred bytes per agent — orders of magnitude
+      // under the ~84k an inlined 4-way fanout produced. A fixed ceiling
+      // that holds regardless of how wide the fanout grows.
+      assert.ok(fanouts.length >= 1, "expected at least one reviewer fanout");
+      const widest = fanouts.reduce((m, f) => (f.count > m.count ? f : m), fanouts[0]!);
+      assert.ok(widest.count >= 2, `widest fanout should have ≥2 agents; got ${widest.count}`);
+      assert.ok(
+        widest.bytes < 4000,
+        `by-reference fanout response must stay small; ${widest.count} agents → ${widest.bytes} bytes`,
+      );
+
+      // The reference is resolvable: the prompt fetched mid-fanout is the
+      // real materialized template body, not a stub.
+      assert.ok(widestFetchedBody.length > 200, "fetched prompt should be the real body");
+      assert.ok(
+        !widestFetchedBody.startsWith("agent="),
+        "fetched prompt must not be the no-template stub",
+      );
     } finally {
       h.dispose();
     }
@@ -382,6 +490,232 @@ describe("assembleRegistry — caching + idempotent reconcile", () => {
       assert.equal(enabled.c, 1, "the bundle must stay enabled after a second reconcile");
     } finally {
       h.dispose();
+    }
+  });
+});
+
+// ============================================================================
+// First-run hardening — review shaping, gate escalation, finish-summary,
+// phase progression, all end-to-end through the wired registry.
+// ============================================================================
+
+// A reviewer output carrying one open blocking finding.
+function blockerOutput(agent: string): string {
+  return JSON.stringify({
+    verdict: "REQUEST_CHANGES",
+    summary: "intentional blocker",
+    findings: [
+      { schema_version: "1.0", agent, iteration: 1, severity: "blocking", category: "correctness", summary: "intentional blocker" },
+    ],
+  });
+}
+
+const ON_BLOCKERS = { classify: "on-blockers", plan: "on-blockers", final: "on-blockers" };
+
+interface DriveOpts {
+  gatePolicies?: Record<string, string>;
+  implementerFiles?: string[];
+  blockReviewFanout?: boolean;
+  stopAtGateFinalAsk?: boolean;
+}
+interface DriveOut {
+  trace: string[];
+  verdict: string | null;
+  summary: string | null;
+  gateFinalAsked: boolean;
+  reviewFanoutAgents: string[];
+}
+
+function isReviewFanout(agents: string[]): boolean {
+  return agents.includes("challenger-reviewer") || agents.includes("performance") || agents.includes("style-reviewer");
+}
+
+async function drive(h: Harness, task: string, uuid: string, opts: DriveOpts): Promise<DriveOut> {
+  const deps = { resolveRegistry: assembleRegistry, allowlistPath: h.allowlistPath };
+  const run = createRunTaskTool(deps);
+  const cont = createContinueTaskTool(deps);
+
+  const first = await run({
+    project_dir: h.dir,
+    task,
+    client_idempotency_uuid: uuid,
+    ...(opts.gatePolicies !== undefined ? { gate_policies: opts.gatePolicies } : {}),
+  });
+  const dsid = first.driver_state_id ?? "";
+  let resp: TransportResponse = first.response;
+  const out: DriveOut = { trace: [], verdict: null, summary: null, gateFinalAsked: false, reviewFanoutAgents: [] };
+
+  for (let step = 0; step < 120; step++) {
+    if (resp.status === "complete") {
+      out.verdict = resp.verdict;
+      out.summary = resp.summary;
+      out.trace.push(`complete:${resp.verdict}`);
+      return out;
+    }
+    if (resp.status === "error") {
+      assert.fail(`loop hit error: ${resp.code} — ${resp.message}`);
+    }
+
+    let input: Parameters<ReturnType<typeof createContinueTaskTool>>[0]["input"];
+    if (resp.status === "spawn-agent") {
+      out.trace.push(`spawn:${resp.agent}`);
+      const wantFiles = resp.agent === "implementer" && opts.implementerFiles !== undefined;
+      input = {
+        type: "agent-result",
+        agent_run_id: resp.agent_run_id,
+        agent_output: CANONICAL_AGENT_OUTPUT,
+        ...(wantFiles ? { files_modified: opts.implementerFiles } : {}),
+      };
+    } else if (resp.status === "spawn-agents-parallel") {
+      const agents = resp.spawns.map((s) => s.agent);
+      out.trace.push(`parallel:[${agents.join(",")}]`);
+      const review = isReviewFanout(agents);
+      if (review) out.reviewFanoutAgents = agents;
+      input = {
+        type: "agents-results",
+        results: resp.spawns.map((s, idx) => ({
+          agent_run_id: s.agent_run_id,
+          agent_output:
+            opts.blockReviewFanout === true && review && idx === 0
+              ? blockerOutput(s.agent)
+              : CANONICAL_AGENT_OUTPUT,
+        })),
+      };
+    } else if (resp.status === "ask-user") {
+      out.trace.push(`gate:${resp.gate}`);
+      if (resp.gate === "gate-final") {
+        out.gateFinalAsked = true;
+        if (opts.stopAtGateFinalAsk === true) return out;
+      }
+      input = { type: "user-answer", gate_event_id: resp.gate_event_id, decision: "accept" };
+    } else {
+      throw new Error(`drive cannot answer status '${(resp as { status: string }).status}'`);
+    }
+
+    const next = await cont({ project_dir: h.dir, driver_state_id: dsid, input });
+    resp = next.response;
+  }
+  assert.fail(`drive did not terminate; trace=${out.trace.join(" -> ")}`);
+}
+
+describe("first-run hardening — end to end", () => {
+  it("host-fed UI files flip ui_touched → the review fanout includes ui-consistency + playwright", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("d1-ui");
+    try {
+      const withFiles = await drive(h, "restyle the dashboard", "d1-ui-1", {
+        gatePolicies: ON_BLOCKERS,
+        implementerFiles: ["src/App.tsx", "src/components/Button.tsx", "src/App.test.tsx"],
+      });
+      assert.equal(withFiles.verdict, "accepted");
+      assert.ok(
+        withFiles.reviewFanoutAgents.includes("ui-consistency"),
+        `UI files should pull ui-consistency into the fanout; got ${withFiles.reviewFanoutAgents.join(",")}`,
+      );
+      assert.ok(
+        withFiles.reviewFanoutAgents.includes("playwright"),
+        `UI files should pull playwright into the fanout; got ${withFiles.reviewFanoutAgents.join(",")}`,
+      );
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("with no file accounting fed, the UI reviewers correctly drop out (proves the flag, not a constant)", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("d1-nofiles");
+    try {
+      const noFiles = await drive(h, "restyle the dashboard", "d1-nofiles-1", {
+        gatePolicies: ON_BLOCKERS,
+      });
+      assert.equal(noFiles.verdict, "accepted");
+      assert.ok(
+        !noFiles.reviewFanoutAgents.includes("ui-consistency"),
+        "without files, ui_touched is false → ui-consistency is filtered out",
+      );
+      assert.ok(
+        !noFiles.reviewFanoutAgents.includes("playwright"),
+        "without files, ui_touched is false → playwright is filtered out",
+      );
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("a clean accepted run ends with completed phases, never all-skipped", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("a4-phases");
+    try {
+      const res = await drive(h, "tidy the config loader", "a4-phases-1", { gatePolicies: ON_BLOCKERS });
+      assert.equal(res.verdict, "accepted");
+      const db = openDb(h.dir);
+      const rows = db.prepare("SELECT name, status FROM phases").all() as { name: string; status: string }[];
+      const completed = rows.filter((r) => r.status === "completed").map((r) => r.name);
+      assert.ok(completed.length >= 1, `a clean run should show completed phases; got ${JSON.stringify(rows)}`);
+      assert.ok(completed.includes("implementation"), "implementation should complete on a clean run");
+      assert.ok(
+        !rows.every((r) => r.status === "skipped"),
+        "a clean run must not leave every phase skipped",
+      );
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("a stated commit step the engine does not perform is surfaced in the completion summary", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("c2-commit");
+    try {
+      const res = await drive(h, "fix the date parser and commit the result", "c2-commit-1", { gatePolicies: ON_BLOCKERS });
+      assert.equal(res.verdict, "accepted");
+      assert.ok(
+        (res.summary ?? "").includes("commit"),
+        `summary should name the unperformed commit; got: ${res.summary}`,
+      );
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("a task with no finish-contract verb gets a plain completion summary", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("c2-plain");
+    try {
+      const res = await drive(h, "rename a local variable for clarity", "c2-plain-1", { gatePolicies: ON_BLOCKERS });
+      assert.equal(res.verdict, "accepted");
+      assert.ok(!(res.summary ?? "").includes("run them yourself"), `plain summary expected; got: ${res.summary}`);
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("an open blocker escalates the on-blockers final gate to a human — no silent PASS", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("stuck");
+    try {
+      // Control: a clean run under the same on-blockers posture auto-approves
+      // the final gate and completes — no human asked.
+      const clean = await drive(h, "small cleanup", "stuck-clean-1", { gatePolicies: ON_BLOCKERS });
+      assert.equal(clean.verdict, "accepted");
+      assert.equal(clean.gateFinalAsked, false, "a clean run auto-approves the final gate");
+    } finally {
+      h.dispose();
+    }
+
+    _resetRegistryCacheForTest();
+    const h2 = freshHarness("stuck2");
+    try {
+      // A surviving blocking finding from the review fanout: the on-blockers
+      // final gate must escalate to a human, not silently pass.
+      const blocked = await drive(h2, "small cleanup", "stuck-blocked-1", {
+        gatePolicies: ON_BLOCKERS,
+        blockReviewFanout: true,
+        stopAtGateFinalAsk: true,
+      });
+      assert.equal(blocked.gateFinalAsked, true, "an open blocker must escalate the final gate to a human");
+      assert.equal(blocked.verdict, null, "the run must not silently complete past an open blocker");
+    } finally {
+      h2.dispose();
     }
   });
 });

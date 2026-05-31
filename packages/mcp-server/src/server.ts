@@ -14,6 +14,7 @@ import {
 import { createBackupTool } from "./tools/backup.js";
 import { createContinueTaskTool } from "./tools/continue-task.js";
 import { createExtensionsListTool } from "./tools/extensions-list.js";
+import { createGetSpawnPromptTool } from "./tools/get-spawn-prompt.js";
 import { createIssueCrossOwnerMarkerTool } from "./tools/issue-marker.js";
 import { createMetaTool, type MetaInputWithProject } from "./tools/meta.js";
 import { createRecoverTool } from "./tools/recover.js";
@@ -27,6 +28,8 @@ import type {
   ContinueTaskResponse,
   ExtensionsListInput,
   ExtensionsListResponse,
+  GetSpawnPromptInput,
+  GetSpawnPromptResponse,
   IssueCrossOwnerMarkerInput,
   IssueCrossOwnerMarkerResponse,
   PipelineMetaResponse,
@@ -61,6 +64,7 @@ export interface ToolRegistry {
   pipeline_extensions_list: ToolHandler<ExtensionsListInput, ExtensionsListResponse>;
   pipeline_run_task: ToolHandler<RunTaskInput, RunTaskResponse>;
   pipeline_continue_task: ToolHandler<ContinueTaskRequestInput, ContinueTaskResponse>;
+  pipeline_get_spawn_prompt: ToolHandler<GetSpawnPromptInput, GetSpawnPromptResponse>;
   pipeline_recover: ToolHandler<RecoverTaskInput, RecoverTaskResponse>;
   pipeline_issue_cross_owner_marker: ToolHandler<
     IssueCrossOwnerMarkerInput,
@@ -174,6 +178,23 @@ const TOOL_DESCRIPTORS = [
     },
   },
   {
+    name: "pipeline_get_spawn_prompt",
+    description:
+      "Fetches one fanout agent's rendered prompt by reference. A wide " +
+      "spawn-agents-parallel response omits each prompt (prompts_by_reference) " +
+      "to stay under the inline-response cap; call this once per agent_run_id " +
+      "to retrieve the prompt before dispatching that spawn. Read-only.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_dir: { type: "string" },
+        driver_state_id: { type: "string" },
+        agent_run_id: { type: "string" },
+      },
+      required: ["project_dir", "driver_state_id", "agent_run_id"],
+    },
+  },
+  {
     name: "pipeline_recover",
     description:
       "Recovers a stuck task. Five choices: abandon | force-close | retry | " +
@@ -262,6 +283,7 @@ export function createServer(deps: ServerDeps = {}): CreateServerHandle {
     pipeline_extensions_list: createExtensionsListTool(),
     pipeline_run_task: createRunTaskTool(deps),
     pipeline_continue_task: createContinueTaskTool(deps),
+    pipeline_get_spawn_prompt: createGetSpawnPromptTool(deps),
     pipeline_recover: createRecoverTool(deps),
     pipeline_issue_cross_owner_marker: createIssueCrossOwnerMarkerTool(deps),
     pipeline_backup: createBackupTool(deps),
@@ -309,6 +331,9 @@ async function dispatch(
   }
   if (name === "pipeline_continue_task") {
     return await tools.pipeline_continue_task(args as unknown as ContinueTaskRequestInput);
+  }
+  if (name === "pipeline_get_spawn_prompt") {
+    return await tools.pipeline_get_spawn_prompt(args as unknown as GetSpawnPromptInput);
   }
   if (name === "pipeline_recover") {
     return await tools.pipeline_recover(args as unknown as RecoverTaskInput);

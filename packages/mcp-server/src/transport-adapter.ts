@@ -51,17 +51,25 @@ export function shape(
         driver_state_id: ctx.driver_state_id,
         agent_run_id: intent.agent_run_id,
         agent: intent.agent,
-        spawn_request: toSpawnRequest(intent),
+        // A single spawn carries its one prompt inline — no reference round
+        // trip for the common case.
+        spawn_request: toSpawnRequest(intent, { inlinePrompt: true }),
       };
     }
     case "shuttle-batch":
+      // Fanout prompts go by reference: each descriptor carries model +
+      // extras (small, host needs them to dispatch) but NOT the prompt, so
+      // this envelope's size scales with the agent count, not the sum of
+      // every prompt. The host fetches each prompt via a read-only call
+      // keyed by agent_run_id.
       return {
         status: "spawn-agents-parallel",
         driver_state_id: ctx.driver_state_id,
+        prompts_by_reference: true,
         spawns: directive.spawns.map((intent) => ({
           agent_run_id: intent.agent_run_id,
           agent: intent.agent,
-          spawn_request: toSpawnRequest(intent),
+          spawn_request: toSpawnRequest(intent, { inlinePrompt: false }),
         })),
       };
     case "ask-user":
@@ -95,13 +103,16 @@ export function shape(
   }
 }
 
-function toSpawnRequest(intent: ProviderShuttleIntent): SpawnRequest {
+function toSpawnRequest(
+  intent: ProviderShuttleIntent,
+  opts: { inlinePrompt: boolean },
+): SpawnRequest {
   const req: SpawnRequest = {
     runner_hint: RUNNER_HINT,
     description: `${intent.agent} (${intent.phase})`,
-    prompt: intent.prompt,
     model: intent.model,
   };
+  if (opts.inlinePrompt) req.prompt = intent.prompt;
   if (intent.extras !== undefined) req.extras = intent.extras;
   return req;
 }

@@ -1,12 +1,24 @@
 {
   "name": "@loom/mcp-server",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
+  "description": "MCP transport for loom — exposes the pipeline tools over stdio and assembles the runnable registry.",
+  "license": "Apache-2.0",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
   "bin": {
     "loom-mcp-server": "./dist/src/bin/stdio.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./bootstrap": {
+      "types": "./dist/src/bootstrap.d.ts",
+      "import": "./dist/src/bootstrap.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist/src",
@@ -15,6 +27,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
+    "prepack": "pnpm run build",
     "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
@@ -26,5 +39,8 @@
   },
   "devDependencies": {
     "@loom/provider-ollama": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

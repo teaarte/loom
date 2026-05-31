@@ -2,7 +2,24 @@
 
 This server exposes the pipeline tools over stdio. A host (e.g. an MCP-capable
 agent CLI) spawns it, registers the two slash commands that drive it, and points
-it at a project that has been added to the allowlist. Three one-time steps:
+it at a project that has been added to the allowlist.
+
+## Quick install (recommended)
+
+If you installed the `loom` command (`npm i -g @loom/pipeline`), the three steps
+below are automated:
+
+```
+loom setup            # register the server + install /task and /done
+loom allowlist add    # authorize the current project (run once per project)
+```
+
+`loom setup` is idempotent — re-running it changes nothing and never clobbers a
+command you have edited (pass `--force` to overwrite, `--dry-run` to preview,
+`--project` to scope to the current directory instead of your user profile).
+
+The rest of this file documents the same three steps done by hand, as a fallback
+or for a host that does not use the `loom` command.
 
 ## 1. Register the server
 

@@ -21,7 +21,11 @@ importers:
         specifier: workspace:*
         version: link:../../kernel
 
-  packages/cli: {}
+  packages/cli:
+    dependencies:
+      '@loom/mcp-server':
+        specifier: workspace:*
+        version: link:../mcp-server
 
   packages/kernel: {}
 
@@ -46,6 +50,24 @@ importers:
       '@loom/provider-ollama':
         specifier: workspace:*
         version: link:../providers/ollama
+
+  packages/pipeline:
+    dependencies:
+      '@loom/bundle-code':
+        specifier: workspace:*
+        version: link:../bundles/code
+      '@loom/cli':
+        specifier: workspace:*
+        version: link:../cli
+      '@loom/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@loom/mcp-server':
+        specifier: workspace:*
+        version: link:../mcp-server
+      '@loom/provider-claude-code-shuttle':
+        specifier: workspace:*
+        version: link:../providers/claude-code-shuttle
 
   packages/providers/anthropic-sdk:
     dependencies:

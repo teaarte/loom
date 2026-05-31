@@ -14,7 +14,7 @@
 // state shape declares one `applies_to` predicate; an agent reused across
 // stages keeps a single, collision-free responsibility.
 
-import { defineBundle } from "@loom/kernel";
+import { defineBundle } from "@loomfsm/kernel";
 import type {
   BundleStateView,
   HookContext,
@@ -22,7 +22,7 @@ import type {
   StageResult,
   UserAnswer,
   UserAnswerSchema,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 import { codeBundleInvariants } from "./invariants.js";
 import { codePolicyResolver } from "./policy-resolver.js";

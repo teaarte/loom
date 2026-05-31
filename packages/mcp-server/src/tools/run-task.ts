@@ -37,8 +37,8 @@ import {
   type PolicyName,
   type Registry,
   type Transaction,
-} from "@loom/kernel";
-import type { TransportResponse } from "@loom/transport-types";
+} from "@loomfsm/kernel";
+import type { TransportResponse } from "@loomfsm/transport-types";
 
 import { parseTaskArgs } from "../lib/parse-task-args.js";
 import { persistDriverStepIndex } from "../lib/persist-progress.js";

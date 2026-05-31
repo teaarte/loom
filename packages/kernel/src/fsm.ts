@@ -378,7 +378,7 @@ export async function buildStageContext(
 // the StageContext. Used by interpreters (and only by interpreters)
 // that need to invoke guards / queries that take a raw tx — bundle
 // code has no path to the symbol below.
-const KERNEL_TX_SYMBOL = Symbol.for("@loom/kernel/raw-tx");
+const KERNEL_TX_SYMBOL = Symbol.for("@loomfsm/kernel/raw-tx");
 
 function attachKernelTx(ctx: StageContext, tx: Transaction): void {
   (ctx as unknown as Record<symbol, Transaction>)[KERNEL_TX_SYMBOL] = tx;

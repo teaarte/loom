@@ -1,4 +1,4 @@
-// Public barrel — anything callers import as `@loom/mcp-server` lives
+// Public barrel — anything callers import as `@loomfsm/mcp-server` lives
 // here. Internal tool modules and the version constants stay private
 // to the package layout.
 

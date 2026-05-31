@@ -1,4 +1,4 @@
-// Public barrel for `@loom/cli`. The meta-package's bin shim imports `run`
+// Public barrel for `@loomfsm/cli`. The meta-package's bin shim imports `run`
 // from here; the rest are surfaced so a host embedding the install commands
 // can call them directly.
 

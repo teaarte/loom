@@ -1,5 +1,5 @@
 // Public barrel — the wire-shape types every transport adapter and
-// client imports as `@loom/transport-types`.
+// client imports as `@loomfsm/transport-types`.
 
 export type {
   SpawnRequest,

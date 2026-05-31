@@ -40,7 +40,7 @@ import type {
   LLMProvider,
   ProviderResult,
   ProviderSpawnRequest,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 const DEFAULT_NUM_PREDICT = 4096;
 const DEFAULT_OLLAMA_HOST = "http://localhost:11434";

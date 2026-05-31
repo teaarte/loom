@@ -1,5 +1,5 @@
 {
-  "name": "@loom/provider-claude-code-shuttle",
+  "name": "@loomfsm/provider-claude-code-shuttle",
   "version": "0.1.0",
   "type": "module",
   "description": "Zero-config shuttle provider for loom — runs agents through the host with no API key.",
@@ -23,7 +23,7 @@
     "test": "tsc && node --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
-    "@loom/kernel": "workspace:*"
+    "@loomfsm/kernel": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

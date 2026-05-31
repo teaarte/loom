@@ -1,5 +1,5 @@
 {
-  "name": "@loom/bundle-code",
+  "name": "@loomfsm/bundle-code",
   "version": "0.1.0",
   "type": "module",
   "description": "Code review / implementation bundle for loom — agents, reference knowledge, schemas, and stack candidates.",
@@ -27,7 +27,7 @@
     "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
-    "@loom/kernel": "workspace:*"
+    "@loomfsm/kernel": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

@@ -1,10 +1,10 @@
-# @loom/cli
+# @loomfsm/cli
 
 The `loom` command-line installer. It registers the pipeline MCP server with
 your agent host, installs the `/task` and `/done` slash commands, and
 authorizes project directories for tasks.
 
-Most users install the [`@loom/pipeline`](https://www.npmjs.com/package/@loom/pipeline)
+Most users install the [`@loomfsm/pipeline`](https://www.npmjs.com/package/@loomfsm/pipeline)
 meta-package, which bundles this CLI together with the server, the default
 bundle, and the provider in a single `npm i -g`. Install this package directly
 only if you are assembling your own runtime.

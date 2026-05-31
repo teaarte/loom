@@ -1,5 +1,5 @@
 {
-  "name": "@loom/provider-openrouter",
+  "name": "@loomfsm/provider-openrouter",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
     "test": "tsc && node --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
-    "@loom/kernel": "workspace:*",
+    "@loomfsm/kernel": "workspace:*",
     "openai": "^6.0.0"
   }
 }

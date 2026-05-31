@@ -13,7 +13,7 @@ import type {
   ProviderResult,
   ProviderShuttleIntent,
   ProviderSpawnRequest,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 const RUNNER_HINT = "claude-code-task";
 

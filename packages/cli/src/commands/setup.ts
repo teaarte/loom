@@ -52,7 +52,7 @@ function resolveTargets(scope: "user" | "project", env: CliEnv): SetupTargets {
   };
 }
 
-// The installed @loom/mcp-server package root + its declared entrypoint, both
+// The installed @loomfsm/mcp-server package root + its declared entrypoint, both
 // resolved through Node's resolver so they work from an installed
 // node_modules copy and the monorepo workspace symlink alike.
 export interface ServerSource {
@@ -62,7 +62,7 @@ export interface ServerSource {
 
 export function resolveServerSource(): ServerSource {
   const require = createRequire(import.meta.url);
-  const pkgPath = require.resolve("@loom/mcp-server/package.json");
+  const pkgPath = require.resolve("@loomfsm/mcp-server/package.json");
   const pkgRoot = dirname(pkgPath);
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { bin?: JsonValue };
   const binRel =
@@ -72,7 +72,7 @@ export function resolveServerSource(): ServerSource {
         ? pkg.bin
         : undefined;
   if (binRel === undefined) {
-    throw new Error("@loom/mcp-server package.json declares no stdio entrypoint");
+    throw new Error("@loomfsm/mcp-server package.json declares no stdio entrypoint");
   }
   return {
     stdioPath: resolve(pkgRoot, binRel),
@@ -175,7 +175,7 @@ function planCommand(
 
 export interface SetupOpts {
   // Tests inject a controlled server source; production resolves the installed
-  // @loom/mcp-server package.
+  // @loomfsm/mcp-server package.
   source?: ServerSource;
 }
 

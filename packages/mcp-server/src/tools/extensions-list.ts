@@ -3,7 +3,7 @@
 // SQL WHERE clauses; `include_manifest` toggles whether the canonical
 // manifest_json column is parsed back into a typed manifest object.
 
-import { openDb } from "@loom/kernel";
+import { openDb } from "@loomfsm/kernel";
 
 import type {
   ExtensionsListEntry,
@@ -11,7 +11,7 @@ import type {
   ExtensionsListResponse,
   ToolHandler,
 } from "../types.js";
-import type { ExtensionKind, ExtensionManifest } from "@loom/kernel";
+import type { ExtensionKind, ExtensionManifest } from "@loomfsm/kernel";
 
 interface ExtensionRow {
   id: string;

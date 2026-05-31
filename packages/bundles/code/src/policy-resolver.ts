@@ -24,7 +24,7 @@ import type {
   GatePolicyResult,
   GateRole,
   PolicyContext,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 function renderPlanFeedback(blockers: number): string {
   return `Plan has ${blockers} open blocking finding(s). Revise the plan to resolve them before implementation.`;

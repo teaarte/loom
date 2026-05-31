@@ -1,5 +1,5 @@
 {
-  "name": "@loom/kernel",
+  "name": "@loomfsm/kernel",
   "version": "0.1.0",
   "type": "module",
   "description": "Generic finite-state-machine kernel for multi-agent LLM workflows — atomic state, replay-deterministic, zero runtime dependencies.",

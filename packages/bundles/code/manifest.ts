@@ -1,4 +1,4 @@
-import { defineManifest } from "@loom/kernel";
+import { defineManifest } from "@loomfsm/kernel";
 
 export default defineManifest({
   manifest_version: "1.0",

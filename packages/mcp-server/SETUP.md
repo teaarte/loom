@@ -6,7 +6,7 @@ it at a project that has been added to the allowlist.
 
 ## Quick install (recommended)
 
-If you installed the `loom` command (`npm i -g @loom/pipeline`), the three steps
+If you installed the `loom` command (`npm i -g @loomfsm/pipeline`), the three steps
 below are automated:
 
 ```

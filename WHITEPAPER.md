@@ -24,7 +24,7 @@ Three observations motivate the design.
 
 The kernel commits to eight constraints, every one of them enforced by code or by a CI grep:
 
-1. **Generic kernel.** No domain vocabulary in `@loom/kernel`. No agent names, no phase names, no review semantics. The kernel runs *some* FSM over *some* bundle; the bundle names the world.
+1. **Generic kernel.** No domain vocabulary in `@loomfsm/kernel`. No agent names, no phase names, no review semantics. The kernel runs *some* FSM over *some* bundle; the bundle names the world.
 2. **Schemas at every IO boundary.** State, manifests, bundle outputs, MCP tool args — all validated against JSON Schema (Ajv) at every read/write boundary. No "trust the caller."
 3. **Invariants over conventions.** Architectural rules are encoded as `Invariant` functions called inside the commit transaction. A violation rolls the transaction back. The 13 kernel invariants split into one schema-meta, nine state-shape, and three ledger-consistency rules.
 4. **Code-and-LLM hybrid as methodology, not contract.** Classification = LLM-tool. Deterministic derivation = code. The substrate does not blur the line.
@@ -45,7 +45,7 @@ The principles are constraints, not aspirations. Each one is paired with a way t
                    │  KernelDirective ⇄ TransportResponse
                    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                Kernel  (@loom/kernel)                       │
+│                Kernel  (@loomfsm/kernel)                       │
 │                                                             │
 │   runFSM ── Stage interpreter (5 variants)                  │
 │        ├── StateBackend.withTransaction (atomic)            │
@@ -101,7 +101,7 @@ Pure functions over state, called inside `runInvariants(tx)` at exactly three si
 
 **Acceptance is not a safety boundary.** The substrate refuses to treat LLM-judged "acceptance" as the only line between FSM and "shipped." A bundle that sets any role to `"auto"` must ship deterministic safety-floor invariants (lint-clean, tests-pass, typecheck-clean for the code bundle); bundle-loader refuses otherwise. This is the difference between *honest autonomy* and *theatre*.
 
-**No vendor strings in the kernel.** Provider names, transport names, and model names do not appear in `@loom/kernel`. The CI grep enforces this. Swapping `anthropic-sdk` for `openrouter` is a config edit; swapping the kernel's idea of what a provider *is* — not a change a user can make, and that's the point.
+**No vendor strings in the kernel.** Provider names, transport names, and model names do not appear in `@loomfsm/kernel`. The CI grep enforces this. Swapping `anthropic-sdk` for `openrouter` is a config edit; swapping the kernel's idea of what a provider *is* — not a change a user can make, and that's the point.
 
 **State is observable.** Operators inspect with `sqlite3 state.db`. The wiki is also the operator's runbook. There is no proprietary state format; there is no telemetry pipeline you need to stand up before you can debug.
 

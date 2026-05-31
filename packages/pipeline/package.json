@@ -1,8 +1,8 @@
 {
-  "name": "@loom/pipeline",
+  "name": "@loomfsm/pipeline",
   "version": "0.1.0",
   "type": "module",
-  "description": "Install loom in one step: npm i -g @loom/pipeline && loom setup. Pulls the CLI, the MCP server, the default bundle, and the zero-config provider.",
+  "description": "Install loom in one step: npm i -g @loomfsm/pipeline && loom setup. Pulls the CLI, the MCP server, the default bundle, and the zero-config provider.",
   "license": "Apache-2.0",
   "bin": {
     "loom": "./bin/loom.js"
@@ -12,11 +12,11 @@
     "README.md"
   ],
   "dependencies": {
-    "@loom/bundle-code": "workspace:*",
-    "@loom/cli": "workspace:*",
-    "@loom/kernel": "workspace:*",
-    "@loom/mcp-server": "workspace:*",
-    "@loom/provider-claude-code-shuttle": "workspace:*"
+    "@loomfsm/bundle-code": "workspace:*",
+    "@loomfsm/cli": "workspace:*",
+    "@loomfsm/kernel": "workspace:*",
+    "@loomfsm/mcp-server": "workspace:*",
+    "@loomfsm/provider-claude-code-shuttle": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

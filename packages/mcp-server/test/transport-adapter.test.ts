@@ -5,7 +5,7 @@ import type {
   KernelDirective,
   ProviderShuttleIntent,
   UserAnswerSchema,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 import { createTransportAdapter, shape } from "../src/transport-adapter.js";
 

@@ -1,5 +1,5 @@
 {
-  "name": "@loom/cli",
+  "name": "@loomfsm/cli",
   "version": "0.1.0",
   "type": "module",
   "description": "The loom command-line installer — register the MCP server and authorize projects.",
@@ -26,7 +26,7 @@
     "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
-    "@loom/mcp-server": "workspace:*"
+    "@loomfsm/mcp-server": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

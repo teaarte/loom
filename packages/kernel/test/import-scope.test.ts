@@ -41,21 +41,21 @@ describe("validateImportScope — raw Transaction reach", () => {
   it("refuses a named import of Transaction", () => {
     assertRefused(
       "named.ts",
-      `import type { Transaction } from "@loom/kernel";\nexport const x = 1;\n`,
+      `import type { Transaction } from "@loomfsm/kernel";\nexport const x = 1;\n`,
     );
   });
 
   // Regression: the binding regex now accepts `export` in place of
   // `import`, so a bundle handing the raw handle out its OWN barrel is
   // refused. Reverting the verb to import-only lets this through.
-  it("refuses a re-export of Transaction from @loom/kernel", () => {
-    assertRefused("reexport.ts", `export { Transaction } from "@loom/kernel";\n`);
+  it("refuses a re-export of Transaction from @loomfsm/kernel", () => {
+    assertRefused("reexport.ts", `export { Transaction } from "@loomfsm/kernel";\n`);
   });
 
   it("refuses a re-export through the deep transaction path", () => {
     assertRefused(
       "reexport-path.ts",
-      `export { Transaction } from "@loom/kernel/state/transaction.js";\n`,
+      `export { Transaction } from "@loomfsm/kernel/state/transaction.js";\n`,
     );
   });
 
@@ -65,7 +65,7 @@ describe("validateImportScope — raw Transaction reach", () => {
   it("refuses a namespace import whose member access reaches Transaction", () => {
     assertRefused(
       "namespace.ts",
-      `import * as K from "@loom/kernel";\nexport function f(tx: K.Transaction) {\n  return tx;\n}\n`,
+      `import * as K from "@loomfsm/kernel";\nexport function f(tx: K.Transaction) {\n  return tx;\n}\n`,
     );
   });
 
@@ -74,14 +74,14 @@ describe("validateImportScope — raw Transaction reach", () => {
   it("accepts a namespace import of a non-Transaction symbol", () => {
     assertAccepted(
       "namespace-ok.ts",
-      `import * as K from "@loom/kernel";\nexport const r = {} as K.Registry;\n`,
+      `import * as K from "@loomfsm/kernel";\nexport const r = {} as K.Registry;\n`,
     );
   });
 
   it("accepts a named import of a non-Transaction symbol", () => {
     assertAccepted(
       "named-ok.ts",
-      `import type { Registry } from "@loom/kernel";\nexport const x = 1;\n`,
+      `import type { Registry } from "@loomfsm/kernel";\nexport const x = 1;\n`,
     );
   });
 });

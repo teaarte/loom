@@ -10,7 +10,7 @@
 // CI grep that refuses any mention of this type inside the kernel
 // source tree.
 
-import type { KernelDirective, UserAnswerSchema } from "@loom/kernel";
+import type { KernelDirective, UserAnswerSchema } from "@loomfsm/kernel";
 
 export type TransportResponse =
   | {

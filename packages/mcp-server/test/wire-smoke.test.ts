@@ -36,7 +36,7 @@ import {
   type PolicyName,
   type Registry,
   type Stage,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 import { createServer } from "../src/index.js";
 

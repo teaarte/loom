@@ -3,7 +3,7 @@
 // direct-callable map so tests skip the JSON-RPC framing and exercise
 // the handler bodies in-process.
 
-import type { Registry } from "@loom/kernel";
+import type { Registry } from "@loomfsm/kernel";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -52,7 +52,7 @@ export interface ServerDeps {
   allowlistPath?: string;
 }
 
-const SERVER_NAME = "@loom/mcp-server";
+const SERVER_NAME = "@loomfsm/mcp-server";
 const SERVER_VERSION = "0.0.0";
 
 export interface ToolRegistry {

@@ -9,8 +9,8 @@
 // so a multi-statement inspection never sees a torn mix across an
 // interleaved writer commit, and the reader never blocks the writer.
 
-import { loadState, withReadTransaction } from "@loom/kernel";
-import type { Transaction } from "@loom/kernel";
+import { loadState, withReadTransaction } from "@loomfsm/kernel";
+import type { Transaction } from "@loomfsm/kernel";
 
 import type {
   PipelineStateView,

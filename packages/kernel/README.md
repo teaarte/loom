@@ -1,4 +1,4 @@
-# @loom/kernel
+# @loomfsm/kernel
 
 The FSM kernel: state machine, invariants, idempotency ledger, policy
 engine, and the plugin contracts that providers, transports, and bundles
@@ -7,7 +7,7 @@ built-in `node:sqlite`.
 
 ## Runtime requirement
 
-`@loom/kernel` imports `node:sqlite`. On **Node 22.x** that module is
+`@loomfsm/kernel` imports `node:sqlite`. On **Node 22.x** that module is
 behind a runtime flag, so any process that loads the kernel — your app,
 your test runner, a one-off script — must pass it:
 
@@ -30,7 +30,7 @@ shared scripts that may run on either line.
 ## Install
 
 ```bash
-pnpm add @loom/kernel
+pnpm add @loomfsm/kernel
 ```
 
 ## License

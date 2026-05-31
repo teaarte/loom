@@ -1,5 +1,5 @@
 {
-  "name": "@loom/transport-types",
+  "name": "@loomfsm/transport-types",
   "version": "0.1.0",
   "type": "module",
   "description": "Shared wire-response types for loom transports.",
@@ -22,7 +22,7 @@
     "prepack": "pnpm run build"
   },
   "dependencies": {
-    "@loom/kernel": "workspace:*"
+    "@loomfsm/kernel": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

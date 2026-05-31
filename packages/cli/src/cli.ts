@@ -30,7 +30,7 @@ Usage:
   loom --help | --version
 
 Typical first run:
-  npm i -g @loom/pipeline
+  npm i -g @loomfsm/pipeline
   loom setup
   loom allowlist add        # in each project you want to use
 `;

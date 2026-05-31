@@ -1,4 +1,4 @@
-# @loom/pipeline
+# @loomfsm/pipeline
 
 One-step install for the loom pipeline. Installing this package puts the
 `loom` command on your PATH and pulls everything the pipeline needs to run:
@@ -8,7 +8,7 @@ zero-config provider.
 ## Install
 
 ```
-npm i -g @loom/pipeline
+npm i -g @loomfsm/pipeline
 ```
 
 ## Set up your agent host

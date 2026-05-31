@@ -10,7 +10,7 @@ import {
   reconcileExtensions,
   type DiscoveredManifest,
   type NowToken,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 import { createServer } from "../src/index.js";
 

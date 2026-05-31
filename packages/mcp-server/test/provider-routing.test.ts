@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { closeDb } from "@loom/kernel";
-import type { LLMProvider, PipelineState } from "@loom/kernel";
+import { closeDb } from "@loomfsm/kernel";
+import type { LLMProvider, PipelineState } from "@loomfsm/kernel";
 
 import { createAssembleRegistry } from "../src/bootstrap.js";
 

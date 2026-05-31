@@ -21,7 +21,7 @@
 // an LLM-confabulated or injection-supplied path from reading a package
 // registry token or an infra credential by accident.
 
-import type { SensitivePathRules } from "@loom/kernel";
+import type { SensitivePathRules } from "@loomfsm/kernel";
 
 export const CODE_BUNDLE_SENSITIVE_PATH_RULES: SensitivePathRules = {
   dirs: [

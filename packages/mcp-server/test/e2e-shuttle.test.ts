@@ -20,8 +20,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { closeDb, openDb } from "@loom/kernel";
-import type { TransportResponse } from "@loom/transport-types";
+import { closeDb, openDb } from "@loomfsm/kernel";
+import type { TransportResponse } from "@loomfsm/transport-types";
 
 import { _resetRegistryCacheForTest, assembleRegistry } from "../src/bootstrap.js";
 import { createContinueTaskTool, createRunTaskTool } from "../src/index.js";

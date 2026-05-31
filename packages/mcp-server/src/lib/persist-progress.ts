@@ -15,7 +15,7 @@
 // once. It is a no-op when the paused index already equals the stored
 // one, so flows without interleaved steps are unaffected.
 
-import type { Transaction } from "@loom/kernel";
+import type { Transaction } from "@loomfsm/kernel";
 
 export async function persistDriverStepIndex(
   tx: Transaction,

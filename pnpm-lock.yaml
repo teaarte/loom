@@ -17,13 +17,13 @@ importers:
 
   packages/bundles/code:
     dependencies:
-      '@loom/kernel':
+      '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../../kernel
 
   packages/cli:
     dependencies:
-      '@loom/mcp-server':
+      '@loomfsm/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
 
@@ -31,41 +31,41 @@ importers:
 
   packages/mcp-server:
     dependencies:
-      '@loom/bundle-code':
+      '@loomfsm/bundle-code':
         specifier: workspace:*
         version: link:../bundles/code
-      '@loom/kernel':
+      '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../kernel
-      '@loom/provider-claude-code-shuttle':
+      '@loomfsm/provider-claude-code-shuttle':
         specifier: workspace:*
         version: link:../providers/claude-code-shuttle
-      '@loom/transport-types':
+      '@loomfsm/transport-types':
         specifier: workspace:*
         version: link:../transport-types
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
     devDependencies:
-      '@loom/provider-ollama':
+      '@loomfsm/provider-ollama':
         specifier: workspace:*
         version: link:../providers/ollama
 
   packages/pipeline:
     dependencies:
-      '@loom/bundle-code':
+      '@loomfsm/bundle-code':
         specifier: workspace:*
         version: link:../bundles/code
-      '@loom/cli':
+      '@loomfsm/cli':
         specifier: workspace:*
         version: link:../cli
-      '@loom/kernel':
+      '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../kernel
-      '@loom/mcp-server':
+      '@loomfsm/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
-      '@loom/provider-claude-code-shuttle':
+      '@loomfsm/provider-claude-code-shuttle':
         specifier: workspace:*
         version: link:../providers/claude-code-shuttle
 
@@ -74,19 +74,19 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.99.0
         version: 0.99.0(zod@4.4.3)
-      '@loom/kernel':
+      '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../../kernel
 
   packages/providers/claude-code-shuttle:
     dependencies:
-      '@loom/kernel':
+      '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../../kernel
 
   packages/providers/ollama:
     dependencies:
-      '@loom/kernel':
+      '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../../kernel
       ollama:
@@ -95,7 +95,7 @@ importers:
 
   packages/providers/openrouter:
     dependencies:
-      '@loom/kernel':
+      '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../../kernel
       openai:
@@ -104,7 +104,7 @@ importers:
 
   packages/transport-types:
     dependencies:
-      '@loom/kernel':
+      '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../kernel
 

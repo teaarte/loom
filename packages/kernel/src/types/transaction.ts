@@ -1,7 +1,7 @@
 // Kernel-internal SQLite transaction handle + audit row.
 //
 // `Transaction` wraps `node:sqlite` Database with the kernel's
-// atomic-mutation contract. This type is exported from `@loom/kernel`
+// atomic-mutation contract. This type is exported from `@loomfsm/kernel`
 // but is NOT part of the plugin API — bundle code receives a
 // `BundleScratchTx` façade instead. Static load-time check refuses to
 // register a bundle whose source imports the raw `Transaction` type.

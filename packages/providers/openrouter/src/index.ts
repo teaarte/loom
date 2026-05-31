@@ -23,7 +23,7 @@ import type {
   LLMProvider,
   ProviderResult,
   ProviderSpawnRequest,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 const DEFAULT_MAX_TOKENS = 4096;
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";

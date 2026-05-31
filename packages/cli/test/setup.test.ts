@@ -1,6 +1,6 @@
 // `loom setup` against a real temp $HOME / project dir — no mocks, no globals.
 // A fake server source (a temp stdio.js + temp command files) stands in for
-// the installed @loom/mcp-server so these assert the merge / idempotency /
+// the installed @loomfsm/mcp-server so these assert the merge / idempotency /
 // no-clobber logic precisely; the npm-pack smoke covers real package
 // resolution end to end.
 

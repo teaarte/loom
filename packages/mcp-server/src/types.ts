@@ -12,8 +12,8 @@ import type {
   ExtensionManifest,
   PipelineStateView,
   StackInfo,
-} from "@loom/kernel";
-import type { SpawnRequest, TransportResponse } from "@loom/transport-types";
+} from "@loomfsm/kernel";
+import type { SpawnRequest, TransportResponse } from "@loomfsm/transport-types";
 
 export type { PipelineStateView };
 

@@ -1,5 +1,5 @@
 {
-  "name": "@loom/mcp-server",
+  "name": "@loomfsm/mcp-server",
   "version": "0.1.0",
   "type": "module",
   "description": "MCP transport for loom — exposes the pipeline tools over stdio and assembles the runnable registry.",
@@ -31,14 +31,14 @@
     "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
-    "@loom/bundle-code": "workspace:*",
-    "@loom/kernel": "workspace:*",
-    "@loom/provider-claude-code-shuttle": "workspace:*",
-    "@loom/transport-types": "workspace:*",
+    "@loomfsm/bundle-code": "workspace:*",
+    "@loomfsm/kernel": "workspace:*",
+    "@loomfsm/provider-claude-code-shuttle": "workspace:*",
+    "@loomfsm/transport-types": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
-    "@loom/provider-ollama": "workspace:*"
+    "@loomfsm/provider-ollama": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

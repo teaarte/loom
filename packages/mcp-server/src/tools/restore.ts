@@ -27,7 +27,7 @@ import {
   KernelError,
   parseRestoreSql,
   withStateTransaction,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 import type { RestoreInput, RestoreResponse, ToolHandler } from "../types.js";
 

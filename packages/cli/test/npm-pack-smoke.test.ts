@@ -15,7 +15,7 @@
 //
 // No npm install runs: the only external dependency in this graph
 // (@modelcontextprotocol/sdk) is never loaded by these paths, so extracting
-// the @loom tarballs into one flat node_modules is a faithful, offline stand-in
+// the @loomfsm tarballs into one flat node_modules is a faithful, offline stand-in
 // for `npm i -g`.
 
 import assert from "node:assert/strict";
@@ -104,7 +104,7 @@ describe("npm pack — self-contained install smoke", () => {
   mkdirSync(store, { recursive: true });
   mkdirSync(prefix, { recursive: true });
 
-  const loomBin = join(prefix, "node_modules", "@loom", "pipeline", "bin", "loom.js");
+  const loomBin = join(prefix, "node_modules", "@loomfsm", "pipeline", "bin", "loom.js");
 
   // One install for all three assertions; packing + building 7 packages is the
   // slow part, so the heavy setup happens once. `prepack` rebuilds each
@@ -112,9 +112,9 @@ describe("npm pack — self-contained install smoke", () => {
   before(() => packAndInstall(root, store, prefix), { timeout: 300_000 });
   after(() => rmSync(work, { recursive: true, force: true }));
 
-  it("the @loom/pipeline tarball declares no unresolved workspace: deps", () => {
+  it("the @loomfsm/pipeline tarball declares no unresolved workspace: deps", () => {
     const pkg = JSON.parse(
-      readFileSync(join(prefix, "node_modules", "@loom", "pipeline", "package.json"), "utf8"),
+      readFileSync(join(prefix, "node_modules", "@loomfsm", "pipeline", "package.json"), "utf8"),
     ) as { dependencies: Record<string, string> };
     for (const [dep, range] of Object.entries(pkg.dependencies)) {
       assert.ok(!range.includes("workspace:"), `${dep} still carries a workspace: range`);
@@ -143,13 +143,13 @@ describe("npm pack — self-contained install smoke", () => {
   });
 
   it("(c) the installed assembleRegistry materializes prompts + the bundle's refs catalog", () => {
-    // Probe script lives inside the prefix so it resolves @loom/* from the
+    // Probe script lives inside the prefix so it resolves @loomfsm/* from the
     // installed node_modules, exactly as a consumer's code would.
     const probePath = join(prefix, "probe.mjs");
     writeFileSync(
       probePath,
       [
-        'import { assembleRegistry } from "@loom/mcp-server/bootstrap";',
+        'import { assembleRegistry } from "@loomfsm/mcp-server/bootstrap";',
         "const projectDir = process.argv[2];",
         "const reg = await assembleRegistry(projectDir);",
         "const assets = reg.context_assets ?? [];",

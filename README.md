@@ -216,7 +216,7 @@ Published under the `@loomfsm/*` scope: `@loomfsm/pipeline` (install this), plus
 
 ## Status & roadmap
 
-`v0.1.0`: kernel + the `code` bundle + three providers + mcp-server & cli; one task per
+`v0.1.1`: kernel + the `code` bundle + three providers + mcp-server & cli; one task per
 project; published on npm. Early and evolving. On the near horizon: richer host/driver
 integration, more bundles, bundle runtime isolation, a cross-task memory subsystem, and
 a daemon transport. The substrate is *additive* to all of these — none reshapes the kernel.

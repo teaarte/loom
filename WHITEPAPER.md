@@ -61,7 +61,7 @@ flowchart TB
         OR["openrouter"]
     end
 
-    Transports <==>|"KernelDirective ⇄ TransportResponse"| KERNEL
+    Transports ==>|"KernelDirective ⇄ TransportResponse"| KERNEL
     KERNEL ==> Bundles
     KERNEL ==> Providers
 ```
@@ -88,7 +88,7 @@ sequenceDiagram
     H->>A: execute
     A-->>H: result
     H->>S: continue (agent result)
-    Note over K: one atomic commit —<br/>state + ledger + audit;<br/>invariants checked, rollback on violation
+    Note over K: one atomic commit —<br/>state + ledger + audit<br/>(invariants checked, rollback on violation)
     S->>K: tick
     K-->>S: directive — ask user (gate)
     S-->>U: approve the plan? (shown verbatim)
@@ -137,7 +137,7 @@ flowchart TB
     R["read state snapshot"] --> I["interpret the current Stage"]
     I --> E["compute the effect<br/>(spawn · fan-out · gate · step · finalize)"]
     E --> TX{{"withTransaction"}}
-    TX -->|commit together| W["state&nbsp;+&nbsp;idempotency&nbsp;ledger&nbsp;+&nbsp;audit"]
+    TX -->|commit together| W["state + idempotency ledger + audit"]
     W --> D["emit KernelDirective"]
     TX -.->|invariant violated| RB["rollback — nothing lands"]
 ```

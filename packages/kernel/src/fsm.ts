@@ -30,6 +30,7 @@ import {
   materializeAccessSnapshot,
 } from "./lib/access-snapshots.js";
 import { dispatchEventSteps } from "./lib/dispatch-event-steps.js";
+import { advancePhaseProgress } from "./lib/phase-progress.js";
 import { narrowStateForBundle } from "./narrow.js";
 import { interpretFanout } from "./stages/fanout.js";
 import { interpretFinalize } from "./stages/finalize.js";
@@ -129,10 +130,25 @@ export async function runFSM(
     // running phase rather than a placeholder.
     const activePhase = stagePhase(stage);
 
+    // BundleOps the interpreter pushed this tick, captured before the
+    // buffer is cleared so their effects can be mirrored onto the
+    // in-memory snapshot AFTER the tx commits (see syncStateFromOps).
+    let appliedOps: BundleOp[] = [];
+
     const stageResult = await withStateTransaction(
       state.project_dir,
       now,
       async (tx) => {
+        // Drive the phase walk for the stage about to run: settle the
+        // phase the flow just left and open the current one, co-committed
+        // with this stage's effects.
+        await advancePhaseProgress(
+          tx,
+          state,
+          flow,
+          state.driver.step_index,
+          registry.stages,
+        );
         const { ctx, ops } = await buildStageContext(state, registry, tx);
         await dispatchEventSteps(`before-${stage.kind}`, ctx, tx, ops, activePhase);
         const result = await interpretStage(stage, state, ctx);
@@ -151,10 +167,20 @@ export async function runFSM(
         // A throw here aborts the outer tx — invariants on commit
         // catch what mutators alone cannot.
         await applyBundleOps(tx, ops, activePhase);
+        appliedOps = ops.slice();
         ops.length = 0;
         return result;
       },
     );
+
+    // Mirror the committed ops onto the in-memory snapshot so a later
+    // stage in this same pass reads what an earlier Step wrote. The DB
+    // merge already landed; without this, `ctx.state` is rebuilt from a
+    // stale snapshot every stage and a Step that sets a decision (e.g.
+    // which reviewers a fanout should include) is invisible to the very
+    // next stage. Runs only after a successful commit — a rolled-back tx
+    // throws out of runFSM and the snapshot is discarded.
+    syncStateFromOps(state, appliedOps);
 
     const afterCtx = await buildHookContext(state, registry, now, stageName);
     await hookRunner.fire(`after-${stage.kind}`, afterCtx);
@@ -264,6 +290,43 @@ export async function interpretStage(
     default: {
       const _exhaustive: never = stage;
       return _exhaustive;
+    }
+  }
+}
+
+// Mirror committed BundleOps onto the in-memory PipelineState so a later
+// stage in the same pass observes an earlier Step's writes. `applyBundleOps`
+// lands these in SQLite; the loop holds a single in-memory snapshot it does
+// NOT reload between stages, so without this mirror the kernel rebuilds
+// `ctx.state` from stale data every stage. Only the ops that map to a
+// PipelineState field are mirrored — findings / audit / bundle-table rows
+// have no aggregate-snapshot field and are read back through their own
+// accessors when needed.
+function syncStateFromOps(state: PipelineState, ops: BundleOp[]): void {
+  for (const op of ops) {
+    switch (op.op) {
+      case "set_decision":
+        state.decisions[op.key] = op.value;
+        break;
+      case "set_bundle_state_field":
+        state.bundle_state = { ...(state.bundle_state ?? {}), [op.path]: op.value };
+        break;
+      case "record_files_modified":
+        state.files_modified = [...new Set([...state.files_modified, ...op.paths])];
+        break;
+      case "record_files_created":
+        state.files_created = [...new Set([...state.files_created, ...op.paths])];
+        break;
+      case "record_finding":
+      case "upsert_bundle_row":
+      case "audit":
+      case "render_view":
+        // No aggregate-snapshot field — nothing to mirror.
+        break;
+      default: {
+        const _exhaustive: never = op;
+        void _exhaustive;
+      }
     }
   }
 }

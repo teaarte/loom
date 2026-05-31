@@ -1339,6 +1339,109 @@ describe("persistAgentResult — integration with state core", () => {
   });
 });
 
+describe("runFSM — phase progression", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    _resetInvariantsForTest();
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  // Seed two phases p1 + p2, both pending.
+  async function seedTwoPhase(): Promise<NowToken> {
+    const now = captureNow();
+    await withStateTransaction(projectDir, now, async (tx) => {
+      await tx.exec(
+        "INSERT INTO pipeline_state (id, schema_version, project_dir, bundle, task, task_id, driver_state_id, status, verdict, started_at, decisions) " +
+          "VALUES (1, ?, ?, ?, ?, ?, ?, ?, NULL, ?, '{}')",
+        ["3.0.0", projectDir, "stub-bundle", "phase fixture", "t-2026-05-28-phase", "d-fixture", "in_progress", now],
+      );
+      await tx.exec("INSERT INTO driver_state (id, flow_name, step_index, complete) VALUES (1, 'default', 0, 0)");
+      await tx.exec("INSERT INTO pipeline_counters (id) VALUES (1)");
+      await tx.exec("INSERT INTO phases (name, status, updated_at) VALUES ('p1','pending',?)", [now]);
+      await tx.exec("INSERT INTO phases (name, status, updated_at) VALUES ('p2','pending',?)", [now]);
+    });
+    return now;
+  }
+
+  function twoPhaseState(now: NowToken): PipelineState {
+    const base = buildInMemoryState(projectDir, now, { flow_name: "default" });
+    base.task_id = "t-2026-05-28-phase";
+    base.phases = [
+      { name: "p1", status: "pending", skipped_reason: null, phase_extension: null, updated_at: now },
+      { name: "p2", status: "pending", skipped_reason: null, phase_extension: null, updated_at: now },
+    ];
+    return base;
+  }
+
+  it("a phase walks pending → in_progress → completed; a clean run never ends all-skipped", async () => {
+    const stages: Record<string, Stage> = {
+      s1: { kind: "spawn", name: "s1", phase: "p1", agent: "a1" } as SpawnStage,
+      m2: { kind: "step", name: "m2", phase: "p2", position: "positional", effects: [] } as StepStage,
+      finalize: { kind: "finalize", name: "finalize" } as FinalizeStage,
+    };
+    const registry = buildRegistry({ stages, flow: ["s1", "m2", "finalize"], agents: [makeAgent("a1")] });
+
+    const now = await seedTwoPhase();
+    const state = twoPhaseState(now);
+
+    // Tick 1: enters p1 (its first stage is the spawn), halts on the shuttle.
+    const first = await runFSM(state, registry);
+    assert.equal(first.directive.kind, "shuttle");
+    const onDiskAfterSpawn = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(phaseStatusOf(onDiskAfterSpawn, "p1"), "in_progress", "p1 opens on entry");
+    assert.equal(phaseStatusOf(onDiskAfterSpawn, "p2"), "pending", "p2 not yet entered");
+
+    // Deliver the spawn result → drains the pending row, writes an
+    // agent_records row for p1, advances the step.
+    const arid =
+      first.directive.kind === "shuttle" ? first.directive.spawn.agent_run_id : "";
+    await withStateTransaction(projectDir, captureNow(), (tx) =>
+      deliverContinue(tx, {
+        input: { type: "agent-result", agent_run_id: arid, agent_output: "{}" },
+        driver_state_id: "d-fixture",
+        resolveOutputKind: () => "nonreview",
+      }),
+    );
+
+    // Tick 2: leaving p1 (it has a record → completed), runs m2 in p2,
+    // then finalize sweeps p2 (no record → skipped) and completes.
+    const resumed = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    const second = await runFSM(resumed, registry);
+    assert.equal(second.directive.kind, "complete");
+
+    const final = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(phaseStatusOf(final, "p1"), "completed", "p1 completes when the flow leaves it");
+    assert.equal(phaseStatusOf(final, "p2"), "skipped", "p2 ran no agents → skipped, with a reason");
+    const p2 = final.phases.find((p) => p.name === "p2");
+    assert.ok((p2?.skipped_reason?.length ?? 0) > 0, "skipped phase carries a reason");
+    // A clean run is NOT all-skipped — at least one phase reads completed.
+    assert.ok(final.phases.some((p) => p.status === "completed"), "a clean run shows a completed phase");
+  });
+
+  it("a phase with no agents is skipped (not completed) when the flow leaves it", async () => {
+    const stages: Record<string, Stage> = {
+      m1: { kind: "step", name: "m1", phase: "p1", position: "positional", effects: [] } as StepStage,
+      m2: { kind: "step", name: "m2", phase: "p2", position: "positional", effects: [] } as StepStage,
+      finalize: { kind: "finalize", name: "finalize" } as FinalizeStage,
+    };
+    const registry = buildRegistry({ stages, flow: ["m1", "m2", "finalize"], agents: [] });
+    const now = await seedTwoPhase();
+    const state = twoPhaseState(now);
+
+    const out = await runFSM(state, registry);
+    assert.equal(out.directive.kind, "complete");
+    const final = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    // No agents ran in either phase → both skipped (with reasons), invariants hold.
+    assert.equal(phaseStatusOf(final, "p1"), "skipped");
+    assert.equal(phaseStatusOf(final, "p2"), "skipped");
+  });
+});
+
+function phaseStatusOf(state: PipelineState, name: string): string | undefined {
+  return state.phases.find((p) => p.name === name)?.status;
+}
+
 // Suppress unused-import warnings for fixture-side types that the
 // type system needs for the test fixtures above but the runtime
 // path doesn't reference directly.

@@ -6,10 +6,27 @@
 import type { RejectIntent, UserDecision } from "./user-answer.js";
 
 export type ContinueTaskInput =
-  | { type: "agent-result"; agent_run_id: string; agent_output: string }
+  | {
+      type: "agent-result";
+      agent_run_id: string;
+      agent_output: string;
+      // File accounting the host gathered for this result (e.g. the
+      // implementer's `git diff --name-only` after it ran). The kernel
+      // unions these into pipeline_state.files_{modified,created} inside
+      // the delivery tx, so the next FSM pass — which derives the review
+      // shaping (ui/api/security touched) and the diff snapshot — sees the
+      // real surface instead of an empty list. Absent → no file update.
+      files_modified?: string[];
+      files_created?: string[];
+    }
   | {
       type: "agents-results";
-      results: { agent_run_id: string; agent_output: string }[];
+      results: {
+        agent_run_id: string;
+        agent_output: string;
+        files_modified?: string[];
+        files_created?: string[];
+      }[];
       // True when host delivers some fanout siblings while others still
       // run — kernel accepts what arrived without advancing step_index.
       partial?: boolean;

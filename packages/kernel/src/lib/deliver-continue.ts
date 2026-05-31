@@ -61,6 +61,12 @@ export async function deliverContinue(
         input.agent_run_id,
         input.agent_output,
       );
+      // File accounting unions in only on a real (non-replay) delivery —
+      // a retried delivery must not re-merge, though the union is itself
+      // idempotent.
+      if (delivered) {
+        await mergeDeliveredFiles(tx, input.files_modified, input.files_created);
+      }
       // A pure replay (ledger row already present) is a no-op — it must
       // NOT advance the step a second time, or the FSM walks past the
       // next stage on every retried delivery.
@@ -82,6 +88,9 @@ export async function deliverContinue(
           result.agent_run_id,
           result.agent_output,
         );
+        if (delivered) {
+          await mergeDeliveredFiles(tx, result.files_modified, result.files_created);
+        }
         anyDelivered = anyDelivered || delivered;
       }
       if (anyDelivered) await advanceIfDrained(tx);
@@ -226,6 +235,50 @@ async function readTaskId(tx: Transaction): Promise<string | null> {
   );
   if (row === null || row.task_id === null) return null;
   return String(row.task_id);
+}
+
+// Union the host-reported file accounting into pipeline_state. The reviewer
+// fanout shapes itself (which reviewers run, the diff snapshot, the
+// sacred-tests check) off this surface; an empty list silently voids those
+// guarantees, so a host that knows what changed delivers it here. Union
+// (set-merge) keeps the call idempotent across a retried delivery.
+async function mergeDeliveredFiles(
+  tx: Transaction,
+  modified: string[] | undefined,
+  created: string[] | undefined,
+): Promise<void> {
+  await mergeFileColumn(tx, "files_modified", modified);
+  await mergeFileColumn(tx, "files_created", created);
+}
+
+async function mergeFileColumn(
+  tx: Transaction,
+  column: "files_modified" | "files_created",
+  add: string[] | undefined,
+): Promise<void> {
+  if (add === undefined || add.length === 0) return;
+  const clean = add.filter((p) => typeof p === "string" && p.length > 0);
+  if (clean.length === 0) return;
+  const row = await tx.queryRow<Record<string, string | null>>(
+    `SELECT ${column} FROM pipeline_state WHERE id = 1`,
+  );
+  let current: string[] = [];
+  const raw = row?.[column];
+  if (raw !== null && raw !== undefined && raw.length > 0) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        current = parsed.filter((v): v is string => typeof v === "string");
+      }
+    } catch {
+      current = [];
+    }
+  }
+  const merged = [...new Set([...current, ...clean])];
+  await tx.exec(
+    `UPDATE pipeline_state SET ${column} = ? WHERE id = 1`,
+    [JSON.stringify(merged)],
+  );
 }
 
 interface PendingUserAnswer {

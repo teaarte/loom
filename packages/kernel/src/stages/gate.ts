@@ -14,6 +14,7 @@
 //    - `auto-approve` / `auto-reject`: synthesize a `UserAnswer`,
 //      invoke `on_resume`, return whatever it produces.
 
+import { getKernelTx } from "../fsm.js";
 import { resolveGatePolicy } from "../gate-policy.js";
 import { makeGateEventId } from "../ids.js";
 import { buildPolicyContext } from "../policies/index.js";
@@ -21,6 +22,7 @@ import type { StageContext } from "../types/context.js";
 import type { GatePolicyResult } from "../types/policy.js";
 import type { GateStage, StageResult } from "../types/plugins.js";
 import type { PipelineState } from "../types/state.js";
+import type { Transaction } from "../types/transaction.js";
 import type { UserAnswer } from "../types/user-answer.js";
 
 export async function interpretGate(
@@ -35,6 +37,19 @@ export async function interpretGate(
     policyCtx,
     ctx.registry,
   );
+
+  // An auto-reject that asked to count against the replan cap must record
+  // itself, or the cap (read from pipeline_gate_counters.auto_rejections)
+  // never advances and a persistent blocker spins the auto-reject → walk-back
+  // loop forever. The dispatcher reads this counter BEFORE the factory next
+  // tick, so once it reaches the budget the gate escalates to a human
+  // instead of hanging. Bumped inside this gate's tx; mirrored in memory so
+  // a same-pass re-entry sees it too.
+  if (decision.type === "auto-reject" && decision.counts_against_replan_cap === true) {
+    const role = ctx.bundle.gate_roles?.[stage.name] ?? stage.name;
+    await bumpAutoRejection(getKernelTx(ctx), role);
+    state.gate_auto_rejections[role] = (state.gate_auto_rejections[role] ?? 0) + 1;
+  }
 
   if (decision.type === "human-required") {
     if (stage.on_pre_ask) {
@@ -77,6 +92,18 @@ export async function interpretGate(
     return { type: "walk_back_to", step: stage.name, reason: "auto-reject without bundle-supplied on_resume" };
   }
   return stage.on_resume(ctx.state, answer, ctx);
+}
+
+// Increment the per-role auto-rejection counter. The row is seeded on the
+// first auto-reject for the role; later ticks bump it. This is the value the
+// dispatcher sums against the replan budget ceiling.
+async function bumpAutoRejection(tx: Transaction, role: string): Promise<void> {
+  await tx.exec(
+    "INSERT INTO pipeline_gate_counters (role, human_revisions, auto_rejections) " +
+      "VALUES (?, 0, 1) " +
+      "ON CONFLICT(role) DO UPDATE SET auto_rejections = auto_rejections + 1",
+    [role],
+  );
 }
 
 function autoRejectAnswer(decision: GatePolicyResult): UserAnswer {

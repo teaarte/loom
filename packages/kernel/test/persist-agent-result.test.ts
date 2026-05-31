@@ -507,3 +507,206 @@ describe("persistAgentResult — four output_kind paths", () => {
     assert.equal(state.pending_agents.length, 0);
   });
 });
+
+// ============================================================================
+// Finding identity — server-minted, collision-proof across agents
+// ============================================================================
+
+describe("persistAgentResult — finding id is server-minted", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    _resetInvariantsForTest();
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  function findingWithId(agent: string, id: string) {
+    return {
+      schema_version: "1.0",
+      id,
+      agent,
+      iteration: 1,
+      task_id: "t-2026-05-28-persist",
+      file: "src/foo.ts",
+      line_start: 1,
+      line_end: 2,
+      severity: "warn" as const,
+      category: "style",
+      proposed_new_category: null,
+      pattern_id: null,
+      summary: "nit",
+      evidence_excerpt: null,
+      suggested_fix: null,
+      status: "open" as const,
+      ref_rule_id: null,
+    };
+  }
+
+  // Two agents emit the SAME client-supplied finding id (the cargo-culted
+  // example suffix). The server mints fresh ids, so both deliveries persist
+  // without a PRIMARY KEY collision and two distinct rows land. With the old
+  // "keep the client id when present" branch the second INSERT collides and
+  // the whole batch tx rolls back — this reddens on that revert.
+  it("two agents emitting the same client id do NOT collide — both findings persist", async () => {
+    await seedBaseline(projectDir);
+    await seedPending(projectDir, "ar-c-1", "logic-reviewer");
+    await seedPending(projectDir, "ar-c-2", "performance");
+
+    const COLLIDING = "f-2026-05-28-a1b2c3";
+
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      await persistAgentResult(tx, {
+        result: {
+          agent: "logic-reviewer",
+          agent_run_id: "ar-c-1",
+          output: "...",
+          parsed_header: { verdict: "APPROVE", findings: [] },
+          schema_validation: { ok: true },
+          findings: [findingWithId("logic-reviewer", COLLIDING)],
+        },
+        output_kind: "reviewer",
+        phase: "p1",
+        model: null,
+      });
+    });
+
+    // Second agent reuses the exact same finding id — must not throw.
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      await persistAgentResult(tx, {
+        result: {
+          agent: "performance",
+          agent_run_id: "ar-c-2",
+          output: "...",
+          parsed_header: { verdict: "APPROVE", findings: [] },
+          schema_validation: { ok: true },
+          findings: [findingWithId("performance", COLLIDING)],
+        },
+        output_kind: "reviewer",
+        phase: "p1",
+        model: null,
+      });
+    });
+
+    const ids = await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      const rows = await tx.queryAll<{ id: string }>("SELECT id FROM findings ORDER BY id");
+      return rows.map((r) => String(r.id));
+    });
+    assert.equal(ids.length, 2, "both findings should persist");
+    assert.notEqual(ids[0], ids[1], "server-minted ids must be distinct");
+    for (const id of ids) {
+      assert.match(id, /^f-\d{4}-\d{2}-\d{2}-[a-z0-9]{6}$/);
+      assert.notEqual(id, COLLIDING, "the client-supplied id must not be used verbatim");
+    }
+  });
+});
+
+// ============================================================================
+// Verdict ⟺ findings cross-check (A3 — data hygiene)
+// ============================================================================
+
+describe("persistAgentResult — verdict ⟺ findings cross-check", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    _resetInvariantsForTest();
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  // A reviewer reports REQUEST_CHANGES but every finding is non-blocking —
+  // a self-contradiction against the bundle's "REQUEST_CHANGES iff a
+  // blocking finding" rule. The stored verdict is normalized to the
+  // findings-derived APPROVE so it stops misrepresenting a clean result.
+  // Reverting the cross-check stores REQUEST_CHANGES verbatim → reddens.
+  it("normalizes REQUEST_CHANGES-with-zero-blockers to APPROVE", async () => {
+    await seedBaseline(projectDir);
+    await seedPending(projectDir, "ar-style-1", "style-reviewer");
+
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      await persistAgentResult(tx, {
+        result: {
+          agent: "style-reviewer",
+          agent_run_id: "ar-style-1",
+          output: "...",
+          parsed_header: { verdict: "REQUEST_CHANGES", summary: "nits only" },
+          schema_validation: { ok: true },
+          findings: [
+            {
+              schema_version: "1.0",
+              id: "",
+              agent: "style-reviewer",
+              iteration: 1,
+              task_id: "t-2026-05-28-persist",
+              file: "src/a.ts",
+              line_start: 1,
+              line_end: 1,
+              severity: "warn",
+              category: "style",
+              proposed_new_category: null,
+              pattern_id: null,
+              summary: "trailing whitespace",
+              evidence_excerpt: null,
+              suggested_fix: null,
+              status: "open",
+              ref_rule_id: null,
+            },
+          ],
+        },
+        output_kind: "reviewer",
+        phase: "p1",
+        model: null,
+      });
+    });
+
+    const state = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(state.agent_verdicts.length, 1);
+    assert.equal(state.agent_verdicts[0]?.verdict, "APPROVE", "verdict normalized to the findings");
+    assert.equal(state.agent_verdicts[0]?.blocking_issues, 0);
+  });
+
+  // The honest case is untouched: REQUEST_CHANGES with a real blocking
+  // finding is stored verbatim (it agrees with the findings).
+  it("leaves REQUEST_CHANGES intact when a blocking finding is present", async () => {
+    await seedBaseline(projectDir);
+    await seedPending(projectDir, "ar-logic-1", "logic-reviewer");
+
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      await persistAgentResult(tx, {
+        result: {
+          agent: "logic-reviewer",
+          agent_run_id: "ar-logic-1",
+          output: "...",
+          parsed_header: { verdict: "REQUEST_CHANGES", summary: "real bug" },
+          schema_validation: { ok: true },
+          findings: [
+            {
+              schema_version: "1.0",
+              id: "",
+              agent: "logic-reviewer",
+              iteration: 1,
+              task_id: "t-2026-05-28-persist",
+              file: "src/a.ts",
+              line_start: 1,
+              line_end: 1,
+              severity: "blocking",
+              category: "correctness",
+              proposed_new_category: null,
+              pattern_id: null,
+              summary: "null deref",
+              evidence_excerpt: null,
+              suggested_fix: null,
+              status: "open",
+              ref_rule_id: null,
+            },
+          ],
+        },
+        output_kind: "reviewer",
+        phase: "p1",
+        model: null,
+      });
+    });
+
+    const state = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(state.agent_verdicts[0]?.verdict, "REQUEST_CHANGES");
+    assert.equal(state.agent_verdicts[0]?.blocking_issues, 1);
+  });
+});

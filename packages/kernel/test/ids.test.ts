@@ -91,4 +91,17 @@ describe("deterministic NowToken injection", () => {
     assert.ok(id.startsWith("f-2025-01-15-"), `unexpected prefix: ${id}`);
     assert.match(id, FINDING_ID_PATTERN);
   });
+
+  // The slug is capped so a task_id stays a short handle — it is echoed
+  // into every spawn prompt and FKs onto every findings/audit/ledger row.
+  // A whole-brief slug (no cap) produced a ~1500-char tail.
+  it("caps the slug so a giant brief mints a short, valid task_id", () => {
+    const now = "2026-05-27T00:00:00.000Z" as NowToken;
+    const brief = "implement ".repeat(400); // ~4000 chars of words
+    const id = makeTaskId(brief, now);
+    assert.match(id, TASK_ID_PATTERN);
+    const slug = id.slice("t-2026-05-27-".length);
+    assert.ok(slug.length <= 48, `slug should be capped; got ${slug.length} chars`);
+    assert.ok(id.length <= 64, `task_id should stay short; got ${id.length} chars`);
+  });
 });

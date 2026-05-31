@@ -57,7 +57,26 @@ export async function interpretFinalize(
     directive: {
       task_id: state.task_id,
       verdict,
-      summary: `task complete (verdict=${verdict})`,
+      summary: buildCompletionSummary(state, verdict),
     },
   };
+}
+
+// The terminal summary is verdict-first, then an optional bundle-supplied
+// note. The kernel never performs the operator's finish steps (commit,
+// publish, hand-off) — a side-effect-free terminator is what keeps replay
+// deterministic — so a bundle that wants to remind the operator of an
+// action it did NOT take writes a plain string into the generic
+// `bundle_state.completion_summary` field, and the kernel surfaces it here
+// verbatim. The kernel names no domain concept; it just appends the note.
+function buildCompletionSummary(
+  state: PipelineState,
+  verdict: string,
+): string {
+  const base = `task complete (verdict=${verdict})`;
+  const note = state.bundle_state?.["completion_summary"];
+  if (typeof note === "string" && note.length > 0) {
+    return `${base} — ${note}`;
+  }
+  return base;
 }

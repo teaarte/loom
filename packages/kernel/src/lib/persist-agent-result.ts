@@ -136,7 +136,14 @@ async function persistFindingsAndVerdict(
   const categoriesSeen = new Set<string>();
 
   for (const finding of findings) {
-    const id = finding.id.length > 0 ? finding.id : makeFindingId(tx.now);
+    // Finding identity is ALWAYS server-minted. A finding id is the only
+    // row id that an LLM could otherwise author, and review agents fanned
+    // out in parallel converge on the same example suffix — two siblings
+    // emit the same id and collide on the findings PRIMARY KEY, rolling
+    // back the whole batch delivery. Minting here (like every other row
+    // id) makes collisions structurally impossible; any id the agent
+    // supplied is ignored. The agent contract no longer asks for one.
+    const id = makeFindingId(tx.now);
     await tx.exec(
       "INSERT INTO findings (id, task_id, agent, iteration, phase, file, " +
         "line_start, line_end, severity, category, proposed_new_category, " +
@@ -196,15 +203,31 @@ function deriveVerdict(
   result: AgentResult,
   findings: Finding[],
 ): string {
-  const headerVerdict = result.parsed_header?.["verdict"];
-  if (typeof headerVerdict === "string" && headerVerdict.length > 0) {
-    return headerVerdict;
-  }
-  // Fallback: derive from findings — APPROVE if zero blocking, else
+  const anyBlocking = findings.some((f) => f.severity === "blocking");
+  // Findings-derived verdict — APPROVE if zero blocking, else
   // REQUEST_CHANGES. Bundles that need a different default verb ship
   // an `after-agent-result` event-position Step that rewrites the row.
-  const anyBlocking = findings.some((f) => f.severity === "blocking");
-  return anyBlocking ? "REQUEST_CHANGES" : "APPROVE";
+  const derived = anyBlocking ? "REQUEST_CHANGES" : "APPROVE";
+
+  const headerVerdict = result.parsed_header?.["verdict"];
+  if (typeof headerVerdict !== "string" || headerVerdict.length === 0) {
+    return derived;
+  }
+
+  // Verdict ⟺ findings cross-check. The reviewer contract is
+  // "REQUEST_CHANGES iff at least one blocking finding". An agent that
+  // returns REQUEST_CHANGES while reporting zero blocking findings
+  // contradicts its own output; gating already decided correctly from the
+  // server-side blocking count, so the stored verdict is the only thing
+  // misrepresenting a clean result. Normalize it to the findings-derived
+  // verdict so the persisted + surfaced verdict matches the counts and any
+  // future verdict-keyed reader is not misled. Scoped to the reviewer
+  // vocabulary so a validator's own verdict words (PASS/FAIL/…) are never
+  // rewritten with a reviewer verb.
+  if (headerVerdict.toUpperCase() === "REQUEST_CHANGES" && !anyBlocking) {
+    return derived;
+  }
+  return headerVerdict;
 }
 
 function deriveSummaryLine(

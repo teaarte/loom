@@ -60,8 +60,15 @@ function randHex(n: number): string {
   return randomUUID().replace(/-/g, "").slice(0, n);
 }
 
+// Max slug length. A task_id is echoed into every spawn prompt and FKs
+// onto every findings / audit / ledger row, so an unbounded slug (the
+// whole brief slugified) bloats every downstream row. The full brief
+// already lives once in pipeline_state.task; the id only needs a short,
+// human-recognizable handle. 48 chars keeps it legible without a tail.
+const MAX_SLUG_LENGTH = 48;
+
 function sanitizeSlug(input: string): string {
-  const cleaned = input.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const cleaned = input.toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, MAX_SLUG_LENGTH);
   return cleaned.length > 0 ? cleaned : "task";
 }
 

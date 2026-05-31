@@ -216,10 +216,12 @@ Published under the `@loomfsm/*` scope: `@loomfsm/pipeline` (install this), plus
 
 ## Status & roadmap
 
-`v0.1.2`: kernel + the `code` bundle + three providers + mcp-server & cli; one task per
-project; published on npm. Early and evolving. On the near horizon: richer host/driver
-integration, more bundles, bundle runtime isolation, a cross-task memory subsystem, and
-a daemon transport. The substrate is *additive* to all of these — none reshapes the kernel.
+`v0.1.3`: kernel + the `code` bundle + three providers + mcp-server & cli; one task in
+flight per project — a finished task is archived to `.claude/history/` so the next one
+starts clean, letting a project run a series of tasks; published on npm. Early and
+evolving. On the near horizon: richer host/driver integration, more bundles, bundle
+runtime isolation, a cross-task memory subsystem, and a daemon transport. The substrate
+is *additive* to all of these — none reshapes the kernel.
 
 ## Contributing
 

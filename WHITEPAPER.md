@@ -192,4 +192,4 @@ Solo-authored. Licensed under Apache 2.0 (see [LICENSE](LICENSE)) — permissive
 
 ---
 
-*Whitepaper version 1.0 · status: `v0.1.2`, published to npm under `@loomfsm/*`.*
+*Whitepaper version 1.0 · status: `v0.1.3`, published to npm under `@loomfsm/*`.*

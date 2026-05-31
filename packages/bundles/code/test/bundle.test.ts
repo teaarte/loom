@@ -13,7 +13,14 @@ import {
   loadBundle,
   reconcileExtensions,
 } from "@loomfsm/kernel";
-import type { Bundle, LLMProvider, NowToken, PipelineState } from "@loomfsm/kernel";
+import type {
+  Bundle,
+  BundleStateView,
+  LLMProvider,
+  NowToken,
+  PipelineState,
+  StageContext,
+} from "@loomfsm/kernel";
 
 import codeBundle from "../src/bundle.js";
 import codeManifest from "../manifest.js";
@@ -90,7 +97,7 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
         "enrich", "plan", "plan-review", "gate-plan",
         "git-stash", "implement", "git-diff", "pre-review", "review",
         "reconcile", "iterate", "final-checks", "test-verify",
-        "gate-final", "finalize",
+        "gate-final", "finish-summary", "finalize",
       ],
     );
     // Two post-commit observers, eight domain + floor invariants.
@@ -351,5 +358,57 @@ describe("@loomfsm/bundle-code — full-autonomous readiness", () => {
     });
     // The resolver + INV_safety_floor_final satisfied the auto-policy gate.
     assert.ok(registry.invariants.some((inv) => (inv as { name?: string }).name === "INV_safety_floor_final"));
+  });
+});
+
+// ============================================================================
+// tests_mode is one union — every value the classify step emits is handled
+// ============================================================================
+
+describe("@loomfsm/bundle-code — tests_mode union has no fall-through", () => {
+  // Run the deterministic classify step over a task and read back the
+  // tests_mode decision it set.
+  async function classifyTestsMode(task: string): Promise<unknown> {
+    const captured: Record<string, unknown> = {};
+    const state = { task, decisions: {} } as unknown as BundleStateView;
+    const ctx = {
+      tx: { set_decision: (k: string, v: unknown) => { captured[k] = v; } },
+    } as unknown as StageContext;
+    const classify = codeBundle.stages["classify"];
+    assert.ok(classify !== undefined && classify.kind === "step" && classify.run !== undefined);
+    await classify.run(state, ctx);
+    return captured["tests_mode"];
+  }
+
+  // The single consumer that branches on the value: the `test` agent only
+  // applies under tdd.
+  function testAgentApplies(testsMode: string): boolean {
+    const test = codeBundle.agents.find((a) => a.name === "test");
+    assert.ok(test?.applies_to !== undefined, "the test agent must declare applies_to");
+    const state = { decisions: { tests_mode: testsMode } } as unknown as BundleStateView;
+    return test.applies_to(state);
+  }
+
+  const HANDLED = new Set(["tdd", "regression-only"]);
+
+  it("the classify step emits only values the planner + test agent handle", async () => {
+    const tasks = [
+      "add a new endpoint with TDD",          // tdd
+      "write the tests first, then implement", // tdd
+      "fix a typo in the README",              // regression-only
+      "refactor the auth module",              // regression-only
+      "bump the dependency and update config", // regression-only
+    ];
+    for (const task of tasks) {
+      const mode = await classifyTestsMode(task);
+      assert.ok(typeof mode === "string", `tests_mode should be a string for "${task}"`);
+      assert.ok(HANDLED.has(mode as string), `"${task}" emitted unhandled tests_mode='${String(mode)}'`);
+      assert.notEqual(mode, "after", "the divergent 'after' value must be gone");
+    }
+  });
+
+  it("both handled values drive the test agent deterministically (no third case)", () => {
+    assert.equal(testAgentApplies("tdd"), true, "tdd → the test agent runs");
+    assert.equal(testAgentApplies("regression-only"), false, "regression-only → the test agent is filtered");
   });
 });

@@ -35,6 +35,14 @@ function decisionEquals(state: BundleStateView, key: string, value: unknown): bo
   return state.decisions[key] === value;
 }
 
+// The one source of truth for the `tests_mode` decision. Every producer
+// (the classify step below) and consumer (the planner template, the `test`
+// agent's `applies_to`, the host's task hint) speaks this union — there is
+// no third value that would fall through a branch. `tdd` runs tests first;
+// `regression-only` writes code directly and checks existing tests for
+// regressions.
+type TestsMode = "tdd" | "regression-only";
+
 // ============================================================================
 // Positional StepStage run bodies — deterministic state derivation only.
 //
@@ -59,7 +67,9 @@ async function writeClassifyDecisions(
   } else {
     complexity = "medium";
   }
-  const tests_mode = /\btdd\b|tests? first|test-first/.test(task) ? "tdd" : "after";
+  const tests_mode: TestsMode = /\btdd\b|tests? first|test-first/.test(task)
+    ? "tdd"
+    : "regression-only";
   ctx.tx.set_decision?.("complexity", complexity);
   ctx.tx.set_decision?.("tests_mode", tests_mode);
 }
@@ -67,6 +77,15 @@ async function writeClassifyDecisions(
 // Derive the review-shaping flags from the substrate's own file accounting
 // (which paths the run has touched). The reviewer fanout reads these via
 // each reviewer agent's `applies_to`.
+//
+// Precedence for `security_needed`: the classifier may set it earlier from
+// the task's intent (a guess). This step runs LATER (implementation phase,
+// after the diff is known) and overwrites all three flags from the actual
+// changed files — so file evidence wins over the intent guess. That is
+// deliberate ordering, not a race: the later, ground-truth write is the one
+// the fanout reads. This only fires when the host has fed `files_modified`;
+// an empty file list leaves every flag false and the file-conditional
+// reviewers (ui-consistency / playwright / security) silently do not run.
 async function derivePreReview(
   state: BundleStateView,
   ctx: StageContext,
@@ -113,6 +132,33 @@ async function verifyTestFileHashes(
   const touched = state.files_modified.filter((f) => TEST_FILE.test(f));
   ctx.tx.set_bundle_state_field?.("test_files_modified_by_implementer", touched);
   ctx.tx.audit({ type: "sacred-tests-checked", modified_test_files: touched.length });
+}
+
+// Surface any Finish-contract actions the task asked for that the engine
+// does NOT perform — committing, pushing, opening a PR, publishing,
+// deploying. The kernel is side-effect-free by design (it never touches the
+// operator's repo), so when the brief names one of these the honest "done"
+// summary should say it is still the operator's to run, rather than imply
+// full completion. Deterministic scan over the task text; writes the note
+// into the generic `completion_summary` field the kernel appends to the
+// terminal summary. No match → no note (the common case).
+async function deriveFinishSummary(
+  state: BundleStateView,
+  ctx: StageContext,
+): Promise<void> {
+  const task = state.task.toLowerCase();
+  const actions: string[] = [];
+  if (/\bcommit(s|ted|ting)?\b/.test(task)) actions.push("commit");
+  if (/\b(push|pushes|pushed)\b/.test(task)) actions.push("push");
+  if (/\bpull[ -]request\b|\bpr\b|\bmr\b|\bmerge[ -]request\b/.test(task)) actions.push("open a PR");
+  if (/\bpublish(es|ed|ing)?\b|\brelease[sd]?\b|\btag\b/.test(task)) actions.push("publish/release");
+  if (/\bdeploy(s|ed|ment|ing)?\b/.test(task)) actions.push("deploy");
+  if (actions.length === 0) return;
+  const list = [...new Set(actions)].join(", ");
+  ctx.tx.set_bundle_state_field?.(
+    "completion_summary",
+    `the task named finish steps the engine does not perform (it never modifies your repo) — run them yourself: ${list}.`,
+  );
 }
 
 // ============================================================================
@@ -400,7 +446,24 @@ export default defineBundle({
       kind: "fanout",
       name: "review",
       phase: "implementation",
-      agents: ["logic-reviewer", "challenger-reviewer", "style-reviewer", "security", "performance"],
+      // The always-relevant reviewers plus the file-conditional validators.
+      // Each conditional agent self-gates through its `applies_to` over the
+      // review-shaping flags `pre-review` derived from the changed files:
+      // ui-consistency / playwright run only when UI files changed,
+      // api-contract only when API surface changed, security unless the
+      // file scan ruled it out. With no file accounting fed, the flags stay
+      // false and these correctly drop out — so the host MUST report files
+      // (see the delivery's files_modified) for them to engage.
+      agents: [
+        "logic-reviewer",
+        "challenger-reviewer",
+        "style-reviewer",
+        "security",
+        "performance",
+        "ui-consistency",
+        "playwright",
+        "api-contract",
+      ],
       filter_by_change_kind: true,
       iteration_budget: { kind: "attempt", max_iterations: 3, on_exhaustion: "audit-only" },
     },
@@ -427,6 +490,14 @@ export default defineBundle({
       valid_answers: finalGateAnswers,
       on_resume: gateFinalResume,
     },
+    "finish-summary": {
+      kind: "step",
+      name: "finish-summary",
+      phase: "validation",
+      position: "positional",
+      effects: [{ kind: "bundle_state.set", path: "completion_summary" }],
+      run: deriveFinishSummary,
+    },
     finalize: { kind: "finalize", name: "finalize" },
   },
 
@@ -434,14 +505,14 @@ export default defineBundle({
     simple: [
       "initialize", "classify", "classify-agent",
       "plan", "plan-grounding", "implement", "git-diff", "pre-review",
-      "review", "final-checks", "gate-final", "finalize",
+      "review", "final-checks", "gate-final", "finish-summary", "finalize",
     ],
     medium: [
       "initialize", "classify", "classify-agent", "gate-classify",
       "enrich", "plan", "plan-review", "gate-plan",
       "git-stash", "implement", "git-diff", "pre-review", "review",
       "reconcile", "iterate", "final-checks", "test-verify",
-      "gate-final", "finalize",
+      "gate-final", "finish-summary", "finalize",
     ],
     complex: [
       "initialize", "classify", "classify-agent", "gate-classify",
@@ -449,7 +520,7 @@ export default defineBundle({
       "plan", "plan-review", "gate-plan",
       "test-first", "git-stash", "implement", "git-diff", "pre-review", "review",
       "reconcile", "iterate", "sacred-tests",
-      "final-checks", "test-verify", "gate-final", "finalize",
+      "final-checks", "test-verify", "gate-final", "finish-summary", "finalize",
     ],
   },
 

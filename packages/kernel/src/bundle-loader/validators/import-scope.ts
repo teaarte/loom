@@ -5,7 +5,7 @@
 // goes with it. The loader sweeps the bundle's source tree at start and
 // refuses every way the raw handle could be named: a named import, the
 // deeper `.../transaction` path, a re-export (`export { Transaction }
-// from "@loom/kernel"`), and a namespace import (`import * as K`) whose
+// from "@loomfsm/kernel"`), and a namespace import (`import * as K`) whose
 // `K.Transaction` member access reaches the type indirectly. The sweep
 // is bounded to the first 200 lines of each source file so a
 // `Transaction` mention deep inside a fixture string or test docstring
@@ -27,28 +27,28 @@ const SCAN_SKIP_DIRS: ReadonlySet<string> = new Set([
   "coverage",
 ]);
 
-// Matches `import { ... Transaction ... } from "@loom/kernel..."` and
-// the more direct `from "@loom/kernel/.../transaction"` path import.
+// Matches `import { ... Transaction ... } from "@loomfsm/kernel..."` and
+// the more direct `from "@loomfsm/kernel/.../transaction"` path import.
 // The leading verb is `import` OR `export` so a re-export
-// (`export { Transaction } from "@loom/kernel"`) — which hands the raw
+// (`export { Transaction } from "@loomfsm/kernel"`) — which hands the raw
 // handle out the bundle's own barrel — is refused on the same footing.
 const TRANSACTION_BINDING_RE =
-  /(?:import|export)\s+(?:type\s+)?\{[^}]*\bTransaction\b[^}]*\}\s+from\s+["']@loom\/kernel(?:\/[^"']*)?["']/;
+  /(?:import|export)\s+(?:type\s+)?\{[^}]*\bTransaction\b[^}]*\}\s+from\s+["']@loomfsm\/kernel(?:\/[^"']*)?["']/;
 const TRANSACTION_PATH_RE =
-  /from\s+["']@loom\/kernel\/(?:[^"']*\/)?(?:transaction|state\/transaction)(?:\.[a-z]+)?["']/;
-// Namespace import — `import * as K from "@loom/kernel..."` (or the
+  /from\s+["']@loomfsm\/kernel\/(?:[^"']*\/)?(?:transaction|state\/transaction)(?:\.[a-z]+)?["']/;
+// Namespace import — `import * as K from "@loomfsm/kernel..."` (or the
 // `export * as K` re-export). The binding name is captured; a
 // `K.Transaction` member access elsewhere in the file is the actual
 // reach for the raw handle.
 const TRANSACTION_NAMESPACE_RE =
-  /(?:import|export)\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s+["']@loom\/kernel(?:\/[^"']*)?["']/g;
+  /(?:import|export)\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s+["']@loomfsm\/kernel(?:\/[^"']*)?["']/g;
 
 function escapeForRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // Locate a `<ns>.Transaction` reach where `<ns>` was bound by a
-// namespace import of `@loom/kernel`. Returns the 1-based line of the
+// namespace import of `@loomfsm/kernel`. Returns the 1-based line of the
 // member access (the real violation) or null when no namespace binding
 // touches `Transaction` — a namespace import of some OTHER symbol is
 // legitimate and must pass.

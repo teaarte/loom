@@ -19,7 +19,7 @@ import {
   issueCrossOwnerMarker,
   KernelError,
   withStateTransaction,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 import type {
   IssueCrossOwnerMarkerInput,

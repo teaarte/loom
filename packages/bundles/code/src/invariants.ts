@@ -24,7 +24,7 @@ import type {
   Invariant,
   KernelSnapshots,
   Violation,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 // Local typed-identity helper mirroring the substrate's own invariant
 // constructor: bind the `reads` metadata onto a pure verdict function.

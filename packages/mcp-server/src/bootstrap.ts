@@ -30,7 +30,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 
-import codeBundle, { codeManifest } from "@loom/bundle-code";
+import codeBundle, { codeManifest } from "@loomfsm/bundle-code";
 import {
   captureNow,
   loadBundle,
@@ -39,22 +39,22 @@ import {
   type LLMProvider,
   type ProvidersConfig,
   type Registry,
-} from "@loom/kernel";
-import { claudeCodeShuttleProvider } from "@loom/provider-claude-code-shuttle";
+} from "@loomfsm/kernel";
+import { claudeCodeShuttleProvider } from "@loomfsm/provider-claude-code-shuttle";
 
 // Resolve the bundle package root through Node's own resolver so it works
-// both from an installed `node_modules/@loom/bundle-code` and from a
+// both from an installed `node_modules/@loomfsm/bundle-code` and from a
 // workspace symlink in the monorepo. `package.json` is always resolvable
 // regardless of any `exports` map; its directory is the source root the
 // loader resolves each agent's `template_path` against.
 const bundleSourceDir = dirname(
-  createRequire(import.meta.url).resolve("@loom/bundle-code/package.json"),
+  createRequire(import.meta.url).resolve("@loomfsm/bundle-code/package.json"),
 );
 
 // Synthetic source tag for the reconciled manifest. The reconcile core
 // treats this as an opaque label (it only surfaces in a fallback id when
 // validation fails, which cannot happen for the curated bundle manifest).
-const BUNDLE_MANIFEST_SOURCE = "@loom/bundle-code:manifest";
+const BUNDLE_MANIFEST_SOURCE = "@loomfsm/bundle-code:manifest";
 
 // Build a per-project registry resolver over a fixed provider set. The
 // provider SET is a deployment choice the entrypoint owns — the generic

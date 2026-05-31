@@ -3,7 +3,7 @@
 // host-neutral flag vocabulary derived from FLAG_TO_PRESET so the
 // parser surface and the meta echo can never drift.
 
-import { openDb } from "@loom/kernel";
+import { openDb } from "@loomfsm/kernel";
 
 import { FLAG_TO_PRESET } from "../lib/parse-task-args.js";
 import type {

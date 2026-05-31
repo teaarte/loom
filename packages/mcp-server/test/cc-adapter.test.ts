@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
-import { captureNow, closeDb, openDb, withStateTransaction } from "@loom/kernel";
+import { captureNow, closeDb, openDb, withStateTransaction } from "@loomfsm/kernel";
 
 import { fileURLToPath } from "node:url";
 

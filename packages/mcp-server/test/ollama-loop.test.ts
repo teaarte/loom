@@ -15,7 +15,7 @@
 // Skips cleanly unless a local Ollama is reachable and the model is
 // pulled, so it never breaks CI. Run it explicitly:
 //
-//   LOOM_OLLAMA_MODEL=llama3.2 pnpm --filter @loom/mcp-server test
+//   LOOM_OLLAMA_MODEL=llama3.2 pnpm --filter @loomfsm/mcp-server test
 //   LOOM_OLLAMA_MODEL=qwen2.5-coder:32b OLLAMA_HOST=http://localhost:11434 \
 //     node --experimental-sqlite --test dist/test/ollama-loop.test.js
 
@@ -25,10 +25,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { closeDb, type ContinueTaskInput, type ProviderSpawnRequest } from "@loom/kernel";
-import { claudeCodeShuttleProvider } from "@loom/provider-claude-code-shuttle";
-import { ollamaProvider } from "@loom/provider-ollama";
-import type { TransportResponse } from "@loom/transport-types";
+import { closeDb, type ContinueTaskInput, type ProviderSpawnRequest } from "@loomfsm/kernel";
+import { claudeCodeShuttleProvider } from "@loomfsm/provider-claude-code-shuttle";
+import { ollamaProvider } from "@loomfsm/provider-ollama";
+import type { TransportResponse } from "@loomfsm/transport-types";
 
 import {
   _resetRegistryCacheForTest,

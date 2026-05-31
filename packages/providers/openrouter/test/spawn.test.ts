@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import type { ProviderSpawnRequest } from "@loom/kernel";
+import type { ProviderSpawnRequest } from "@loomfsm/kernel";
 
 import {
   createOpenRouterProvider,

@@ -945,7 +945,7 @@ describe("loadBundle — BUNDLE_IMPORT_SCOPE_VIOLATION", () => {
 
     writeFileSync(
       join(bundleDir, "stages.ts"),
-      `import type { Transaction } from "@loom/kernel";\nexport const x = 1;\n`,
+      `import type { Transaction } from "@loomfsm/kernel";\nexport const x = 1;\n`,
     );
 
     await assert.rejects(
@@ -1154,7 +1154,7 @@ describe("loadBundle — import scope: path-form and skip", () => {
     rmSync(bundleDir, { recursive: true, force: true });
   });
 
-  it("refuses a path-form import of @loom/kernel/state/transaction", async () => {
+  it("refuses a path-form import of @loomfsm/kernel/state/transaction", async () => {
     const now = captureNow();
     await installManifest(projectDir, makeManifest(), now);
 
@@ -1163,7 +1163,7 @@ describe("loadBundle — import scope: path-form and skip", () => {
     // boundary violation, different import shape.
     writeFileSync(
       join(bundleDir, "writer.ts"),
-      `import { foo } from "@loom/kernel/state/transaction";\nexport const y = foo;\n`,
+      `import { foo } from "@loomfsm/kernel/state/transaction";\nexport const y = foo;\n`,
     );
 
     await assert.rejects(
@@ -1190,7 +1190,7 @@ describe("loadBundle — import scope: path-form and skip", () => {
     mkdirSync(join(bundleDir, "src", "stages"), { recursive: true });
     writeFileSync(
       join(bundleDir, "src", "stages", "deep.ts"),
-      `import type { Transaction } from "@loom/kernel";\n`,
+      `import type { Transaction } from "@loomfsm/kernel";\n`,
     );
 
     await assert.rejects(
@@ -1218,7 +1218,7 @@ describe("loadBundle — import scope: path-form and skip", () => {
     // bundle_source_dir. The sweep must not run; loadBundle succeeds.
     writeFileSync(
       join(bundleDir, "would-fail.ts"),
-      `import type { Transaction } from "@loom/kernel";\n`,
+      `import type { Transaction } from "@loomfsm/kernel";\n`,
     );
 
     const registry = await loadBundle({
@@ -1243,7 +1243,7 @@ describe("loadBundle — import scope: path-form and skip", () => {
     );
     writeFileSync(
       join(bundleDir, "b.ts"),
-      `import { something } from "@loom/kernel";\nexport const c = something;\n`,
+      `import { something } from "@loomfsm/kernel";\nexport const c = something;\n`,
     );
 
     const registry = await loadBundle({

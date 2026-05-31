@@ -11,7 +11,7 @@
 // on user content (the cache key is built from the prefix, not per-turn
 // input).
 
-import type { ProviderSpawnRequest } from "@loom/kernel";
+import type { ProviderSpawnRequest } from "@loomfsm/kernel";
 
 export interface CacheShapedPayload {
   system?: Array<{

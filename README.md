@@ -62,7 +62,7 @@ README.md                       This file
 LICENSE                         Apache 2.0
 ```
 
-npm packages are published under the `@loom/*` scope: `@loom/kernel`, `@loom/mcp-server`, `@loom/cli`, `@loom/provider-anthropic-sdk`, `@loom/provider-claude-code-shuttle`, `@loom/provider-openrouter`, `@loom/bundle-code`.
+npm packages are published under the `@loomfsm/*` scope: `@loomfsm/kernel`, `@loomfsm/mcp-server`, `@loomfsm/cli`, `@loomfsm/provider-anthropic-sdk`, `@loomfsm/provider-claude-code-shuttle`, `@loomfsm/provider-openrouter`, `@loomfsm/bundle-code`.
 
 ## Getting started
 
@@ -104,7 +104,7 @@ Full vocabulary in [WHITEPAPER.md](WHITEPAPER.md) §4.
 - **Atomicity, not coordination.** A single `StateBackend.withTransaction` per kernel call eliminates state-sync between the orchestrator and the disk. No reconciliation loop, no observer pattern.
 - **Replay-deterministic FSM.** Same `(state, NowToken, ledger)` → same trajectory. Crash recovery is "restart and let the ledger dedup."
 - **Honest autonomy.** A bundle that wants `"auto"` on the `final` gate must ship deterministic safety-floor invariants (lint-clean, tests-pass, typecheck-clean). Bundle-loader refuses otherwise. Acceptance verdicts from an LLM are not a safety boundary.
-- **No vendor strings in the kernel.** Enforced by CI grep. `@loom/kernel` contains no provider names, transport names, or model names.
+- **No vendor strings in the kernel.** Enforced by CI grep. `@loomfsm/kernel` contains no provider names, transport names, or model names.
 - **Operator-debuggable.** Open the SQLite file. Tail the audit log. Inspect with `loom state --format=json | jq`. The runtime does not hide.
 
 ## Roadmap

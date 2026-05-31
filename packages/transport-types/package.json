@@ -1,15 +1,30 @@
 {
-  "name": "@loom/transport-types",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@loomfsm/transport-types",
+  "version": "0.1.0",
   "type": "module",
+  "description": "Shared wire-response types for loom transports.",
+  "license": "Apache-2.0",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/src"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "prepack": "pnpm run build"
   },
   "dependencies": {
-    "@loom/kernel": "workspace:*"
+    "@loomfsm/kernel": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -19,7 +19,7 @@ import {
   dumpStateSql,
   KernelError,
   withStateTransaction,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 import type { BackupInput, BackupResponse, ToolHandler } from "../types.js";
 

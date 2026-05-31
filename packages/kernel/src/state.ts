@@ -1,5 +1,5 @@
 // Barrel for the state-core modules. Public callers import from
-// `@loom/kernel` (which re-exports this file via the package root
+// `@loomfsm/kernel` (which re-exports this file via the package root
 // barrel); kernel-internal modules may import from `./state.js` for
 // brevity. The split mirrors the types/ layout — one topic per file.
 //

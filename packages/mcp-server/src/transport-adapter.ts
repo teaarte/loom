@@ -17,12 +17,12 @@
 // than crashing, so a kernel regression surfaces as a structured wire
 // error the client can display.
 
-import type { KernelDirective, ProviderShuttleIntent } from "@loom/kernel";
+import type { KernelDirective, ProviderShuttleIntent } from "@loomfsm/kernel";
 import type {
   SpawnRequest,
   TransportAdapter,
   TransportResponse,
-} from "@loom/transport-types";
+} from "@loomfsm/transport-types";
 
 const RUNNER_HINT = "mcp-server";
 

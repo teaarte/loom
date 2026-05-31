@@ -12,8 +12,8 @@ import {
   closeDb,
   loadBundle,
   reconcileExtensions,
-} from "@loom/kernel";
-import type { Bundle, LLMProvider, NowToken, PipelineState } from "@loom/kernel";
+} from "@loomfsm/kernel";
+import type { Bundle, LLMProvider, NowToken, PipelineState } from "@loomfsm/kernel";
 
 import codeBundle from "../src/bundle.js";
 import codeManifest from "../manifest.js";
@@ -57,7 +57,7 @@ async function installManifest(dir: string, now: NowToken): Promise<void> {
 // Happy path — the real bundle registers without error
 // ============================================================================
 
-describe("@loom/bundle-code — loadBundle", () => {
+describe("@loomfsm/bundle-code — loadBundle", () => {
   let projectDir: string;
   beforeEach(() => {
     projectDir = freshProject();
@@ -165,7 +165,7 @@ function makeClassifyState(): PipelineState {
 // Every agent in agents[] has a backing template .md on disk
 // ============================================================================
 
-describe("@loom/bundle-code — agent templates", () => {
+describe("@loomfsm/bundle-code — agent templates", () => {
   it("every agents[] entry resolves to an existing .md template file", () => {
     for (const agent of codeBundle.agents) {
       const abs = join(PKG_ROOT, agent.template_path);
@@ -201,7 +201,7 @@ describe("@loom/bundle-code — agent templates", () => {
 // Refusals — the load test must FAIL when the bundle shape is broken
 // ============================================================================
 
-describe("@loom/bundle-code — load-time refusals", () => {
+describe("@loomfsm/bundle-code — load-time refusals", () => {
   let projectDir: string;
   beforeEach(() => {
     projectDir = freshProject();
@@ -326,7 +326,7 @@ describe("@loom/bundle-code — load-time refusals", () => {
 // the resolver + the named safety-floor invariant are both shipped.
 // ============================================================================
 
-describe("@loom/bundle-code — full-autonomous readiness", () => {
+describe("@loomfsm/bundle-code — full-autonomous readiness", () => {
   let projectDir: string;
   beforeEach(() => {
     projectDir = freshProject();

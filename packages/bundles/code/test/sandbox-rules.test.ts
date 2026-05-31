@@ -9,8 +9,8 @@ import {
   createPathRestrictedSandbox,
   fileReadTool,
   mergeSensitivePathRules,
-} from "@loom/kernel";
-import type { SensitivePathRules, ToolContext } from "@loom/kernel";
+} from "@loomfsm/kernel";
+import type { SensitivePathRules, ToolContext } from "@loomfsm/kernel";
 
 import { CODE_BUNDLE_SENSITIVE_PATH_RULES } from "../src/sandbox-rules.js";
 
@@ -35,7 +35,7 @@ const MERGED = mergeSensitivePathRules(
   CODE_BUNDLE_SENSITIVE_PATH_RULES,
 );
 
-describe("@loom/bundle-code — dev-ecosystem sandbox rules", () => {
+describe("@loomfsm/bundle-code — dev-ecosystem sandbox rules", () => {
   let project: string;
   beforeEach(() => {
     project = mkdtempSync(join(tmpdir(), "loom-bundle-sandbox-"));

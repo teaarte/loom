@@ -22,7 +22,7 @@ import type {
   LLMProvider,
   ProviderResult,
   ProviderSpawnRequest,
-} from "@loom/kernel";
+} from "@loomfsm/kernel";
 
 import { splitForCache, type CacheShapedPayload } from "./cache-control.js";
 

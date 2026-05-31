@@ -51,8 +51,8 @@ import {
   type Registry,
   type RecoveryOutcome,
   type Transaction,
-} from "@loom/kernel";
-import type { TransportResponse } from "@loom/transport-types";
+} from "@loomfsm/kernel";
+import type { TransportResponse } from "@loomfsm/transport-types";
 
 import { createTransportAdapter } from "../transport-adapter.js";
 import type {

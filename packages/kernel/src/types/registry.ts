@@ -4,7 +4,7 @@
 // `requires` (Kahn's algorithm, tie-break = registration order).
 
 import type { Bundle } from "./bundle.js";
-import type { RenderedTemplate } from "./extension.js";
+import type { RenderedContextAsset, RenderedTemplate } from "./extension.js";
 import type { Invariant } from "./invariants.js";
 import type { Agent, Hook, MCPClientPlugin, Stage } from "./plugins.js";
 import type { Policy, PolicyName } from "./policy.js";
@@ -42,6 +42,12 @@ export interface Registry {
   // renderer falls back to a deterministic stub. Optional so the
   // hand-built registries in tests need not declare it.
   prompts?: Map<string, RenderedTemplate>;
+  // Bundle-declared static context assets, materialized off disk at load
+  // in declaration order. `buildSpawnContext` appends each entry under its
+  // (bundle-chosen) heading, scoped by `agents`. Empty/absent when the
+  // bundle declares none or no source dir was supplied. The kernel names
+  // no asset's purpose — it formats whatever paths the bundle pointed at.
+  context_assets?: RenderedContextAsset[];
 }
 
 export interface ProviderRegistry {

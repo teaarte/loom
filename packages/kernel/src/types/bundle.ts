@@ -48,4 +48,38 @@ export interface Bundle {
   knowledge_dir?: string;
   prompts_dir?: string;
   migrations_dir?: string;
+
+  // Static context the renderer materializes off the bundle source tree
+  // at load and appends to the spawn-context block. The kernel names no
+  // domain concept here — the bundle supplies the heading and the source
+  // shape; the renderer reads the files and formats them generically (it
+  // never imports the bundle, same as template materialization).
+  spawn_context_assets?: SpawnContextAsset[];
 }
+
+// A bundle-declared block of static context surfaced under the heading
+// the bundle chooses. `agents` scopes it to specific agents (omitted →
+// every spawn): a large catalog belongs only in the prompt that consumes
+// it, not in every sibling's prompt.
+//
+//   - "frontmatter-catalog" — for every `*.md` under `dir` (sorted), emit
+//     its path + the verbatim frontmatter block. A digest the consumer
+//     reads to pick by filename; the bodies stay out of the prompt.
+//   - "file" — inline the file at `path` verbatim in a fenced block.
+//
+// Paths/dirs resolve relative to the bundle source root, like
+// `Agent.template_path`.
+export type SpawnContextAsset =
+  | {
+      heading: string;
+      kind: "frontmatter-catalog";
+      dir: string;
+      agents?: string[];
+    }
+  | {
+      heading: string;
+      kind: "file";
+      path: string;
+      fence?: string;
+      agents?: string[];
+    };

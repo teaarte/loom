@@ -92,3 +92,14 @@ export interface RenderedTemplate {
   system_prompt?: string;
   context_budget?: ContextBudget;
 }
+
+// A bundle `SpawnContextAsset` after the load-time read: `body` is the
+// final formatted text (catalog digest or fenced file), ready to append
+// verbatim under `## <heading>` in the spawn-context block. `agents`
+// scopes which spawns receive it (undefined → all). Pre-rendering at load
+// keeps the tick-time builder pure and free of further IO.
+export interface RenderedContextAsset {
+  heading: string;
+  body: string;
+  agents?: string[];
+}

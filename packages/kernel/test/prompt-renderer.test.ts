@@ -17,14 +17,15 @@ import {
 import {
   buildPrompt,
   loadBundle,
+  materializeContextAssets,
   materializeTemplates,
   reconcileExtensions,
 } from "../src/index.js";
 import type { ExtensionManifest } from "../src/types/extension.js";
-import type { RenderedTemplate } from "../src/types/extension.js";
+import type { RenderedContextAsset, RenderedTemplate } from "../src/types/extension.js";
 import type { Bundle } from "../src/types/bundle.js";
 import type { NowToken } from "../src/types/now.js";
-import type { Agent } from "../src/types/plugins.js";
+import type { Agent, Stage } from "../src/types/plugins.js";
 import type { PolicyName } from "../src/types/policy.js";
 import type { LLMProvider } from "../src/types/provider.js";
 import type { GateRole } from "../src/types/row-types.js";
@@ -120,6 +121,7 @@ function stateStub(
     task_id?: string | null;
     driver_state_id?: string;
     decisions?: Record<string, unknown>;
+    flow_name?: string;
   } = {},
 ): PipelineState {
   return {
@@ -131,6 +133,9 @@ function stateStub(
     task_id: "task_id" in o ? o.task_id : "task-1",
     driver_state_id: o.driver_state_id ?? "ds-1",
     decisions: o.decisions ?? {},
+    // `driver.flow_name` drives the active-agents section; omitted (no
+    // flow) → the section is absent, the shape the pure-render tests use.
+    driver: o.flow_name != null ? { flow_name: o.flow_name } : undefined,
   } as unknown as PipelineState;
 }
 
@@ -138,6 +143,38 @@ function stateStub(
 // pure-render tests independent of the full Registry shape.
 function registryWith(prompts: Map<string, RenderedTemplate>): Registry {
   return { prompts } as unknown as Registry;
+}
+
+// Richer registry for the spawn-context-block tests that exercise the
+// active-agents roster + bundle context assets.
+function fullRegistry(o: {
+  prompts?: Map<string, RenderedTemplate>;
+  context_assets?: RenderedContextAsset[];
+  flows?: Record<string, string[]>;
+  stages?: Record<string, Stage>;
+}): Registry {
+  return {
+    prompts: o.prompts ?? new Map<string, RenderedTemplate>([["x", { agent: "x", body: "# Agent\n" }]]),
+    context_assets: o.context_assets,
+    flows: o.flows ? new Map(Object.entries(o.flows)) : undefined,
+    stages: o.stages ? new Map(Object.entries(o.stages)) : undefined,
+  } as unknown as Registry;
+}
+
+function spawnStage(name: string, agent: string): Stage {
+  return { kind: "spawn", name, phase: "p1", agent };
+}
+function fanoutStage(name: string, agents: string[]): Stage {
+  return { kind: "fanout", name, phase: "p1", agents };
+}
+
+// Write a frontmatter reference file under `<bundleDir>/knowledge/references`.
+function writeRef(bundleDir: string, name: string, frontmatter: string, body = ""): void {
+  mkdirSync(join(bundleDir, "knowledge", "references"), { recursive: true });
+  writeFileSync(
+    join(bundleDir, "knowledge", "references", name),
+    `---\n${frontmatter}\n---\n${body}`,
+  );
 }
 
 // ============================================================================
@@ -480,5 +517,200 @@ describe("loadBundle — prompt materialization", () => {
     const rendered = buildPrompt(stateStub(), agent("classifier"), registry);
     assert.ok(rendered.includes("agent=classifier"));
     assert.ok(rendered.includes("template=agents/classifier.md"));
+  });
+});
+
+// ============================================================================
+// materializeContextAssets — load-time bundle-asset read
+// ============================================================================
+
+describe("materializeContextAssets", () => {
+  let bundleDir: string;
+  beforeEach(() => { bundleDir = freshBundleDir(); });
+  afterEach(() => { rmSync(bundleDir, { recursive: true, force: true }); });
+
+  function bundleWithAssets(assets: NonNullable<Bundle["spawn_context_assets"]>): Bundle {
+    const b = makeBundle([]);
+    b.spawn_context_assets = assets;
+    return b;
+  }
+
+  it("renders a frontmatter-catalog: sorted FILE entries, verbatim frontmatter, bodies excluded", () => {
+    writeRef(bundleDir, "beta.md", "summary: B\nwhen_to_load: later", "# Beta BODY EXCLUDED");
+    writeRef(bundleDir, "alpha.md", "tags: [x]\nsummary: A", "# Alpha BODY EXCLUDED");
+
+    const assets = materializeContextAssets(
+      bundleWithAssets([
+        { heading: "Refs catalog", kind: "frontmatter-catalog", dir: "knowledge/references", agents: ["classifier"] },
+      ]),
+      bundleDir,
+    );
+
+    assert.equal(assets.length, 1);
+    const a = assets[0]!;
+    assert.equal(a.heading, "Refs catalog");
+    assert.deepEqual(a.agents, ["classifier"]);
+    // Sorted by filename → alpha before beta (byte-stable).
+    assert.ok(
+      a.body.indexOf("FILE: knowledge/references/alpha.md") <
+        a.body.indexOf("FILE: knowledge/references/beta.md"),
+    );
+    // Frontmatter passes through verbatim; the body is excluded.
+    assert.ok(a.body.includes("summary: A"));
+    assert.ok(a.body.includes("when_to_load: later"));
+    assert.ok(!a.body.includes("BODY EXCLUDED"));
+  });
+
+  it("inlines a file asset verbatim in a fenced block", () => {
+    writeFileSync(join(bundleDir, "stack.yaml"), "languages:\n  - name: typescript\n");
+    const [a] = materializeContextAssets(
+      bundleWithAssets([{ heading: "Stack candidate registry", kind: "file", path: "stack.yaml", fence: "yaml" }]),
+      bundleDir,
+    );
+    assert.ok(a !== undefined);
+    assert.ok(a.body.startsWith("```yaml\n"));
+    assert.ok(a.body.includes("name: typescript"));
+    assert.ok(a.body.endsWith("\n```"));
+    // No `agents` declared → undefined (every spawn receives it).
+    assert.equal(a.agents, undefined);
+  });
+
+  it("throws CONTEXT_ASSET_NOT_FOUND when a catalog dir is missing", () => {
+    assert.throws(
+      () => materializeContextAssets(
+        bundleWithAssets([{ heading: "Refs catalog", kind: "frontmatter-catalog", dir: "knowledge/missing" }]),
+        bundleDir,
+      ),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError);
+        assert.equal((err as KernelError).code, "CONTEXT_ASSET_NOT_FOUND");
+        assert.equal((err as KernelError).detail?.["dir"], "knowledge/missing");
+        return true;
+      },
+    );
+  });
+
+  it("throws CONTEXT_ASSET_NOT_FOUND when a file asset is missing", () => {
+    assert.throws(
+      () => materializeContextAssets(
+        bundleWithAssets([{ heading: "Registry", kind: "file", path: "nope.yaml" }]),
+        bundleDir,
+      ),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError);
+        assert.equal((err as KernelError).code, "CONTEXT_ASSET_NOT_FOUND");
+        assert.equal((err as KernelError).detail?.["path"], "nope.yaml");
+        return true;
+      },
+    );
+  });
+
+  it("returns [] when the bundle declares no assets", () => {
+    assert.deepEqual(materializeContextAssets(makeBundle([]), bundleDir), []);
+  });
+});
+
+// ============================================================================
+// buildPrompt — bundle context assets + active agents in the block
+// ============================================================================
+
+describe("buildPrompt — context assets + active agents", () => {
+  const refsAsset: RenderedContextAsset = {
+    heading: "Refs catalog",
+    body: "FILE: knowledge/references/api-design.md\nsummary: API contracts",
+    agents: ["classifier"],
+  };
+  const stackAsset: RenderedContextAsset = {
+    heading: "Stack candidate registry",
+    body: "```yaml\nlanguages:\n  - name: typescript\n```",
+    agents: ["classifier"],
+  };
+
+  it("injects an asset into the consuming agent's block, under the bundle heading", () => {
+    const out = buildPrompt(
+      stateStub(),
+      agent("classifier"),
+      fullRegistry({
+        prompts: new Map([["classifier", { agent: "classifier", body: "# Classifier\n" }]]),
+        context_assets: [refsAsset, stackAsset],
+      }),
+    );
+    assert.ok(out.includes("### Refs catalog"));
+    assert.ok(out.includes("FILE: knowledge/references/api-design.md"));
+    assert.ok(out.includes("### Stack candidate registry"));
+    assert.ok(out.includes("name: typescript"));
+  });
+
+  it("withholds an agent-scoped asset from a non-matching agent", () => {
+    const out = buildPrompt(
+      stateStub(),
+      agent("implementer"),
+      fullRegistry({
+        prompts: new Map([["implementer", { agent: "implementer", body: "# Implementer\n" }]]),
+        context_assets: [refsAsset, stackAsset],
+      }),
+    );
+    // The bulky catalog/registry stay out of a non-consuming sibling's prompt.
+    assert.ok(!out.includes("### Refs catalog"));
+    assert.ok(!out.includes("### Stack candidate registry"));
+    // The kernel block itself is still present.
+    assert.ok(out.includes("## Spawn context"));
+  });
+
+  it("includes an un-scoped asset (no `agents`) in every agent's block", () => {
+    const shared: RenderedContextAsset = { heading: "Shared notes", body: "be careful" };
+    const out = buildPrompt(
+      stateStub(),
+      agent("implementer"),
+      fullRegistry({
+        prompts: new Map([["implementer", { agent: "implementer", body: "# Implementer\n" }]]),
+        context_assets: [shared],
+      }),
+    );
+    assert.ok(out.includes("### Shared notes\nbe careful"));
+  });
+
+  it("lists the flow's active agents (spawn + fanout targets), de-duplicated and sorted", () => {
+    const out = buildPrompt(
+      stateStub({ flow_name: "default" }),
+      agent("classifier"),
+      fullRegistry({
+        prompts: new Map([["classifier", { agent: "classifier", body: "# Classifier\n" }]]),
+        flows: { default: ["s-classify", "s-review", "s-implement"] },
+        stages: {
+          "s-classify": spawnStage("s-classify", "classifier"),
+          "s-review": fanoutStage("s-review", ["logic-reviewer", "security"]),
+          "s-implement": spawnStage("s-implement", "implementer"),
+        },
+      }),
+    );
+    // Sorted, unique: classifier, implementer, logic-reviewer, security.
+    assert.ok(out.includes("### Active agents\nclassifier, implementer, logic-reviewer, security"));
+  });
+
+  it("omits the Active agents section when the registry carries no flow", () => {
+    const out = buildPrompt(
+      stateStub({ flow_name: "default" }),
+      agent("classifier"),
+      fullRegistry({ prompts: new Map([["classifier", { agent: "classifier", body: "# Classifier\n" }]]) }),
+    );
+    assert.ok(!out.includes("### Active agents"));
+  });
+
+  it("is byte-identical on re-render of the same state + registry (determinism)", () => {
+    const reg = fullRegistry({
+      prompts: new Map([["classifier", { agent: "classifier", body: "# Classifier\n" }]]),
+      context_assets: [refsAsset, stackAsset],
+      flows: { default: ["s-classify", "s-review"] },
+      stages: {
+        "s-classify": spawnStage("s-classify", "classifier"),
+        "s-review": fanoutStage("s-review", ["security", "logic-reviewer"]),
+      },
+    });
+    const st = stateStub({ flow_name: "default" });
+    assert.equal(
+      buildPrompt(st, agent("classifier"), reg),
+      buildPrompt(st, agent("classifier"), reg),
+    );
   });
 });

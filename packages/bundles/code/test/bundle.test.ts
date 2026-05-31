@@ -7,12 +7,13 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 
 import {
   KernelError,
+  buildPrompt,
   captureNow,
   closeDb,
   loadBundle,
   reconcileExtensions,
 } from "@loom/kernel";
-import type { Bundle, LLMProvider, NowToken } from "@loom/kernel";
+import type { Bundle, LLMProvider, NowToken, PipelineState } from "@loom/kernel";
 
 import codeBundle from "../src/bundle.js";
 import codeManifest from "../manifest.js";
@@ -100,7 +101,65 @@ describe("@loom/bundle-code — loadBundle", () => {
     assert.ok(registry.vocabularies.gate_roles.has("classify"));
   });
 
+  it("materializes the declared spawn-context assets and injects them into the classifier prompt", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, now);
+
+    const registry = await loadBundle({
+      bundle: codeBundle,
+      bundle_source_dir: PKG_ROOT,
+      project_dir: projectDir,
+      providers: [shuttleStub()],
+      now,
+    });
+
+    // The two declared assets materialize, in declaration order, scoped to
+    // the classifier.
+    const assets = registry.context_assets ?? [];
+    assert.equal(assets.length, 2);
+    const refs = assets.find((a) => a.heading === "Refs catalog");
+    const stack = assets.find((a) => a.heading === "Stack candidate registry");
+    assert.ok(refs !== undefined, "refs catalog asset materialized");
+    assert.ok(stack !== undefined, "stack registry asset materialized");
+    assert.deepEqual(refs.agents, ["classifier"]);
+    // The catalog lists real reference filenames (the field that hallucinated
+    // when no catalog was supplied).
+    assert.ok(refs.body.includes("FILE: knowledge/references/api-design.md"));
+    assert.ok(refs.body.includes("FILE: knowledge/references/security-backend.md"));
+    // The stack registry inlines the real candidate file.
+    assert.ok(stack.body.includes("```yaml"));
+
+    // End-to-end: the classifier's spawn prompt carries both, under their
+    // bundle headings; a non-consuming agent's prompt does not.
+    const classifierAgent = registry.agents.get("classifier");
+    assert.ok(classifierAgent !== undefined);
+    const classifierPrompt = buildPrompt(makeClassifyState(), classifierAgent, registry);
+    assert.ok(classifierPrompt.includes("### Refs catalog"));
+    assert.ok(classifierPrompt.includes("FILE: knowledge/references/api-design.md"));
+    assert.ok(classifierPrompt.includes("### Stack candidate registry"));
+
+    const implementer = registry.agents.get("implementer");
+    assert.ok(implementer !== undefined);
+    const implPrompt = buildPrompt(makeClassifyState(), implementer, registry);
+    assert.ok(!implPrompt.includes("### Refs catalog"));
+  });
+
 });
+
+// Minimal state for the pure render path. buildPrompt reads task / ids /
+// project / decisions / driver.flow_name; a partial cast suffices (the same
+// shape the kernel renderer's own specs use).
+function makeClassifyState(): PipelineState {
+  return {
+    task: "fix a typo in the README",
+    task_short: "typo-fix",
+    task_id: "task-1",
+    driver_state_id: "ds-1",
+    project_dir: "/work/proj",
+    decisions: {},
+    driver: { flow_name: "medium" },
+  } as unknown as PipelineState;
+}
 
 // ============================================================================
 // Every agent in agents[] has a backing template .md on disk

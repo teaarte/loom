@@ -21,10 +21,11 @@
 // floor, manifest cross-check, source-import discipline).
 
 import { buildPolicyFactoryRegistry } from "../policies/index.js";
-import { materializeTemplates } from "../prompt-renderer.js";
+import { materializeContextAssets, materializeTemplates } from "../prompt-renderer.js";
+import type { ProvidersConfig } from "../provider-router.js";
 import { buildVocabularies } from "../vocabularies.js";
 import type { Bundle } from "../types/bundle.js";
-import type { RenderedTemplate } from "../types/extension.js";
+import type { RenderedContextAsset, RenderedTemplate } from "../types/extension.js";
 import type { NowToken } from "../types/now.js";
 import type {
   Agent,
@@ -53,12 +54,19 @@ export interface LoadBundleOptions {
   bundle_source_dir?: string;
   project_dir: string;
   providers: LLMProvider[];
+  // Optional per-agent / per-phase provider + model routing. Omitted →
+  // every agent resolves to the bundle default (or providers[0]). The
+  // config's shape is validated at load (PROVIDER_CONFIG_INVALID); a route
+  // naming an unregistered provider / undeclared tier is refused when that
+  // agent resolves (PROVIDER_NOT_FOUND / PROVIDER_TIER_UNKNOWN).
+  providers_config?: ProvidersConfig;
   mcp_clients?: MCPClientPlugin[];
   now: NowToken;
 }
 
 export async function loadBundle(opts: LoadBundleOptions): Promise<Registry> {
-  const { bundle, bundle_source_dir, project_dir, providers, mcp_clients } = opts;
+  const { bundle, bundle_source_dir, project_dir, providers, providers_config, mcp_clients } =
+    opts;
 
   // 1. BUNDLE_NOT_INSTALLED
   const manifest = readInstalledManifest(project_dir, bundle.name);
@@ -98,9 +106,18 @@ export async function loadBundle(opts: LoadBundleOptions): Promise<Registry> {
       ? materializeTemplates(bundle, bundle_source_dir)
       : new Map<string, RenderedTemplate>();
 
+  // 14b — materialize the bundle's declared spawn-context assets off the
+  //       same source tree (whatever the bundle pointed at — the kernel
+  //       names none of them). Same source-dir gating as templates; a
+  //       missing asset is a load-time refusal (CONTEXT_ASSET_NOT_FOUND).
+  const context_assets: RenderedContextAsset[] =
+    bundle_source_dir !== undefined
+      ? materializeContextAssets(bundle, bundle_source_dir)
+      : [];
+
   // Registry assembly — only reached when every cascade rule passed.
   const policyFactories = buildPolicyFactoryRegistry(bundle);
-  const providerRegistry = buildProviderRegistry(providers, bundle);
+  const providerRegistry = buildProviderRegistry(providers, bundle, providers_config);
 
   const agents = new Map<string, Agent>();
   for (const a of bundle.agents) agents.set(a.name, a);
@@ -126,6 +143,7 @@ export async function loadBundle(opts: LoadBundleOptions): Promise<Registry> {
     policyFactories,
     vocabularies,
     prompts,
+    context_assets,
   };
   return registry;
 }

@@ -221,6 +221,60 @@ describe("e2e shuttle — wired registry", () => {
           prompt.includes("fix a typo in the README"),
           "spawn context should carry the verbatim task description",
         );
+        // The bundle's declared context assets are materialized and injected
+        // into the classifier's prompt: the refs catalog (real filenames, the
+        // field that hallucinated when absent) + the stack candidate registry.
+        assert.ok(
+          prompt.includes("### Refs catalog"),
+          "classifier prompt should carry the materialized refs catalog",
+        );
+        assert.ok(
+          prompt.includes("FILE: knowledge/references/"),
+          "refs catalog should list real reference filenames",
+        );
+        assert.ok(
+          prompt.includes("### Stack candidate registry"),
+          "classifier prompt should carry the stack candidate registry",
+        );
+      }
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("injects bundle context assets only into the classifier across the full wired flow", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("assets");
+    try {
+      const result = await driveToComplete(h, "harden the auth layer against brute force");
+
+      // The classifier carries the materialized refs catalog (real
+      // filenames), the stack registry, and the active-agents roster.
+      const classifier = result.spawnPrompts.find((s) => s.agent === "classifier");
+      assert.ok(classifier !== undefined, "classifier should spawn");
+      assert.ok(classifier.prompt.includes("### Refs catalog"));
+      assert.ok(classifier.prompt.includes("FILE: knowledge/references/"));
+      assert.ok(classifier.prompt.includes("### Stack candidate registry"));
+      assert.ok(classifier.prompt.includes("### Active agents"));
+
+      // Active agents lists the flow's real spawn/fanout targets.
+      const activeLine =
+        classifier.prompt.slice(classifier.prompt.indexOf("### Active agents")).split("\n")[1] ?? "";
+      assert.ok(activeLine.includes("implementer"), `active agents should list implementer; got: ${activeLine}`);
+      assert.ok(activeLine.includes("logic-reviewer"), `active agents should list logic-reviewer; got: ${activeLine}`);
+
+      // Scoping holds end-to-end: no other agent's prompt carries the bulky
+      // catalog / registry (it belongs only in the prompt that consumes it).
+      for (const sp of result.spawnPrompts) {
+        if (sp.agent === "classifier") continue;
+        assert.ok(
+          !sp.prompt.includes("### Refs catalog"),
+          `agent '${sp.agent}' must not carry the refs catalog`,
+        );
+        assert.ok(
+          !sp.prompt.includes("### Stack candidate registry"),
+          `agent '${sp.agent}' must not carry the stack registry`,
+        );
       }
     } finally {
       h.dispose();

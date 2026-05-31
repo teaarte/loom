@@ -464,4 +464,24 @@ export default defineBundle({
   knowledge_dir: "knowledge/",
   prompts_dir: "prompts/",
   migrations_dir: "migrations/",
+
+  // Static context the classifier reads to pick refs + a stack from real
+  // catalogs (never invent). Scoped to the classifier so the bulky listings
+  // stay out of every other agent's prompt. The renderer materializes these
+  // off the bundle source tree at load and appends them to the spawn context.
+  spawn_context_assets: [
+    {
+      heading: "Refs catalog",
+      kind: "frontmatter-catalog",
+      dir: "knowledge/references",
+      agents: ["classifier"],
+    },
+    {
+      heading: "Stack candidate registry",
+      kind: "file",
+      path: "stack-candidates.yaml",
+      fence: "yaml",
+      agents: ["classifier"],
+    },
+  ],
 });

@@ -36,7 +36,7 @@ export async function materializeAccessSnapshot(
     "SELECT id, task_id, agent, iteration, phase, file, line_start, " +
       "line_end, severity, category, proposed_new_category, pattern_id, " +
       "summary, evidence_excerpt, suggested_fix, status, ref_rule_id, " +
-      "recorded_at FROM findings ORDER BY id ASC",
+      "superseded_by_iteration, recorded_at FROM findings ORDER BY id ASC",
   );
   const auditRows = await tx.queryAll<AuditRow>(
     "SELECT id, ts, type, task_id, driver_state_id, payload, verdict, " +
@@ -50,6 +50,8 @@ export async function materializeAccessSnapshot(
 
   const stored: StoredFinding[] = findingsRows.map((r) => ({
     phase: String(r.phase),
+    superseded_by_iteration:
+      r.superseded_by_iteration === null ? null : Number(r.superseded_by_iteration),
     finding: {
       schema_version: "",
       id: String(r.id),
@@ -128,6 +130,10 @@ export function emptyAgentRecordsAccess(): AgentRecordsAccess {
 interface StoredFinding {
   finding: Finding;
   phase: string;
+  // The iteration that retired this finding, or null while it is live.
+  // Held alongside `finding` because the live-blocker filter is a kernel
+  // provenance fact, not part of the bundle-facing `Finding` shape.
+  superseded_by_iteration: number | null;
 }
 
 function buildFindingsAccess(stored: StoredFinding[]): FindingsAccess {
@@ -154,10 +160,18 @@ function buildFindingsAccess(stored: StoredFinding[]): FindingsAccess {
         .map((sf) => sf.finding);
     },
     countBlocking(filter) {
+      // LIVE blockers only: an `open` blocking finding that has not been
+      // superseded by a later round. A finding the human accepted /
+      // dismissed / marked fixed, or one a walk-back retired, is resolved
+      // — counting it would re-gate work that was already settled and let
+      // a stale round's blocker haunt the store after a replan.
       let n = 0;
       for (const sf of stored) {
         if (filter?.phase !== undefined && sf.phase !== filter.phase) continue;
-        if (sf.finding.severity === "blocking") n += 1;
+        if (sf.finding.severity !== "blocking") continue;
+        if (sf.finding.status !== "open") continue;
+        if (sf.superseded_by_iteration !== null) continue;
+        n += 1;
       }
       return n;
     },
@@ -246,6 +260,7 @@ interface FindingRow {
   suggested_fix: unknown;
   status: unknown;
   ref_rule_id: unknown;
+  superseded_by_iteration: unknown;
   recorded_at: unknown;
 }
 

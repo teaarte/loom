@@ -35,11 +35,14 @@ import type { Transaction } from "../types/transaction.js";
 import type { UserAnswer } from "../types/user-answer.js";
 import type { KernelVocabularies } from "../types/vocabulary.js";
 
+import { parseStateJson } from "../state/json.js";
+
 import { applyBundleOps } from "./apply-bundle-ops.js";
 import { buildAgentResult } from "./build-agent-result.js";
 import { completeTask } from "./complete-task.js";
 import { readLedgerRow, writeLedgerRow } from "./ledger.js";
 import { persistAgentResult } from "./persist-agent-result.js";
+import { readPhaseIter, supersedeFindingsOnWalkBack } from "./supersede-findings.js";
 
 export interface DeliverContinueArgs {
   input: ContinueTaskInput;
@@ -161,11 +164,18 @@ async function deliverAgentResult(
     output_kind: outputKind,
     raw_output: agentOutput,
   });
+  // Stamp the finding/verdict rows with the phase's CURRENT round, read
+  // from the kernel-owned per-phase counter rather than the agent's
+  // self-report. A phase re-entered by a walk-back bumped this counter, so
+  // the round-2 reviewer's findings land under iteration 2 and the
+  // round-1 findings the resolver retired stay distinguishable.
+  const iteration = readPhaseIter(await readDriverScratch(tx), phase);
   await persistAgentResult(tx, {
     result,
     output_kind: outputKind,
     phase,
     model,
+    iteration,
     ...(args.vocabularies !== undefined ? { vocabularies: args.vocabularies } : {}),
   });
 
@@ -288,13 +298,23 @@ async function applyGateResult(
     case "walk_back_to": {
       const flow = args.registry?.flows.get(state.driver.flow_name);
       const target = flow ? flow.indexOf(result.step) : -1;
-      if (target < 0) {
+      if (!flow || target < 0) {
         throw new KernelError({
           code: "WALK_BACK_TARGET_NOT_FOUND",
           message: `gate on_resume walk_back target '${result.step}' is not in flow '${state.driver.flow_name}'`,
           detail: { target: result.step, reason: result.reason },
         });
       }
+      // Retire the prior round's live findings across every phase the flow
+      // re-runs from the target through this gate — co-committed with the
+      // step_index rewind so the supersede and the walk-back land atomically.
+      state.driver.scratch = await supersedeFindingsOnWalkBack(tx, {
+        flow,
+        stages: args.registry?.stages ?? new Map(),
+        targetIndex: target,
+        currentIndex: state.driver.step_index,
+        scratch: state.driver.scratch,
+      });
       await tx.exec(
         "UPDATE driver_state SET pending_user_answer = NULL, step_index = ? WHERE id = 1",
         [target],
@@ -342,6 +362,19 @@ async function readTaskId(tx: Transaction): Promise<string | null> {
   );
   if (row === null || row.task_id === null) return null;
   return String(row.task_id);
+}
+
+// The driver scratch object carries the per-phase iteration counters that
+// kernel-stamp a finding's round. Read here (not from a full loadState) so
+// the agent-result delivery path pays one small SELECT, not a whole-state
+// materialize, to learn the current round.
+async function readDriverScratch(
+  tx: Transaction,
+): Promise<Record<string, unknown>> {
+  const row = await tx.queryRow<{ scratch: string | null }>(
+    "SELECT scratch FROM driver_state WHERE id = 1",
+  );
+  return parseStateJson<Record<string, unknown>>(row?.scratch ?? null, {});
 }
 
 // Union the host-reported file accounting into pipeline_state. The reviewer

@@ -26,23 +26,35 @@ const BUNDLE_TABLE_NAME = /^[a-z_][a-z0-9_]*$/;
 // so the kernel stamps it here, at the single drain point. Defaults to
 // the empty string for the few callers (FinalizeStage, a phase-less
 // event Step) where the active stage has no phase.
+//
+// `iteration` is the phase's current round, read from the kernel-owned
+// per-phase counter by the caller. Like `phase`, it is stamped here at the
+// drain point rather than trusted from the bundle-supplied `Finding`, so a
+// bundle-authored finding shares the same kernel provenance the
+// agent-result path stamps. Defaults to round 1.
 export async function applyBundleOps(
   tx: Transaction,
   ops: BundleOp[],
   phase: Phase = "",
+  iteration = 1,
 ): Promise<void> {
   for (const op of ops) {
-    await applyOne(tx, op, phase);
+    await applyOne(tx, op, phase, iteration);
   }
 }
 
-async function applyOne(tx: Transaction, op: BundleOp, phase: Phase): Promise<void> {
+async function applyOne(
+  tx: Transaction,
+  op: BundleOp,
+  phase: Phase,
+  iteration: number,
+): Promise<void> {
   switch (op.op) {
     case "set_decision":
       await mergeJsonObjectColumn(tx, "decisions", { [op.key]: op.value });
       return;
     case "record_finding":
-      await insertFinding(tx, op.finding, phase);
+      await insertFinding(tx, op.finding, phase, iteration);
       return;
     case "set_bundle_state_field":
       await mergeJsonObjectColumn(tx, "bundle_state", { [op.path]: op.value });
@@ -82,13 +94,19 @@ async function applyOne(tx: Transaction, op: BundleOp, phase: Phase): Promise<vo
   }
 }
 
-async function insertFinding(tx: Transaction, f: Finding, phase: Phase): Promise<void> {
-  // `phase` is the active stage's phase threaded from the tick. A
-  // bundle Step that pushes `record_finding` directly through
-  // `ctx.tx.record_finding(...)` now lands its forensics row under the
-  // running phase; the empty-string fallback applies only when the
-  // active stage genuinely has none (FinalizeStage / a phase-less event
-  // Step) — no SQL constraint forbids empty TEXT, only NULL.
+async function insertFinding(
+  tx: Transaction,
+  f: Finding,
+  phase: Phase,
+  iteration: number,
+): Promise<void> {
+  // `phase` and `iteration` are the active stage's phase + current round,
+  // threaded from the tick. A bundle Step that pushes `record_finding`
+  // directly through `ctx.tx.record_finding(...)` now lands its forensics
+  // row under the running phase and round; the empty-string phase fallback
+  // applies only when the active stage genuinely has none (FinalizeStage /
+  // a phase-less event Step). A fresh row is LIVE — `superseded_by_iteration`
+  // defaults to NULL (omitted from the column list below).
   await tx.exec(
     "INSERT INTO findings (id, task_id, agent, iteration, phase, file, " +
       "line_start, line_end, severity, category, proposed_new_category, " +
@@ -99,7 +117,7 @@ async function insertFinding(tx: Transaction, f: Finding, phase: Phase): Promise
       f.id,
       f.task_id.length > 0 ? f.task_id : null,
       f.agent,
-      f.iteration,
+      iteration,
       phase,
       f.file,
       f.line_start,

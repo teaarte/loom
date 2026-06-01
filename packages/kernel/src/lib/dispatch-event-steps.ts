@@ -26,6 +26,7 @@ export async function dispatchEventSteps(
   tx: Transaction,
   ops: BundleOp[],
   phase: Phase = "",
+  iteration = 1,
 ): Promise<BundleOp[]> {
   const matches: StepStage[] = [];
   for (const stage of ctx.registry.stages.values()) {
@@ -54,7 +55,7 @@ export async function dispatchEventSteps(
     // event and depend on each other's writes. The active phase is
     // threaded so a finding the Step buffers lands under it.
     if (ops.length > 0) {
-      await applyBundleOps(tx, ops, phase);
+      await applyBundleOps(tx, ops, phase, iteration);
       drained.push(...ops);
       ops.length = 0;
     }

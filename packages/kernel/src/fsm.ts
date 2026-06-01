@@ -31,6 +31,7 @@ import {
 } from "./lib/access-snapshots.js";
 import { dispatchEventSteps } from "./lib/dispatch-event-steps.js";
 import { advancePhaseProgress } from "./lib/phase-progress.js";
+import { readPhaseIter } from "./lib/supersede-findings.js";
 import { narrowStateForBundle } from "./narrow.js";
 import { interpretFanout } from "./stages/fanout.js";
 import { interpretFinalize } from "./stages/finalize.js";
@@ -140,6 +141,11 @@ export async function runFSM(
     // drain so a `record_finding` a bundle Step pushes lands under the
     // running phase rather than a placeholder.
     const activePhase = stagePhase(stage);
+    // The phase's current round, read from the kernel-owned per-phase
+    // counter, so a bundle-pushed finding carries the same kernel-stamped
+    // iteration the agent-result path stamps (the resolver retires rounds
+    // by iteration). Absent counter ⇒ round 1.
+    const activeIteration = readPhaseIter(state.driver.scratch, activePhase);
 
     // BundleOps the interpreter pushed this tick, captured before the
     // buffer is cleared so their effects can be mirrored onto the
@@ -176,6 +182,7 @@ export async function runFSM(
           tx,
           ops,
           activePhase,
+          activeIteration,
         );
         const result = await interpretStage(stage, state, ctx);
         if (result.type === "ask_user") {
@@ -192,7 +199,7 @@ export async function runFSM(
         // StepStage's `run` body) pushed into the scratch buffer.
         // A throw here aborts the outer tx — invariants on commit
         // catch what mutators alone cannot.
-        await applyBundleOps(tx, ops, activePhase);
+        await applyBundleOps(tx, ops, activePhase, activeIteration);
         // Mirror BOTH the event-Step ops drained above and the
         // interpreter's ops — an event-position Step's write must reach a
         // later same-pass stage just as an interpreter Step's does.

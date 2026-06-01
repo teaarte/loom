@@ -18,7 +18,12 @@
 //      `runInvariants` below.
 
 import { loadState } from "./state/load.js";
-import type { Invariant, KernelSnapshots, Violation } from "./types/invariants.js";
+import type {
+  FindingSnapshotRow,
+  Invariant,
+  KernelSnapshots,
+  Violation,
+} from "./types/invariants.js";
 import type { AgentRecord } from "./types/agent-result.js";
 import type { IdempotencyKey, IdempotencyLedgerEntry, IdempotencyOp } from "./types/idempotency.js";
 import type { BundleStateView } from "./types/state.js";
@@ -238,12 +243,41 @@ export const inv007: Invariant = defineInvariant(
   },
 );
 
-// Findings schema-validation invariant. With no schema registry yet
-// and no findings collection on `BundleStateView` / `KernelSnapshots`,
-// the body is a forward-compatible no-op — the declared `reads`
-// announce the dependency so the registry / snapshot can be wired in
-// later without touching the call site.
-export const inv008: Invariant = defineInvariant(["findings"], () => null);
+// Acceptance veto: a terminal `accepted` verdict cannot coexist with a
+// LIVE blocking finding. "Live" = severity blocking, status open, and not
+// retired by a walk-back (`superseded_by_iteration IS NULL`). A finding
+// the human accepted / dismissed / marked fixed is not open; one a replan
+// retired is superseded — so the only thing this catches is a genuinely
+// unaddressed blocker the record would otherwise paper over by reading
+// `accepted`. The rule is generic over the lifecycle columns: it names no
+// phase and no domain category, so superseded planning findings fall out
+// for free (they are not live) and the check reduces to the last surviving
+// round of whatever phase still carries an open blocker. Dormant on every
+// non-terminal tick (verdict null) — it only has an opinion at finalize.
+export const inv008: Invariant = defineInvariant(
+  ["verdict", "findings"],
+  (state, snapshots) => {
+    if (state.verdict !== "accepted") return null;
+    const findings = snapshots.findings ?? [];
+    for (const f of findings) {
+      if (f.severity !== "blocking") continue;
+      if (f.status !== "open") continue;
+      if (f.superseded_by_iteration !== null) continue;
+      return {
+        code: "INV_008",
+        message:
+          "verdict='accepted' cannot coexist with a live blocking finding " +
+          `(phase '${f.phase}', iteration ${f.iteration}, status open, not superseded)`,
+        detail: {
+          phase: f.phase,
+          iteration: f.iteration,
+          status: f.status,
+        },
+      };
+    }
+    return null;
+  },
+);
 
 // Phase status stays within the known PhaseStatus union. The SQL
 // CHECK constraint enforces this on writes; the invariant adds a
@@ -472,6 +506,7 @@ export async function buildKernelSnapshots(
 ): Promise<KernelSnapshots> {
   let needsAgentRecords = false;
   let needsLedger = false;
+  let needsFindings = false;
   for (const inv of invariants) {
     for (const path of inv.reads) {
       if (path === "*" || path.startsWith("agent_records")) {
@@ -479,6 +514,9 @@ export async function buildKernelSnapshots(
       }
       if (path === "*" || path.startsWith("kernel_idempotency_ledger")) {
         needsLedger = true;
+      }
+      if (path === "*" || path.startsWith("findings")) {
+        needsFindings = true;
       }
     }
   }
@@ -490,7 +528,34 @@ export async function buildKernelSnapshots(
   if (needsLedger) {
     snapshots.ledger = await loadLedger(tx);
   }
+  if (needsFindings) {
+    snapshots.findings = await loadFindings(tx);
+  }
   return snapshots;
+}
+
+// Generic findings projection for invariant bodies — only the lifecycle
+// columns, no domain fields. Built in one SELECT inside the caller's tx so
+// the read sees the in-flight write set (the very state being validated).
+async function loadFindings(tx: Transaction): Promise<FindingSnapshotRow[]> {
+  const rows = await tx.queryAll<{
+    phase: unknown;
+    iteration: unknown;
+    severity: unknown;
+    status: unknown;
+    superseded_by_iteration: unknown;
+  }>(
+    "SELECT phase, iteration, severity, status, superseded_by_iteration " +
+      "FROM findings ORDER BY id ASC",
+  );
+  return rows.map((r) => ({
+    phase: String(r.phase),
+    iteration: Number(r.iteration),
+    severity: String(r.severity),
+    status: String(r.status),
+    superseded_by_iteration:
+      r.superseded_by_iteration === null ? null : Number(r.superseded_by_iteration),
+  }));
 }
 
 async function loadAgentRecords(tx: Transaction): Promise<AgentRecord[]> {

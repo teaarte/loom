@@ -33,7 +33,12 @@ import {
   openDb,
   withStateTransaction,
 } from "../src/state.js";
-import type { Invariant, KernelSnapshots, Violation } from "../src/types/invariants.js";
+import type {
+  FindingSnapshotRow,
+  Invariant,
+  KernelSnapshots,
+  Violation,
+} from "../src/types/invariants.js";
 import type { NowToken } from "../src/types/now.js";
 import type { AgentRecord } from "../src/types/agent-result.js";
 import type { IdempotencyKey, IdempotencyLedgerEntry } from "../src/types/idempotency.js";
@@ -384,14 +389,55 @@ describe("inv007", () => {
   });
 });
 
-describe("inv008", () => {
-  // No findings collection on BundleStateView / KernelSnapshots yet —
-  // the body is a forward-compatible no-op until a schema registry
-  // and findings snapshot land. Only the clean-fixture branch is
-  // testable; documenting the gap so a future session knows to add
-  // the violating-fixture pair when the dependencies arrive.
-  it("returns null on any state (no schema registry available yet)", () => {
-    assert.equal(inv008(baseState(), emptySnapshots()), null);
+describe("inv008 — acceptance veto", () => {
+  const liveBlocking: FindingSnapshotRow = {
+    phase: "implementation",
+    iteration: 2,
+    severity: "blocking",
+    status: "open",
+    superseded_by_iteration: null,
+  };
+
+  it("dormant while the verdict is not accepted (live blocker, no verdict)", () => {
+    const state = baseState({ verdict: null });
+    assert.equal(inv008(state, { findings: [liveBlocking] }), null);
+  });
+
+  it("fires when an accepted verdict coexists with a live blocking finding", () => {
+    const state = baseState({ verdict: "accepted" });
+    const v = inv008(state, { findings: [liveBlocking] });
+    assert.ok(v !== null);
+    assert.equal(v.code, "INV_008");
+    assert.equal(v.detail?.["phase"], "implementation");
+  });
+
+  it("passes when the only blocker was superseded by a later round", () => {
+    const state = baseState({ verdict: "accepted" });
+    const superseded: FindingSnapshotRow = {
+      ...liveBlocking,
+      iteration: 1,
+      superseded_by_iteration: 2,
+    };
+    assert.equal(inv008(state, { findings: [superseded] }), null);
+  });
+
+  it("passes when the blocker is no longer open (accepted_by_human / fixed)", () => {
+    const state = baseState({ verdict: "accepted" });
+    const resolved: FindingSnapshotRow = { ...liveBlocking, status: "accepted_by_human" };
+    const fixed: FindingSnapshotRow = { ...liveBlocking, status: "fixed" };
+    assert.equal(inv008(state, { findings: [resolved, fixed] }), null);
+  });
+
+  it("ignores non-blocking severities under an accepted verdict", () => {
+    const state = baseState({ verdict: "accepted" });
+    const warn: FindingSnapshotRow = { ...liveBlocking, severity: "warn" };
+    const info: FindingSnapshotRow = { ...liveBlocking, severity: "info" };
+    assert.equal(inv008(state, { findings: [warn, info] }), null);
+  });
+
+  it("passes when an accepted verdict carries no findings at all", () => {
+    const state = baseState({ verdict: "accepted" });
+    assert.equal(inv008(state, emptySnapshots()), null);
   });
 });
 
@@ -731,7 +777,8 @@ describe("buildKernelSnapshots", () => {
     const snap = await buildKernelSnapshots(fakeTx, [wildcard]);
     assert.ok(snap.agent_records !== undefined);
     assert.ok(snap.ledger !== undefined);
-    assert.equal(captured.length, 2);
+    assert.ok(snap.findings !== undefined);
+    assert.equal(captured.length, 3);
   });
 });
 
@@ -793,15 +840,28 @@ describe("kernelInvariants set", () => {
         response_blob: "{}", // inv014 collision
       }),
     ];
-    const snapshots: KernelSnapshots = { agent_records: [], ledger };
+    // verdict='accepted' on the fixture (above) + a live blocking finding
+    // in the snapshot drives INV_008 too, so every wired invariant fires.
+    const snapshots: KernelSnapshots = {
+      agent_records: [],
+      ledger,
+      findings: [
+        {
+          phase: "implementation",
+          iteration: 1,
+          severity: "blocking",
+          status: "open",
+          superseded_by_iteration: null,
+        },
+      ],
+    };
     const fired = new Set<string>();
     for (const inv of kernelInvariants) {
       const v = inv(corruptedState, snapshots);
       if (v !== null) fired.add(v.code);
     }
-    // The full set of kernel-generic codes — INV_008 stays out
-    // because the findings collection is not yet on the
-    // snapshot surface (forward-compat stub).
+    // The full set of kernel-generic codes — including INV_008, now that
+    // the findings snapshot carries a live blocking finding.
     const expected = new Set([
       "INV_SCHEMA_STATE",
       "INV_001",
@@ -809,6 +869,7 @@ describe("kernelInvariants set", () => {
       "INV_003",
       "INV_004",
       "INV_007",
+      "INV_008",
       "INV_010",
       "INV_011",
       "INV_012",

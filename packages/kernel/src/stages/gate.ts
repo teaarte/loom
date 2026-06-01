@@ -17,6 +17,7 @@
 import { getKernelTx } from "../fsm.js";
 import { resolveGatePolicy } from "../gate-policy.js";
 import { makeGateEventId } from "../ids.js";
+import { supersedeFindingsOnWalkBack } from "../lib/supersede-findings.js";
 import { buildPolicyContext } from "../policies/index.js";
 import { assertVocabKnown } from "../vocabularies.js";
 import type { StageContext } from "../types/context.js";
@@ -91,15 +92,40 @@ export async function interpretGate(
     ? { decision: "accept" }
     : autoRejectAnswer(decision);
 
-  if (!stage.on_resume) {
-    // Default resume policy: auto-approve advances; auto-reject
-    // walks back to the gate's own name (which becomes a no-op in
-    // most flows but is the safe default — bundles supply their
-    // own resume to do anything more nuanced).
-    if (answer.decision === "accept") return { type: "advance" };
-    return { type: "walk_back_to", step: stage.name, reason: "auto-reject without bundle-supplied on_resume" };
+  const result: StageResult = !stage.on_resume
+    ? // Default resume policy: auto-approve advances; auto-reject
+      // walks back to the gate's own name (which becomes a no-op in
+      // most flows but is the safe default — bundles supply their
+      // own resume to do anything more nuanced).
+      answer.decision === "accept"
+      ? { type: "advance" }
+      : { type: "walk_back_to", step: stage.name, reason: "auto-reject without bundle-supplied on_resume" }
+    : await stage.on_resume(ctx.state, answer, ctx);
+
+  // A policy-driven walk-back is a replan: retire the prior round's live
+  // findings across every phase the flow re-runs, co-committed in THIS
+  // gate tx alongside the gate row + auto-rejection counter (the same
+  // once-per-decision durable record). The human-answer walk-back gets the
+  // mirror treatment on its own delivery tx. Skipped when the target is
+  // not in the flow — the FSM loop surfaces that as WALK_BACK_TARGET_NOT_FOUND
+  // and must not see a half-applied supersede.
+  if (result.type === "walk_back_to") {
+    const flow = ctx.registry.flows.get(state.driver.flow_name);
+    const target = flow ? flow.indexOf(result.step) : -1;
+    if (flow && target >= 0 && target <= state.driver.step_index) {
+      // Mirror the bumped per-phase counters onto the in-memory snapshot
+      // so the re-run pass stamps bundle-pushed findings under the new
+      // round (delivery-path stamping re-reads scratch from disk anyway).
+      state.driver.scratch = await supersedeFindingsOnWalkBack(getKernelTx(ctx), {
+        flow,
+        stages: ctx.registry.stages,
+        targetIndex: target,
+        currentIndex: state.driver.step_index,
+        scratch: state.driver.scratch,
+      });
+    }
   }
-  return stage.on_resume(ctx.state, answer, ctx);
+  return result;
 }
 
 // Record the auto-decided gate row inside the gate tx. UPSERT on the

@@ -106,6 +106,7 @@ describe("openDb", () => {
       "001-initial",
       "002-installed-extensions",
       "003-bypass-markers",
+      "004-finding-supersede",
     ]);
     for (const r of rows) assert.equal(r.version, "3.0.0");
   });
@@ -135,6 +136,7 @@ describe("migration runner — idempotent", () => {
       "001-initial",
       "002-installed-extensions",
       "003-bypass-markers",
+      "004-finding-supersede",
     ]);
   });
 });

@@ -144,6 +144,12 @@ async function persistFindingsAndVerdict(
     // id) makes collisions structurally impossible; any id the agent
     // supplied is ignored. The agent contract no longer asks for one.
     const id = makeFindingId(tx.now);
+    // `iteration` is likewise KERNEL-stamped from the caller's per-phase
+    // counter, not read from the agent's `finding.iteration` self-report:
+    // the supersede resolver links retired rounds by iteration, so a value
+    // the agent could fabricate would let a stale round masquerade as the
+    // current one. A fresh row is always LIVE — `superseded_by_iteration`
+    // defaults to NULL (omitted from the column list below).
     await tx.exec(
       "INSERT INTO findings (id, task_id, agent, iteration, phase, file, " +
         "line_start, line_end, severity, category, proposed_new_category, " +
@@ -154,7 +160,7 @@ async function persistFindingsAndVerdict(
         id,
         nullIfEmpty(finding.task_id),
         finding.agent,
-        finding.iteration,
+        iteration,
         phase,
         finding.file,
         finding.line_start,

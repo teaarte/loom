@@ -14,12 +14,28 @@ export interface Violation {
   detail?: Record<string, unknown>;
 }
 
+// Generic projection of a findings row for invariant bodies — only the
+// kernel-owned lifecycle columns, never the domain fields (category,
+// summary, file, …). An invariant reasons over `(phase, iteration,
+// severity, status, superseded_by_iteration)` and nothing the bundle
+// defines, keeping the substrate domain-blind.
+export interface FindingSnapshotRow {
+  phase: string;
+  iteration: number;
+  severity: string;
+  status: string;
+  // Null while the finding is live; the later iteration that retired it
+  // once a walk-back has superseded it.
+  superseded_by_iteration: number | null;
+}
+
 // Kernel-materialized read-only snapshots — populated from the union of
 // `reads` declarations across registered invariants. Invariants that
 // did not declare a snapshot receive `undefined` for that field.
 export interface KernelSnapshots {
   agent_records?: ReadonlyArray<AgentRecord>;
   ledger?: ReadonlyArray<IdempotencyLedgerEntry>;
+  findings?: ReadonlyArray<FindingSnapshotRow>;
 }
 
 // Callable + declared metadata. `reads` lists the `BundleStateView`

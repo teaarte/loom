@@ -173,6 +173,43 @@ describe("pipeline-stop.sh (advisory Stop hook)", () => {
     }
   });
 
+  it("flags a stale pending agent as paused mid-flight (a likely dropped transport)", async () => {
+    if (!sqlite3Available()) return; // needs sqlite3 both to backdate and to read
+    const dir = mkdtempSync(join(tmpdir(), "loom-stop-stale-"));
+    try {
+      await seedStateDb(dir, {
+        status: "in_progress",
+        ownerId: "sess-1",
+        pendingAgents: 1,
+        pendingAnswer: null,
+      });
+      // Backdate the pending row well past the zombie window. Done via raw
+      // sqlite3 (not a kernel tx) on purpose: the zombie-pending invariant
+      // would reject committing a stale fixture. The hook reads the raw row
+      // and ages it host-side, so no invariant is involved.
+      const upd = spawnSync(
+        "sqlite3",
+        [
+          join(dir, ".claude", "state.db"),
+          "UPDATE pending_agents SET started_at = '2020-01-01T00:00:00.000Z';",
+        ],
+        { encoding: "utf8" },
+      );
+      assert.equal(upd.status, 0);
+      const r = runHookJson(STOP, { cwd: dir, session_id: "sess-1" });
+      assert.equal(r.status, 0);
+      assert.match(r.stdout, /paused mid-flight/);
+      assert.match(r.stdout, /resume/);
+    } finally {
+      try {
+        closeDb(dir);
+      } catch {
+        /* ignore */
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("flags gate-paused when a checkpoint awaits an answer", async () => {
     if (!sqlite3Available()) return; // tri-state read needs the sqlite3 CLI
     const dir = mkdtempSync(join(tmpdir(), "loom-stop-gate-"));

@@ -20,6 +20,7 @@ import { createIssueCrossOwnerMarkerTool } from "./tools/issue-marker.js";
 import { createMetaTool, type MetaInputWithProject } from "./tools/meta.js";
 import { createRecoverTool } from "./tools/recover.js";
 import { createRestoreTool } from "./tools/restore.js";
+import { createResumeTool } from "./tools/resume.js";
 import { createRunTaskTool } from "./tools/run-task.js";
 import { createStateGetTool } from "./tools/state-get.js";
 import type {
@@ -41,6 +42,8 @@ import type {
   RecoverTaskResponse,
   RestoreInput,
   RestoreResponse,
+  ResumeInput,
+  ResumeResponse,
   RunTaskInput,
   RunTaskResponse,
   StateGetInput,
@@ -76,6 +79,7 @@ export interface ToolRegistry {
   pipeline_backup: ToolHandler<BackupInput, BackupResponse>;
   pipeline_restore: ToolHandler<RestoreInput, RestoreResponse>;
   pipeline_archive_and_reset: ToolHandler<ArchiveResetInput, ArchiveResetResponse>;
+  pipeline_resume: ToolHandler<ResumeInput, ResumeResponse>;
 }
 
 export interface CreateServerHandle {
@@ -296,6 +300,27 @@ const TOOL_DESCRIPTORS = [
       required: ["project_dir"],
     },
   },
+  {
+    name: "pipeline_resume",
+    description:
+      "Re-emits the directive a paused task is currently waiting on, shaped " +
+      "as a wire response, so a host that lost its loop (a dropped socket, a " +
+      "slept laptop) can re-attach. Read-only: it reuses the existing " +
+      "agent_run_ids (a re-delivery dedups through the idempotency ledger), " +
+      "never advances, and writes nothing. A pending spawn re-shuttles (fetch " +
+      "its prompt via pipeline_get_spawn_prompt); a parked gate re-emits its " +
+      "ask-user; a finished task returns complete; a project with no active " +
+      "task returns NO_ACTIVE_TASK.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_dir: { type: "string" },
+        driver_state_id: { type: "string" },
+        client_identifier_unverified: { type: "string" },
+      },
+      required: ["project_dir"],
+    },
+  },
 ];
 
 export function createServer(deps: ServerDeps = {}): CreateServerHandle {
@@ -311,6 +336,7 @@ export function createServer(deps: ServerDeps = {}): CreateServerHandle {
     pipeline_backup: createBackupTool(deps),
     pipeline_restore: createRestoreTool(deps),
     pipeline_archive_and_reset: createArchiveResetTool(deps),
+    pipeline_resume: createResumeTool(deps),
   };
 
   const server = new Server(
@@ -374,6 +400,9 @@ async function dispatch(
   }
   if (name === "pipeline_archive_and_reset") {
     return await tools.pipeline_archive_and_reset(args as unknown as ArchiveResetInput);
+  }
+  if (name === "pipeline_resume") {
+    return await tools.pipeline_resume(args as unknown as ResumeInput);
   }
   throw new Error(`unknown tool: ${name}`);
 }

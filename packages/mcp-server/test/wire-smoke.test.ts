@@ -3,7 +3,7 @@
 //
 //   (a) functional — an SDK Client connected to createServer(deps).server
 //       over an in-process linked transport pair. Lists the tools (expect
-//       eleven) and calls the read-only + lifecycle ones, asserting the
+//       twelve) and calls the read-only + lifecycle ones, asserting the
 //       decoded result shape (the cross-owner marker tool is exercised in
 //       recover.test.ts). A test registry is injected so the active-task
 //       tools have a flow to tick.
@@ -199,7 +199,7 @@ async function startTask(
 }
 
 describe("wire smoke — functional (in-memory linked transport)", () => {
-  it("tools/list returns exactly the eleven registered tools", async () => {
+  it("tools/list returns exactly the twelve registered tools", async () => {
     const w = await freshWire();
     try {
       const listed = await w.client.listTools();
@@ -214,6 +214,7 @@ describe("wire smoke — functional (in-memory linked transport)", () => {
         "pipeline_meta",
         "pipeline_recover",
         "pipeline_restore",
+        "pipeline_resume",
         "pipeline_run_task",
         "pipeline_state_get",
       ]);
@@ -397,7 +398,7 @@ describe("wire smoke — boot (child-process stdio binary)", () => {
       await client.connect(transport);
 
       const listed = await client.listTools();
-      assert.equal(listed.tools.length, 11);
+      assert.equal(listed.tools.length, 12);
 
       // A read-only call frames correctly over real stdio pipes.
       const meta = asRecord(await call(client, "pipeline_meta", { project_dir: projectDir }));

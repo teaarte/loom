@@ -36,7 +36,8 @@ command -v sqlite3 >/dev/null 2>&1 || note "state hint unavailable (sqlite3 CLI 
 row="$(sqlite3 "$db" \
   "SELECT COALESCE(p.owner_id,''), p.status,
           COALESCE((SELECT COUNT(*) FROM pending_agents), 0),
-          COALESCE((SELECT pending_user_answer FROM driver_state WHERE id = 1), '')
+          COALESCE((SELECT pending_user_answer FROM driver_state WHERE id = 1), ''),
+          COALESCE((SELECT MIN(started_at) FROM pending_agents), '')
    FROM pipeline_state p WHERE p.id = 1;" 2>/dev/null || true)"
 [ -n "$row" ] || note "no task state for this project."
 
@@ -44,6 +45,24 @@ owner="$(printf '%s' "$row"  | cut -d'|' -f1)"
 status="$(printf '%s' "$row" | cut -d'|' -f2)"
 pending_agents="$(printf '%s' "$row" | cut -d'|' -f3)"
 pending_answer="$(printf '%s' "$row" | cut -d'|' -f4)"
+oldest_pending="$(printf '%s' "$row" | cut -d'|' -f5)"
+
+# Staleness threshold — mirrors the kernel zombie-pending window (50 min).
+# A pending agent idle longer than this is the signature of a dropped
+# transport (a slept laptop, a closed socket), not active work.
+STALE_PENDING_SEC=3000
+
+# ISO-8601 UTC → unix seconds; GNU `date -d` then BSD/macOS `date -j`.
+# Empty on failure, which simply skips the staleness check.
+iso_to_epoch() {
+  local iso="$1" epoch=""
+  epoch="$(date -u -d "$iso" +%s 2>/dev/null || true)"
+  if [ -z "$epoch" ]; then
+    local trimmed="${iso%.*}"; trimmed="${trimmed%Z}"
+    epoch="$(date -u -j -f "%Y-%m-%dT%H:%M:%S" "$trimmed" +%s 2>/dev/null || true)"
+  fi
+  printf '%s' "$epoch"
+}
 
 owner_hint=""
 if [ -n "$owner" ] && [ -n "$session_id" ] && [ "$owner" != "$session_id" ]; then
@@ -59,6 +78,18 @@ esac
 if [ -n "$pending_answer" ]; then
   note "gate-paused — a checkpoint is awaiting your answer$owner_hint."
 elif [ "${pending_agents:-0}" -gt 0 ]; then
+  # Stale pending → likely a dropped transport, not live work. Best-effort:
+  # any failure to compute the age falls through to the in-flight note.
+  if [ -n "$oldest_pending" ]; then
+    started_epoch="$(iso_to_epoch "$oldest_pending")"
+    now_epoch="$(date -u +%s 2>/dev/null || true)"
+    if [ -n "$started_epoch" ] && [ -n "$now_epoch" ] && [ "$now_epoch" -ge "$started_epoch" ]; then
+      age_sec=$(( now_epoch - started_epoch ))
+      if [ "$age_sec" -ge "$STALE_PENDING_SEC" ]; then
+        note "paused mid-flight ~$(( age_sec / 60 )) min — likely a dropped transport; resume with /resume or 'loom resume'$owner_hint."
+      fi
+    fi
+  fi
   note "in-flight — $pending_agents agent(s) still executing$owner_hint."
 else
   note "accept-pending — task in progress, nothing dispatched$owner_hint."

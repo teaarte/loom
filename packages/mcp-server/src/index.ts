@@ -25,6 +25,8 @@ export { createRestoreTool } from "./tools/restore.js";
 export type { RestoreDeps } from "./tools/restore.js";
 export { createArchiveResetTool } from "./tools/archive-reset.js";
 export type { ArchiveResetDeps } from "./tools/archive-reset.js";
+export { createResumeTool } from "./tools/resume.js";
+export type { ResumeDeps } from "./tools/resume.js";
 
 export { createTransportAdapter, shape } from "./transport-adapter.js";
 
@@ -60,6 +62,8 @@ export type {
   RecoveryChoiceInput,
   RestoreInput,
   RestoreResponse,
+  ResumeInput,
+  ResumeResponse,
   RunTaskInput,
   RunTaskResponse,
   SpawnRequest,

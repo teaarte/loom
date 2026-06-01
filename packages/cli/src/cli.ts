@@ -7,6 +7,7 @@ import { allowlistAdd, allowlistList } from "./commands/allowlist.js";
 import { init } from "./commands/init.js";
 import { history, reset } from "./commands/reset.js";
 import { setup } from "./commands/setup.js";
+import { status } from "./commands/status.js";
 import { processEnv, type CliEnv } from "./lib/env.js";
 import { readCliVersion } from "./version.js";
 
@@ -14,7 +15,7 @@ const HELP = `loom — set up and authorize the pipeline for your agent host
 
 Usage:
   loom setup [--user|--project] [--dry-run] [--force]
-      Register the MCP server and install the /task and /done commands.
+      Register the MCP server and install the /task, /done, and /resume commands.
       --user      install for your user (default): ~/.claude.json + ~/.claude/commands/
       --project   install for this project only:  ./.mcp.json + ./.claude/commands/
       --dry-run   print what would change without writing anything
@@ -34,6 +35,11 @@ Usage:
       An in-progress task is refused unless --force is given.
   loom history [path]
       List the archived tasks for this project.
+
+  loom status [path]
+      Show this project's task: its status, where in the flow it sits, any
+      pending agents and how long they've waited. Flags a stalled task (a
+      likely dropped transport) — resume it with /resume or 'loom resume'.
 
   loom --help | --version
 
@@ -67,6 +73,8 @@ export function run(argv: string[], env: CliEnv = processEnv()): number | Promis
       return reset(rest, env);
     case "history":
       return history(rest, env);
+    case "status":
+      return status(rest, env);
     case "allowlist": {
       const [sub, ...subRest] = rest;
       if (sub === "add") return allowlistAdd(subRest, env);

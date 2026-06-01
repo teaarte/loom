@@ -329,6 +329,29 @@ export interface ArchiveResetResponse {
 }
 
 // ---------------------------------------------------------------------
+// pipeline_resume
+// ---------------------------------------------------------------------
+
+export interface ResumeInput {
+  project_dir: string;
+  // Optional — the single-task store has one task per project, so resume
+  // reads the canonical driver_state_id off the loaded state. The hint is
+  // echoed only on a pre-load refusal (allowlist / peek) where no state is
+  // available yet.
+  driver_state_id?: string;
+  // Opaque, unverified caller string — never an identity claim.
+  client_identifier_unverified?: string;
+}
+
+// The re-emitted directive shaped as a wire response — the same shape the
+// host saw the first time (spawn-agent | spawn-agents-parallel | ask-user |
+// complete | error). A NO_ACTIVE_TASK / refusal arrives as an error-shaped
+// `response`.
+export interface ResumeResponse {
+  response: TransportResponse;
+}
+
+// ---------------------------------------------------------------------
 // Tool handler primitive — same shape used in the server's `tools` map.
 // Tests construct a handler and call it directly, bypassing MCP wire
 // framing; the SDK's request dispatcher wraps the same callable on the

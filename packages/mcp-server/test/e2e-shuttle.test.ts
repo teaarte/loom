@@ -15,9 +15,10 @@
 // holds across the full flow without anyone driving it by hand.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
 import { closeDb, openDb } from "@loomfsm/kernel";
@@ -56,6 +57,37 @@ function freshHarness(label: string): Harness {
     rmSync(dir, { recursive: true, force: true });
   };
   return { dir, allowlistPath, dispose };
+}
+
+function gitRun(dir: string, ...args: string[]): void {
+  const res = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  if (res.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${res.stderr || res.stdout}`);
+  }
+}
+
+function commitFile(dir: string, rel: string, body: string): void {
+  const abs = join(dir, rel);
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, body, "utf8");
+  gitRun(dir, "add", "-A");
+  gitRun(dir, "commit", "-q", "-m", `add ${rel}`);
+}
+
+// A harness whose project dir is a real git repo with a baseline commit
+// already in place — so run_task captures the baseline and a later commit
+// is visible to the server-computed delta. State DB + allowlist are
+// gitignored so they never count as task output.
+function freshGitHarness(label: string): Harness {
+  const h = freshHarness(label);
+  gitRun(h.dir, "init", "-q");
+  gitRun(h.dir, "config", "user.email", "test@loom.test");
+  gitRun(h.dir, "config", "user.name", "loom test");
+  gitRun(h.dir, "checkout", "-q", "-b", "main");
+  writeFileSync(join(h.dir, ".gitignore"), ".claude/\nprojects.allow\n", "utf8");
+  gitRun(h.dir, "add", "-A");
+  gitRun(h.dir, "commit", "-q", "-m", "baseline");
+  return h;
 }
 
 interface DriveResult {
@@ -586,6 +618,11 @@ const ON_BLOCKERS = { classify: "on-blockers", plan: "on-blockers", final: "on-b
 interface DriveOpts {
   gatePolicies?: Record<string, string>;
   implementerFiles?: string[];
+  // Paths the implementer COMMITS to the (git) project before its result
+  // is delivered — with NO files reported on the carrier. Forces the
+  // server to compute the delta from the committed tree, the path the
+  // earlier hollow-green run exercised.
+  commitAtImplementer?: string[];
   blockReviewFanout?: boolean;
   stopAtGateFinalAsk?: boolean;
 }
@@ -630,6 +667,11 @@ async function drive(h: Harness, task: string, uuid: string, opts: DriveOpts): P
     let input: Parameters<ReturnType<typeof createContinueTaskTool>>[0]["input"];
     if (resp.status === "spawn-agent") {
       out.trace.push(`spawn:${resp.agent}`);
+      if (resp.agent === "implementer" && opts.commitAtImplementer !== undefined) {
+        for (const rel of opts.commitAtImplementer) {
+          commitFile(h.dir, rel, `// ${rel}\nexport {};\n`);
+        }
+      }
       const wantFiles = resp.agent === "implementer" && opts.implementerFiles !== undefined;
       input = {
         type: "agent-result",
@@ -707,6 +749,32 @@ describe("first-run hardening — end to end", () => {
       assert.ok(
         !noFiles.reviewFanoutAgents.includes("playwright"),
         "without files, ui_touched is false → playwright is filtered out",
+      );
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("COMMITTED UI work (no carrier reported) still flips ui_touched via the server-computed delta", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshGitHarness("d-commit-ui");
+    try {
+      // The implementer commits UI files and reports NOTHING on the
+      // carrier — exactly the shape that previously recorded an empty file
+      // set and silently skipped the UI reviewers. The server now diffs the
+      // committed tree against the task baseline and feeds the carrier.
+      const committed = await drive(h, "restyle the dashboard", "d-commit-ui-1", {
+        gatePolicies: ON_BLOCKERS,
+        commitAtImplementer: ["src/App.tsx", "src/components/Button.tsx"],
+      });
+      assert.equal(committed.verdict, "accepted");
+      assert.ok(
+        committed.reviewFanoutAgents.includes("ui-consistency"),
+        `committed UI work should pull ui-consistency into the fanout; got ${committed.reviewFanoutAgents.join(",")}`,
+      );
+      assert.ok(
+        committed.reviewFanoutAgents.includes("playwright"),
+        `committed UI work should pull playwright into the fanout; got ${committed.reviewFanoutAgents.join(",")}`,
       );
     } finally {
       h.dispose();

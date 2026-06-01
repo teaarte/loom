@@ -32,6 +32,8 @@ import {
 } from "@loomfsm/kernel";
 import type { TransportResponse } from "@loomfsm/transport-types";
 
+import { readDeltaBaseline } from "../lib/delta-baseline.js";
+import { gitDelta } from "../lib/git-delta.js";
 import { persistDriverStepIndex } from "../lib/persist-progress.js";
 import { createTransportAdapter } from "../transport-adapter.js";
 import type {
@@ -106,11 +108,23 @@ export function createContinueTaskTool(
         ? input.client_identifier_unverified
         : "unknown";
 
+    // 3b. Compute the honest file delta server-side and fold it into the
+    //     carrier. Only the single-spawn (agent-result) path runs a tool
+    //     that mutates the working tree; the review fanout (agents-results)
+    //     does not, so the delta is gathered here. We measure the working
+    //     tree against the task-start baseline — which catches COMMITTED
+    //     work that a working-tree-vs-HEAD diff would miss — and union it
+    //     with anything the host reported (the kernel set-unions, so this
+    //     is idempotent and a host that reports nothing is fully covered).
+    //     Git I/O runs OUTSIDE the delivery tx (no held write lock); a
+    //     non-git project yields null and the host's own accounting stands.
+    const deliveredInput = await withServerComputedDelta(input.project_dir, input.input);
+
     // 4. Deliver + co-committed audit row.
     try {
       await withStateTransaction(input.project_dir, captureNow(), async (tx) => {
         await deliverContinue(tx, {
-          input: input.input,
+          input: deliveredInput,
           driver_state_id: driverStateId,
           resolveOutputKind: (agent) => registry.agents.get(agent)?.output_kind,
           vocabularies: registry.vocabularies,
@@ -149,6 +163,27 @@ export function createContinueTaskTool(
     });
 
     return { response };
+  };
+}
+
+// Fold the server-computed git delta into an agent-result's file carrier.
+// Returns the input unchanged for every other variant (and when the
+// project is not a git work tree / has no stored baseline). The kernel
+// unions the lists, so appending to whatever the host supplied is safe and
+// idempotent — a duplicate path collapses, an empty contribution is a
+// no-op.
+async function withServerComputedDelta(
+  projectDir: string,
+  input: ContinueTaskRequestInput["input"],
+): Promise<ContinueTaskRequestInput["input"]> {
+  if (input.type !== "agent-result") return input;
+  const baseline = await readDeltaBaseline(projectDir);
+  const delta = gitDelta(projectDir, baseline);
+  if (delta === null) return input;
+  return {
+    ...input,
+    files_modified: [...(input.files_modified ?? []), ...delta.modified],
+    files_created: [...(input.files_created ?? []), ...delta.created],
   };
 }
 

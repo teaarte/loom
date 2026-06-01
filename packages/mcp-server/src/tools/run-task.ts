@@ -42,6 +42,8 @@ import {
 } from "@loomfsm/kernel";
 import type { TransportResponse } from "@loomfsm/transport-types";
 
+import { persistDeltaBaseline } from "../lib/delta-baseline.js";
+import { gitBaselineRef } from "../lib/git-delta.js";
 import { parseTaskArgs } from "../lib/parse-task-args.js";
 import { persistDriverStepIndex } from "../lib/persist-progress.js";
 import { createTransportAdapter } from "../transport-adapter.js";
@@ -131,6 +133,12 @@ export function createRunTaskTool(
       warnings = parsed.warnings;
     }
 
+    // 4b. Capture the file-delta baseline (the working tree's ref at task
+    //     start) BEFORE the create tx — git I/O must not run under a held
+    //     write lock. null when the project is not a git work tree; then no
+    //     server-side delta is computed later and any host accounting stands.
+    const baselineRef = gitBaselineRef(input.project_dir);
+
     // 5. Atomic create + co-committed audit row.
     const identifier =
       typeof input.client_identifier_unverified === "string" &&
@@ -166,6 +174,11 @@ export function createRunTaskTool(
         await writeAuditRow(tx, "pipeline_run_task", created.task_id, created.driver_state_id, {
           client_identifier_unverified: identifier,
         });
+        // Co-commit the delta baseline with the task record so a resumed
+        // task measures changes from the same starting ref.
+        if (baselineRef !== null) {
+          await persistDeltaBaseline(tx, baselineRef);
+        }
         return created;
       });
     } catch (err) {

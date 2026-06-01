@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -252,6 +253,136 @@ describe("pipeline_continue_task", () => {
       if (res.response.status === "error") {
         assert.equal(res.response.code, "GATE_EVENT_STALE");
       }
+    } finally {
+      cleanup(h.dir);
+    }
+  });
+});
+
+// ============================================================================
+// Server-computed file delta (a real git work tree, no mocks)
+// ============================================================================
+
+function git(dir: string, ...args: string[]): string {
+  const res = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  if (res.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${res.stderr || res.stdout}`);
+  }
+  return res.stdout.trim();
+}
+
+function writeFile(dir: string, rel: string, body: string): void {
+  const abs = join(dir, rel);
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, body, "utf8");
+}
+
+// Like freshHarness, but the project is a real git repo with a baseline
+// commit BEFORE run_task captures the delta baseline. The state DB and the
+// allowlist file are ignored so they never leak into the untracked set.
+async function freshGitHarness(): Promise<Harness> {
+  const dir = mkdtempSync(join(tmpdir(), "loom-continue-git-"));
+  git(dir, "init", "-q");
+  git(dir, "config", "user.email", "test@loom.test");
+  git(dir, "config", "user.name", "loom test");
+  git(dir, "checkout", "-q", "-b", "main");
+  writeFile(dir, ".gitignore", ".claude/\nprojects.allow\n");
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "baseline");
+
+  openDb(dir);
+  await reconcileExtensions({
+    manifests: [bundleManifest("code-fixture")],
+    project_dir: dir,
+    now: FIXED_NOW as never,
+  });
+  const allowlistPath = join(dir, "projects.allow");
+  writeFileSync(allowlistPath, `${realpathSync(dir)}\n`, "utf8");
+  return { dir, allowlistPath, registry: buildRegistry() };
+}
+
+async function loadFiles(dir: string) {
+  const state = await withStateTransaction(dir, captureNow(), (tx) => loadState(tx));
+  return { modified: state.files_modified, created: state.files_created };
+}
+
+describe("pipeline_continue_task — server-computed file delta", () => {
+  it("fills files_modified from COMMITTED work the host did not report", async () => {
+    const h = await freshGitHarness();
+    try {
+      const { driver_state_id, agent_run_id } = await bootstrap(h, "uuid-git-1");
+
+      // The implementer commits its work — a working-tree-vs-HEAD diff
+      // would now be empty, so the host reports nothing.
+      writeFile(h.dir, "src/App.tsx", "export const App = () => null\n");
+      git(h.dir, "add", "-A");
+      git(h.dir, "commit", "-q", "-m", "implementer work");
+
+      const { cont } = tools(h);
+      await cont({
+        project_dir: h.dir,
+        driver_state_id,
+        input: { type: "agent-result", agent_run_id, agent_output: "done" },
+      });
+
+      const files = await loadFiles(h.dir);
+      assert.deepEqual(
+        files.modified,
+        ["src/App.tsx"],
+        "the server must diff against the task baseline so committed work is recorded",
+      );
+    } finally {
+      cleanup(h.dir);
+    }
+  });
+
+  it("unions server-computed paths with anything the host reports", async () => {
+    const h = await freshGitHarness();
+    try {
+      const { driver_state_id, agent_run_id } = await bootstrap(h, "uuid-git-2");
+      writeFile(h.dir, "src/Committed.tsx", "export const C = () => null\n");
+      git(h.dir, "add", "-A");
+      git(h.dir, "commit", "-q", "-m", "work");
+
+      const { cont } = tools(h);
+      await cont({
+        project_dir: h.dir,
+        driver_state_id,
+        input: {
+          type: "agent-result",
+          agent_run_id,
+          agent_output: "done",
+          // A path only the host can see (e.g. outside the repo's view).
+          files_modified: ["host/only.ts"],
+        },
+      });
+
+      const files = await loadFiles(h.dir);
+      assert.deepEqual([...files.modified].sort(), ["host/only.ts", "src/Committed.tsx"]);
+    } finally {
+      cleanup(h.dir);
+    }
+  });
+
+  it("degrades gracefully on a non-git project — host accounting still stands", async () => {
+    const h = await freshHarness();
+    try {
+      const { driver_state_id, agent_run_id } = await bootstrap(h, "uuid-git-3");
+      const { cont } = tools(h);
+      await cont({
+        project_dir: h.dir,
+        driver_state_id,
+        input: {
+          type: "agent-result",
+          agent_run_id,
+          agent_output: "done",
+          files_modified: ["host/reported.ts"],
+        },
+      });
+      const files = await loadFiles(h.dir);
+      // No baseline was stored (not a git repo) → the server adds nothing,
+      // does not throw, and the host's reported set is preserved verbatim.
+      assert.deepEqual(files.modified, ["host/reported.ts"]);
     } finally {
       cleanup(h.dir);
     }

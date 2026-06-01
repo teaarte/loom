@@ -35,7 +35,9 @@ export interface InitializeTaskArgs {
   policy_preset?: string;
   // Explicit per-role policy map. When present it wins over
   // `policy_preset`; when both are absent the row stores an empty map.
-  gate_policies?: Record<GateRole, PolicyName>;
+  // Partial over GateRole — a caller overrides only the roles it cares
+  // about; unset roles resolve through the bundle default / kernel baseline.
+  gate_policies?: Partial<Record<GateRole, PolicyName>>;
   complexity_hint?: "simple" | "medium" | "complex";
   tests_mode_hint?: "tdd" | "regression-only";
   stack?: StackInfo | null;
@@ -182,14 +184,14 @@ export async function initializeTask(
 
 function resolveGatePolicies(
   args: InitializeTaskArgs,
-): Record<GateRole, PolicyName> {
+): Partial<Record<GateRole, PolicyName>> {
   if (args.gate_policies !== undefined && Object.keys(args.gate_policies).length > 0) {
     return args.gate_policies;
   }
   if (args.policy_preset !== undefined) {
     return resolvePreset(args.policy_preset);
   }
-  return {} as Record<GateRole, PolicyName>;
+  return {};
 }
 
 // Seed `decisions` with the host-supplied hints. `complexity` is the

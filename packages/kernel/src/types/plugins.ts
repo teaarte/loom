@@ -20,7 +20,13 @@
 
 import type { AttemptBudget, TimeBudget } from "./budget.js";
 import type { AgentResult } from "./agent-result.js";
-import type { HookContext, StageContext } from "./context.js";
+import type {
+  AgentRecordsAccess,
+  FindingsAccess,
+  HookContext,
+  StageContext,
+} from "./context.js";
+import type { NowToken } from "./now.js";
 import type { ProviderShuttleIntent } from "./provider.js";
 import type { GateRole, Phase } from "./row-types.js";
 import type { BundleStateView } from "./state.js";
@@ -144,11 +150,46 @@ export type HookEvent =
 
 // ----- SpawnStage ---------------------------------------------------------
 
+// The generic outcome subset an escalation predicate reads. Mirrors the
+// accessor surface a `Policy` receives — findings (severity/category/
+// status + (phase,iteration) provenance) and agent records — plus the
+// threaded NowToken. It exposes NO driver internals and NO code-specific
+// shapes: a predicate stays domain-blind by reading only this subset
+// alongside the `BundleStateView` it is also handed (decisions, and
+// `agent_verdicts` for verdict-spread across agents on a target).
+export interface ConditionalSpawnContext {
+  findings: FindingsAccess;
+  agents_query: AgentRecordsAccess;
+  now: NowToken;
+}
+
+// A bundle-supplied predicate that decides, from the generic outcome
+// subset, whether a SpawnStage actually launches. Must be deterministic
+// (no wall-clock, no randomness) — the kernel re-evaluates it verbatim on
+// replay, so a non-deterministic predicate would break the same-input →
+// same-directive contract the idempotency ledger relies on.
+export type ConditionalSpawnPredicate = (
+  state: BundleStateView,
+  ctx: ConditionalSpawnContext,
+) => boolean;
+
 export interface SpawnStage {
   kind: "spawn";
   name: string;
   phase: Phase;
   agent: string;
+  // Optional spawn gate, evaluated AFTER `Agent.applies_to`. When present
+  // and it returns false the stage advances WITHOUT launching anything;
+  // true (or absent) runs the unconditional spawn path unchanged. This is
+  // the generic "verify/escalate only when the outcome warrants it"
+  // primitive: the bundle supplies the predicate over generic shapes
+  // (findings / verdict-spread / decisions); the kernel names no domain
+  // concept. Distinct from `Agent.applies_to` (agent-intrinsic, reads only
+  // the state view): a stage `when` reads the findings/verdict outcome the
+  // view cannot carry, and is the flow SITE's escalation condition rather
+  // than the agent's applicability — the two coexist, and both must pass
+  // for a spawn to fire.
+  when?: ConditionalSpawnPredicate;
 }
 
 // ----- FanoutStage --------------------------------------------------------

@@ -30,16 +30,21 @@ export interface PipelineState {
   ended_at: NowToken | null;
   // Wire-form PolicyName strings — closures are resolved at call time
   // by the kernel dispatcher; keeping the snapshot pure-data makes it
-  // trivially serializable and structurally comparable.
-  gate_policies: Record<GateRole, PolicyName>;
+  // trivially serializable and structurally comparable. Partial over
+  // GateRole: only the roles a task overrides are present (the operator-
+  // override tier); the dispatcher falls through to the bundle default
+  // and then the kernel baseline for any role not named here.
+  gate_policies: Partial<Record<GateRole, PolicyName>>;
   decisions: Record<string, unknown>;
   bundle_state: Record<string, unknown> | null;
   stack: StackInfo | null;
   pipeline_violation: string | null;
   force_used: boolean;
   agents_count: number;
-  gate_revisions: Record<GateRole, number>;
-  gate_auto_rejections: Record<GateRole, number>;
+  // Partial over GateRole: counters exist only for roles that have been
+  // gated at least once (rows are created lazily per role).
+  gate_revisions: Partial<Record<GateRole, number>>;
+  gate_auto_rejections: Partial<Record<GateRole, number>>;
   files_created: string[];
   files_modified: string[];
   total_tokens_in: number;
@@ -85,15 +90,15 @@ export interface BundleStateView {
   verdict: "accepted" | "rejected" | "failed_force_closed" | null;
   started_at: NowToken;
   ended_at: NowToken | null;
-  gate_policies: Record<GateRole, PolicyName>;
+  gate_policies: Partial<Record<GateRole, PolicyName>>;
   decisions: Record<string, unknown>;
   bundle_state: Record<string, unknown> | null;
   stack: StackInfo | null;
   pipeline_violation: string | null;
   force_used: boolean;
   agents_count: number;
-  gate_revisions: Record<GateRole, number>;
-  gate_auto_rejections: Record<GateRole, number>;
+  gate_revisions: Partial<Record<GateRole, number>>;
+  gate_auto_rejections: Partial<Record<GateRole, number>>;
   files_created: string[];
   files_modified: string[];
   total_tokens_in: number;

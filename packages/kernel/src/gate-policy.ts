@@ -72,8 +72,8 @@ export async function resolveGatePolicy(
   return policy(view, role, ctx);
 }
 
-function sumValues(m: Record<string, number>): number {
-  return Object.values(m).reduce((a, b) => a + b, 0);
+function sumValues(m: Partial<Record<string, number>>): number {
+  return Object.values(m).reduce<number>((a, b) => a + (b ?? 0), 0);
 }
 
 function budgetExhaustionToPolicy(

@@ -25,7 +25,11 @@ import { getKernelTx } from "../fsm.js";
 import { spawnGuard } from "../guards.js";
 import { buildPrompt } from "../prompt-renderer.js";
 import type { StageContext } from "../types/context.js";
-import type { SpawnStage, StageResult } from "../types/plugins.js";
+import type {
+  ConditionalSpawnContext,
+  SpawnStage,
+  StageResult,
+} from "../types/plugins.js";
 import type { ProviderShuttleIntent } from "../types/provider.js";
 import type { PipelineState } from "../types/state.js";
 
@@ -48,6 +52,24 @@ export async function interpretSpawn(
 
   if (agent.applies_to && !agent.applies_to(ctx.state)) {
     return { type: "advance" };
+  }
+
+  // Optional spawn gate. The bundle-supplied predicate reads the generic
+  // outcome subset (findings / verdict-spread / decisions); a false verdict
+  // advances past the stage with nothing launched, exactly like an
+  // `applies_to` miss. Evaluated against the per-tick snapshot — findings
+  // pre-materialized at tick start, the state view narrowed at `tx.now` —
+  // so a replayed tick re-derives the same boolean and the spawn dedup
+  // below covers any re-delivery.
+  if (stage.when) {
+    const conditionCtx: ConditionalSpawnContext = {
+      findings: ctx.findings,
+      agents_query: ctx.agents_query,
+      now: ctx.now,
+    };
+    if (!stage.when(ctx.state, conditionCtx)) {
+      return { type: "advance" };
+    }
   }
 
   await spawnGuard(getKernelTx(ctx), stage.agent, stage.phase);

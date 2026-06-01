@@ -14,7 +14,11 @@ import { preset as reviewFinalOnly } from "./review-final-only.js";
 import { preset as gatesOnBlockers } from "./gates-on-blockers.js";
 import { preset as fullAutonomous } from "./full-autonomous.js";
 
-export type PresetMap = Record<GateRole, PolicyName>;
+// Partial over GateRole. The kernel-shipped presets name the three
+// kernel roles, but the TYPE no longer forces every map consumer to
+// enumerate them — a bundle whose roles are entirely its own resolves
+// each role through the dispatcher's bundle-default / baseline fallback.
+export type PresetMap = Partial<Record<GateRole, PolicyName>>;
 
 export const KERNEL_POLICY_PRESETS: ReadonlyMap<string, PresetMap> = new Map<
   string,

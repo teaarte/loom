@@ -24,6 +24,7 @@ import type { Bundle } from "../src/types/bundle.js";
 import type { NowToken } from "../src/types/now.js";
 import type {
   Agent,
+  ConditionalSpawnContext,
   FanoutStage,
   FinalizeStage,
   GateStage,
@@ -37,7 +38,7 @@ import type { Policy, PolicyName } from "../src/types/policy.js";
 import type { LLMProvider, ProviderShuttleIntent } from "../src/types/provider.js";
 import type { Registry } from "../src/types/registry.js";
 import type { GateRole } from "../src/types/row-types.js";
-import type { PipelineState } from "../src/types/state.js";
+import type { BundleStateView, PipelineState } from "../src/types/state.js";
 import type { UserAnswer } from "../src/types/user-answer.js";
 
 // ============================================================================
@@ -1823,6 +1824,303 @@ describe("runFSM — human gate on_resume (H1)", () => {
 
     assert.equal(afterFirst.driver.step_index, 1);
     assert.equal(afterReplay.driver.step_index, 1, "replay must not walk back a second time");
+  });
+});
+
+// ============================================================================
+// Conditional spawn — SpawnStage.when gates the launch on a generic predicate
+// ============================================================================
+
+// Insert findings rows directly so the stage tick's pre-materialized
+// findings accessor surfaces them to the predicate. Positional/code
+// fields stay NULL — the predicate must decide without them.
+async function seedFindingRows(
+  projectDir: string,
+  now: NowToken,
+  rows: Array<{
+    id: string;
+    agent: string;
+    iteration: number;
+    phase: string;
+    severity: "blocking" | "warn" | "info";
+    category: string;
+    status: "open" | "fixed" | "accepted_by_human" | "dismissed";
+    summary: string;
+  }>,
+): Promise<void> {
+  await withStateTransaction(projectDir, now, async (tx) => {
+    for (const r of rows) {
+      await tx.exec(
+        "INSERT INTO findings (id, task_id, agent, iteration, phase, file, " +
+          "line_start, line_end, severity, category, proposed_new_category, " +
+          "pattern_id, summary, evidence_excerpt, suggested_fix, status, " +
+          "ref_rule_id, recorded_at) " +
+          "VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL, NULL, ?, NULL, NULL, ?, NULL, ?)",
+        [
+          r.id,
+          "t-2026-05-28-fixture",
+          r.agent,
+          r.iteration,
+          r.phase,
+          r.severity,
+          r.category,
+          r.summary,
+          r.status,
+          now,
+        ],
+      );
+    }
+  });
+}
+
+// A reviewer verdict row for the in-memory snapshot (verdict-spread input).
+function mkVerdict(
+  agent: string,
+  verdict: "APPROVE" | "REQUEST_CHANGES",
+  now: NowToken,
+): PipelineState["agent_verdicts"][number] {
+  return {
+    phase: "p1",
+    agent,
+    iteration: 1,
+    verdict,
+    summary_line: null,
+    blocking_issues: verdict === "APPROVE" ? 0 : 1,
+    warn_issues: 0,
+    info_issues: 0,
+    categories_seen: [],
+    recorded_at: now,
+  };
+}
+
+// The escalation predicate. Generic over the outcome subset only:
+//   (a) an OPEN BLOCKING finding exists in the review phase, AND
+//   (b) the reviewers SPLIT — ≥2 distinct verdict values on that phase.
+// It reads finding severity/status + (phase) provenance via the accessor
+// and verdict values off the view; it never touches a finding's
+// file/line/pattern_id (those are NULL on the seeded rows, and the
+// predicate still decides correctly — that is the generic-subset proof).
+function escalateWhen(state: BundleStateView, ctx: ConditionalSpawnContext): boolean {
+  const blocking = ctx.findings.query({
+    phase: "p1",
+    severity: ["blocking"],
+    status: ["open"],
+  });
+  if (blocking.length === 0) return false;
+  const verdicts = new Set(
+    state.agent_verdicts.filter((v) => v.phase === "p1").map((v) => v.verdict),
+  );
+  return verdicts.size >= 2;
+}
+
+describe("runFSM — conditional spawn (SpawnStage.when)", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    _resetInvariantsForTest();
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  it("spawns the verifier when the predicate holds (blocking finding + split verdicts)", async () => {
+    const stages: Record<string, Stage> = {
+      "verify-spawn": {
+        kind: "spawn",
+        name: "verify-spawn",
+        phase: "p1",
+        agent: "verifier",
+        when: escalateWhen,
+      } as SpawnStage,
+    };
+    const registry = buildRegistry({
+      stages,
+      flow: ["verify-spawn"],
+      agents: [makeAgent("verifier")],
+    });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    await seedFindingRows(projectDir, now, [
+      {
+        id: "f-2026-06-01-aaaaaa",
+        agent: "r1",
+        iteration: 1,
+        phase: "p1",
+        severity: "blocking",
+        category: "behavior",
+        status: "open",
+        summary: "claims a runtime outcome",
+      },
+    ]);
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+    state.agent_verdicts = [
+      mkVerdict("r1", "REQUEST_CHANGES", now),
+      mkVerdict("r2", "APPROVE", now),
+    ];
+
+    const out = await runFSM(state, registry);
+    assert.equal(out.directive.kind, "shuttle");
+    if (out.directive.kind === "shuttle") {
+      assert.equal(out.directive.spawn.agent, "verifier");
+      assert.ok(out.directive.spawn.agent_run_id.startsWith("ar-"));
+      assert.equal(out.directive.spawn.phase, "p1");
+    }
+    const after = await withStateTransaction(projectDir, captureNow(), (tx) =>
+      loadState(tx),
+    );
+    assert.equal(after.pending_agents.length, 1);
+    assert.equal(after.pending_agents[0]?.agent, "verifier");
+  });
+
+  it("advances without spawning when the verdicts agree (no spread)", async () => {
+    const stages: Record<string, Stage> = {
+      "verify-spawn": {
+        kind: "spawn",
+        name: "verify-spawn",
+        phase: "p1",
+        agent: "verifier",
+        when: escalateWhen,
+      } as SpawnStage,
+      g1: {
+        kind: "gate",
+        name: "g1",
+        phase: "p1",
+        message: () => "proceed?",
+        valid_answers: () => ({ options: [] }),
+      },
+    };
+    const registry = buildRegistry({
+      stages,
+      flow: ["verify-spawn", "g1"],
+      agents: [makeAgent("verifier")],
+    });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    await seedFindingRows(projectDir, now, [
+      {
+        id: "f-2026-06-01-bbbbbb",
+        agent: "r1",
+        iteration: 1,
+        phase: "p1",
+        severity: "blocking",
+        category: "behavior",
+        status: "open",
+        summary: "claims a runtime outcome",
+      },
+    ]);
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+    state.agent_verdicts = [
+      mkVerdict("r1", "APPROVE", now),
+      mkVerdict("r2", "APPROVE", now),
+    ];
+
+    const out = await runFSM(state, registry);
+    // The spawn advanced (verdicts agree → no escalation); the human gate halts.
+    assert.equal(out.directive.kind, "ask-user");
+    const after = await withStateTransaction(projectDir, captureNow(), (tx) =>
+      loadState(tx),
+    );
+    assert.equal(after.pending_agents.length, 0);
+  });
+
+  it("advances without spawning when no blocking finding exists (split verdicts alone insufficient)", async () => {
+    const stages: Record<string, Stage> = {
+      "verify-spawn": {
+        kind: "spawn",
+        name: "verify-spawn",
+        phase: "p1",
+        agent: "verifier",
+        when: escalateWhen,
+      } as SpawnStage,
+      g1: {
+        kind: "gate",
+        name: "g1",
+        phase: "p1",
+        message: () => "proceed?",
+        valid_answers: () => ({ options: [] }),
+      },
+    };
+    const registry = buildRegistry({
+      stages,
+      flow: ["verify-spawn", "g1"],
+      agents: [makeAgent("verifier")],
+    });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    // Only a non-blocking finding — the predicate's (a) clause fails.
+    await seedFindingRows(projectDir, now, [
+      {
+        id: "f-2026-06-01-cccccc",
+        agent: "r1",
+        iteration: 1,
+        phase: "p1",
+        severity: "warn",
+        category: "style",
+        status: "open",
+        summary: "nit",
+      },
+    ]);
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+    state.agent_verdicts = [
+      mkVerdict("r1", "REQUEST_CHANGES", now),
+      mkVerdict("r2", "APPROVE", now),
+    ];
+
+    const out = await runFSM(state, registry);
+    assert.equal(out.directive.kind, "ask-user");
+    const after = await withStateTransaction(projectDir, captureNow(), (tx) =>
+      loadState(tx),
+    );
+    assert.equal(after.pending_agents.length, 0);
+  });
+
+  it("re-running the same conditional-spawn tick dedups (no second pending row)", async () => {
+    const stages: Record<string, Stage> = {
+      "verify-spawn": {
+        kind: "spawn",
+        name: "verify-spawn",
+        phase: "p1",
+        agent: "verifier",
+        when: escalateWhen,
+      } as SpawnStage,
+    };
+    const registry = buildRegistry({
+      stages,
+      flow: ["verify-spawn"],
+      agents: [makeAgent("verifier")],
+    });
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    await seedFindingRows(projectDir, now, [
+      {
+        id: "f-2026-06-01-dddddd",
+        agent: "r1",
+        iteration: 1,
+        phase: "p1",
+        severity: "blocking",
+        category: "behavior",
+        status: "open",
+        summary: "claims a runtime outcome",
+      },
+    ]);
+    const verdicts = [mkVerdict("r1", "REQUEST_CHANGES", now), mkVerdict("r2", "APPROVE", now)];
+
+    // First tick: predicate true → shuttle + one pending_agents row.
+    const first = buildInMemoryState(projectDir, now, { flow_name: "default" });
+    first.agent_verdicts = verdicts;
+    const out1 = await runFSM(first, registry);
+    assert.equal(out1.directive.kind, "shuttle");
+
+    // Re-deliver the same tick under the SAME now (the spawn never
+    // advanced — a shuttle parks step_index). The predicate re-derives the
+    // same verdict deterministically; SpawnGuard refuses the duplicate
+    // launch so no second pending row is written. agent_run_id is a fresh
+    // UUID by design — dedup is the (agent, phase, now-window) guard, the
+    // same mechanism every ordinary spawn relies on.
+    const second = buildInMemoryState(projectDir, now, { flow_name: "default" });
+    second.agent_verdicts = verdicts;
+    await assert.rejects(
+      runFSM(second, registry),
+      (err: unknown) => err instanceof KernelError && err.code === "DUPLICATE_SPAWN",
+    );
+    const after = await withStateTransaction(projectDir, captureNow(), (tx) =>
+      loadState(tx),
+    );
+    assert.equal(after.pending_agents.length, 1, "dedup: exactly one launch survives");
   });
 });
 

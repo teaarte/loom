@@ -15,7 +15,13 @@ export interface Bundle {
   phases: Phase[];
   default_flow: string;
 
-  default_gate_policies: Record<GateRole, PolicyName>;
+  // Partial over GateRole: a bundle declares postures only for the roles
+  // its flow actually gates. The three kernel-shipped role literals stay
+  // for autocomplete but are NOT required keys — a bundle whose roles are
+  // entirely its own (none of classify/plan/final) declares only those.
+  // The dispatcher's three-tier `?? … ?? "human"` resolution tolerates any
+  // missing role.
+  default_gate_policies: Partial<Record<GateRole, PolicyName>>;
   // Required when any role resolves to PolicyName "auto" — loader
   // refuses bundles that mark a role auto without shipping a resolver.
   policyResolver?: GatePolicyResolver;

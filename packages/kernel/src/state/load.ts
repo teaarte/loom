@@ -83,18 +83,14 @@ export async function loadState(tx: Transaction): Promise<PipelineState> {
     "SELECT agent_run_id, agent, phase, model, started_at FROM pending_agents",
   );
 
-  // The TS type uses Record<GateRole, number> where GateRole carries
-  // three kernel-shipped literal roles plus an open string branch;
-  // populating only the rows present on disk is the correct shape,
-  // so we build the maps as Record<string, ...> and cast at the boundary.
-  const gateRevisionsBuilder: Record<string, number> = {};
-  const gateAutoRejectionsBuilder: Record<string, number> = {};
+  // Counters are populated only for roles that have a row on disk — the
+  // map is partial over GateRole by construction (lazy per-role rows).
+  const gate_revisions: Partial<Record<GateRole, number>> = {};
+  const gate_auto_rejections: Partial<Record<GateRole, number>> = {};
   for (const row of gateCounters) {
-    gateRevisionsBuilder[row.role] = Number(row.human_revisions);
-    gateAutoRejectionsBuilder[row.role] = Number(row.auto_rejections);
+    gate_revisions[row.role] = Number(row.human_revisions);
+    gate_auto_rejections[row.role] = Number(row.auto_rejections);
   }
-  const gate_revisions = gateRevisionsBuilder as Record<GateRole, number>;
-  const gate_auto_rejections = gateAutoRejectionsBuilder as Record<GateRole, number>;
 
   const phases: PhaseRow[] = phaseRows.map((r) => ({
     name: String(r.name),
@@ -149,10 +145,10 @@ export async function loadState(tx: Transaction): Promise<PipelineState> {
     verdict: ps.verdict === null ? null : (ps.verdict as PipelineState["verdict"]),
     started_at: String(ps.started_at) as NowToken,
     ended_at: ps.ended_at === null ? null : (String(ps.ended_at) as NowToken),
-    gate_policies: parseJsonField<Record<string, PolicyName>>(
+    gate_policies: parseJsonField<Partial<Record<GateRole, PolicyName>>>(
       ps.gate_policies,
       {},
-    ) as Record<GateRole, PolicyName>,
+    ),
     decisions: parseJsonField<Record<string, unknown>>(ps.decisions, {}),
     bundle_state: parseJsonField<Record<string, unknown> | null>(ps.bundle_state, null),
     stack: parseJsonField<StackInfo | null>(ps.stack, null),

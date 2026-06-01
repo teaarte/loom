@@ -1,0 +1,29 @@
+{
+  "name": "@loomfsm/bundle-spec",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Second, deliberately non-code bundle — a research/spec authoring flow that exercises the kernel's domain-blind surfaces in a shape unlike the code bundle, to prove the substrate carries no code-domain assumptions.",
+  "license": "Apache-2.0",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "agents"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
+  },
+  "dependencies": {
+    "@loomfsm/kernel": "workspace:*"
+  }
+}

@@ -67,7 +67,11 @@ interface DriveResult {
 // Drive a fresh task to its terminal directive with the echo executor.
 // Returns the directive trace, the final verdict, and every prompt the
 // host would have run (so a caller can assert real template bodies).
-async function driveToComplete(h: Harness, task: string): Promise<DriveResult> {
+async function driveToComplete(
+  h: Harness,
+  task: string,
+  policyPreset?: string,
+): Promise<DriveResult> {
   const deps = { resolveRegistry: assembleRegistry, allowlistPath: h.allowlistPath };
   const run = createRunTaskTool(deps);
   const cont = createContinueTaskTool(deps);
@@ -82,6 +86,7 @@ async function driveToComplete(h: Harness, task: string): Promise<DriveResult> {
     project_dir: h.dir,
     task,
     client_idempotency_uuid: `e2e-${task}`,
+    ...(policyPreset !== undefined ? { policy_preset: policyPreset } : {}),
   });
   const driverStateId = first.driver_state_id ?? "";
   let resp: TransportResponse = first.response;
@@ -306,7 +311,70 @@ describe("e2e shuttle — wired registry", () => {
     }
   });
 
-  it("fanout directives carry prompts by reference — response size is bounded, not the sum of prompts", async () => {
+  it("a normal-size fanout inlines its prompts — one round-trip, no by-reference fetch", async () => {
+    // The common case after the inline threshold landed: a routine task's
+    // fanout prompts sum under the cap, so every prompt rides the wire
+    // inline. The host dispatches the batch and delivers one results
+    // payload — no per-agent get_spawn_prompt call. Reverting the inline
+    // branch (forcing always-by-reference) reddens this.
+    _resetRegistryCacheForTest();
+    const h = freshHarness("inline");
+    try {
+      const deps = { resolveRegistry: assembleRegistry, allowlistPath: h.allowlistPath };
+      const run = createRunTaskTool(deps);
+      const cont = createContinueTaskTool(deps);
+
+      const first = await run({
+        project_dir: h.dir,
+        task: "harden the auth layer against brute force",
+        client_idempotency_uuid: "e2e-inline-1",
+      });
+      const driverStateId = first.driver_state_id ?? "";
+      let resp: TransportResponse = first.response;
+
+      let fanoutCount = 0;
+      for (let step = 0; step < 80 && resp.status !== "complete" && resp.status !== "error"; step++) {
+        if (resp.status === "spawn-agents-parallel") {
+          fanoutCount++;
+          // No by-reference flag, every prompt present inline + a real body.
+          assert.equal(
+            resp.prompts_by_reference,
+            undefined,
+            "a sub-cap fanout must not flip to by-reference",
+          );
+          for (const s of resp.spawns) {
+            assert.ok(
+              (s.spawn_request.prompt ?? "").length > 200,
+              `fanout spawn '${s.agent}' should inline its real prompt body`,
+            );
+            assert.ok(
+              !(s.spawn_request.prompt ?? "").startsWith("agent="),
+              `fanout spawn '${s.agent}' must carry a materialized prompt, not the stub`,
+            );
+          }
+        }
+        const next = await cont({
+          project_dir: h.dir,
+          driver_state_id: driverStateId,
+          input: echoInputFor(resp),
+        });
+        resp = next.response;
+      }
+      assert.ok(fanoutCount >= 1, "expected at least one reviewer fanout");
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("an over-cap fanout falls back to by-reference — response bounded, prompts fetchable", async () => {
+    // A large task is embedded verbatim in every fanout prompt, so the
+    // batch sums over the inline cap. The transport must keep the spill-safe
+    // by-reference shape: prompts_by_reference: true, prompts omitted, the
+    // envelope a small list of {agent_run_id, agent, model, extras} that
+    // stays bounded regardless of fanout width, and the prompt re-derivable
+    // through the read-only fetch. Reverting the threshold (always inline)
+    // reddens this — the envelope would balloon and prompts_by_reference
+    // would be absent.
     _resetRegistryCacheForTest();
     const h = freshHarness("byref");
     try {
@@ -315,36 +383,36 @@ describe("e2e shuttle — wired registry", () => {
       const cont = createContinueTaskTool(deps);
       const getPrompt = createGetSpawnPromptTool(deps);
 
+      // ~20k chars of task text pushes each embedded prompt — and thus any
+      // fanout — well over the inline cap.
       const first = await run({
         project_dir: h.dir,
-        task: "harden the auth layer against brute force",
+        task: "harden the auth layer against brute force. " + "PADDING ".repeat(2500),
         client_idempotency_uuid: "e2e-byref-1",
       });
       const driverStateId = first.driver_state_id ?? "";
       let resp: TransportResponse = first.response;
 
       const fanouts: { count: number; bytes: number }[] = [];
-      // Body fetched by reference from the widest fanout, captured WHILE the
-      // fanout is pending (the host fetches before delivering — once the
-      // batch is delivered the pending row drains and the reference is gone).
       let widestFetchedBody = "";
       let widestCount = 0;
 
       for (let step = 0; step < 80 && resp.status !== "complete" && resp.status !== "error"; step++) {
         if (resp.status === "spawn-agents-parallel") {
-          // Every fanout entry must omit the inline prompt and flag the
-          // by-reference contract — the bulky prompt never rides the wire.
-          assert.equal(resp.prompts_by_reference, true, "fanout must set prompts_by_reference");
+          // Over the cap → by-reference: flag set, every prompt omitted.
+          assert.equal(resp.prompts_by_reference, true, "over-cap fanout must set prompts_by_reference");
           for (const s of resp.spawns) {
             assert.equal(
               s.spawn_request.prompt,
               undefined,
-              `fanout spawn '${s.agent}' must not inline its prompt`,
+              `over-cap fanout spawn '${s.agent}' must not inline its prompt`,
             );
           }
           fanouts.push({ count: resp.spawns.length, bytes: JSON.stringify(resp).length });
           if (resp.spawns.length > widestCount) {
             widestCount = resp.spawns.length;
+            // Fetch WHILE the fanout is pending (the host fetches before
+            // delivering — once delivered the pending row drains).
             const target = resp.spawns.find((s) => s.agent === "logic-reviewer") ?? resp.spawns[0]!;
             const fetched = await getPrompt({
               project_dir: h.dir,
@@ -363,12 +431,11 @@ describe("e2e shuttle — wired registry", () => {
         resp = next.response;
       }
 
-      // The medium flow fans out at least twice (plan-review = 2 agents,
-      // review = up to 5). The widest must still be small: with prompts by
-      // reference the envelope is a list of {agent_run_id, agent, model,
-      // extras}, so a few hundred bytes per agent — orders of magnitude
-      // under the ~84k an inlined 4-way fanout produced. A fixed ceiling
-      // that holds regardless of how wide the fanout grows.
+      // With prompts by reference the envelope is a list of
+      // {agent_run_id, agent, model, extras} — a few hundred bytes per
+      // agent, orders of magnitude under the ~84k an inlined wide fanout of
+      // this task would produce. A fixed ceiling that holds however wide
+      // the fanout grows.
       assert.ok(fanouts.length >= 1, "expected at least one reviewer fanout");
       const widest = fanouts.reduce((m, f) => (f.count > m.count ? f : m), fanouts[0]!);
       assert.ok(widest.count >= 2, `widest fanout should have ≥2 agents; got ${widest.count}`);
@@ -377,8 +444,8 @@ describe("e2e shuttle — wired registry", () => {
         `by-reference fanout response must stay small; ${widest.count} agents → ${widest.bytes} bytes`,
       );
 
-      // The reference is resolvable: the prompt fetched mid-fanout is the
-      // real materialized template body, not a stub.
+      // The reference resolves to the real materialized template body — and
+      // it does embed the large task, which is exactly why it tripped the cap.
       assert.ok(widestFetchedBody.length > 200, "fetched prompt should be the real body");
       assert.ok(
         !widestFetchedBody.startsWith("agent="),
@@ -394,7 +461,11 @@ describe("e2e shuttle — wired registry", () => {
       _resetRegistryCacheForTest();
       const h = freshHarness(`loop${runIndex}`);
       try {
-        const result = await driveToComplete(h, `fix-${runIndex}`);
+        // Drive under full-supervised so all three gates surface as
+        // ask-user and the gate-traversal assertions below can observe
+        // them. Under the no-flag default (bundle on-blockers) a clean run
+        // auto-resolves the gates — that path is asserted separately.
+        const result = await driveToComplete(h, `fix-${runIndex}`, "full-supervised");
 
         // Reached natural completion with the clean-run verdict.
         assert.equal(
@@ -689,6 +760,29 @@ describe("first-run hardening — end to end", () => {
     }
   });
 
+  it("the no-flag default applies the bundle on-blockers posture — a clean run asks no gate", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("default-posture");
+    try {
+      // No gate_policies and no preset passed → the bundle's DECLARED
+      // default (on-blockers) must apply. On a clean run that auto-resolves
+      // every gate and completes with zero human round-trips — NOT the
+      // all-human rubber-stamp the empty-map path produced before the
+      // dispatcher's bundle-default tier landed. Reverting that tier reddens
+      // this: the empty map would fall to the kernel `human` floor and every
+      // gate would surface as ask-user.
+      const res = await drive(h, "tidy the config loader", "default-posture-1", {});
+      assert.equal(res.verdict, "accepted", `clean default run should complete; trace=${res.trace.join(" -> ")}`);
+      assert.ok(
+        !res.trace.some((t) => t.startsWith("gate:")),
+        `clean no-flag run must auto-resolve every gate; trace=${res.trace.join(" -> ")}`,
+      );
+      assert.equal(res.gateFinalAsked, false, "no human is pulled in on a clean default run");
+    } finally {
+      h.dispose();
+    }
+  });
+
   it("an open blocker escalates the on-blockers final gate to a human — no silent PASS", async () => {
     _resetRegistryCacheForTest();
     const h = freshHarness("stuck");
@@ -732,6 +826,7 @@ async function driveWithComplexity(
   task: string,
   uuid: string,
   complexity: "simple" | "medium" | "complex",
+  policyPreset?: string,
 ): Promise<{ trace: string[]; verdict: string | null }> {
   const deps = { resolveRegistry: assembleRegistry, allowlistPath: h.allowlistPath };
   const run = createRunTaskTool(deps);
@@ -747,7 +842,12 @@ async function driveWithComplexity(
     antipattern_rules_applicable: [],
   });
 
-  const first = await run({ project_dir: h.dir, task, client_idempotency_uuid: uuid });
+  const first = await run({
+    project_dir: h.dir,
+    task,
+    client_idempotency_uuid: uuid,
+    ...(policyPreset !== undefined ? { policy_preset: policyPreset } : {}),
+  });
   const dsid = first.driver_state_id ?? "";
   let resp: TransportResponse = first.response;
   const trace: string[] = [];
@@ -815,7 +915,9 @@ describe("complexity → flow selection (C1)", () => {
     const h = freshHarness("c1-simple");
     try {
       assert.ok(VERBOSE_ROUTINE_TASK.length > 400, "the task must be verbose enough to seed `complex`");
-      const res = await driveWithComplexity(h, VERBOSE_ROUTINE_TASK, "c1-simple-1", "simple");
+      // full-supervised so the gate the lean flow DOES keep (final) surfaces
+      // as ask-user; the no-flag default would auto-resolve it on a clean run.
+      const res = await driveWithComplexity(h, VERBOSE_ROUTINE_TASK, "c1-simple-1", "simple", "full-supervised");
 
       assert.equal(res.verdict, "accepted", `should complete accepted; trace=${res.trace.join(" -> ")}`);
       // The agent's `simple` overrode the length seed and routed the LEAN
@@ -842,7 +944,9 @@ describe("complexity → flow selection (C1)", () => {
     _resetRegistryCacheForTest();
     const h = freshHarness("c1-complex");
     try {
-      const res = await driveWithComplexity(h, "small tidy", "c1-complex-1", "complex");
+      // full-supervised so all three gates surface as ask-user for the
+      // full-panel traversal assertions below.
+      const res = await driveWithComplexity(h, "small tidy", "c1-complex-1", "complex", "full-supervised");
 
       assert.equal(res.verdict, "accepted", `should complete accepted; trace=${res.trace.join(" -> ")}`);
       assert.equal(readComplexity(h.dir), "complex");

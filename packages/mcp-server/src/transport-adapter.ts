@@ -26,6 +26,22 @@ import type {
 
 const RUNNER_HINT = "mcp-server";
 
+// Inline-vs-by-reference threshold for a parallel fanout, measured in
+// prompt characters summed across the batch. At or under this cap every
+// prompt ships inline so the host dispatches the batch and returns one
+// results payload — zero per-agent fetch round-trips. Over it, the batch
+// falls back to by-reference so the response can't blow past the host's
+// inline-response cap.
+//
+// Anchored to the one hard datapoint: a 4-way implementation-review
+// fanout measured ~84k chars in a single response and spilled past that
+// cap — the incident that introduced the by-reference path. 50k sits
+// well under it, leaving headroom for envelope overhead (agent ids,
+// models, extras, JSON framing) and prompt-size variance, while still
+// inlining the common narrow fanout (a 2-way review lands near ~40k).
+// Revisit if the real host inline cap is ever measured directly.
+const INLINE_FANOUT_PROMPT_CHAR_CAP = 50_000;
+
 export function createTransportAdapter(): TransportAdapter {
   return { shape };
 }
@@ -56,22 +72,35 @@ export function shape(
         spawn_request: toSpawnRequest(intent, { inlinePrompt: true }),
       };
     }
-    case "shuttle-batch":
-      // Fanout prompts go by reference: each descriptor carries model +
-      // extras (small, host needs them to dispatch) but NOT the prompt, so
-      // this envelope's size scales with the agent count, not the sum of
-      // every prompt. The host fetches each prompt via a read-only call
-      // keyed by agent_run_id.
-      return {
-        status: "spawn-agents-parallel",
+    case "shuttle-batch": {
+      // Fanout-prompt delivery is chosen by size — a domain-blind
+      // transport-shaping decision. When the batch's prompts sum at or
+      // under the inline cap, every prompt ships inline: the host
+      // dispatches the whole fanout and returns one results payload with
+      // no per-agent fetch round-trip. Over the cap, the descriptors omit
+      // the prompt (model + extras stay inline — small, and the host
+      // needs them to dispatch) so the envelope's size scales with the
+      // agent count, not the sum of every prompt; the host then fetches
+      // each prompt by reference, keyed by agent_run_id.
+      const totalPromptChars = directive.spawns.reduce(
+        (sum, intent) => sum + intent.prompt.length,
+        0,
+      );
+      const inline = totalPromptChars <= INLINE_FANOUT_PROMPT_CHAR_CAP;
+      const base = {
+        status: "spawn-agents-parallel" as const,
         driver_state_id: ctx.driver_state_id,
-        prompts_by_reference: true,
         spawns: directive.spawns.map((intent) => ({
           agent_run_id: intent.agent_run_id,
           agent: intent.agent,
-          spawn_request: toSpawnRequest(intent, { inlinePrompt: false }),
+          spawn_request: toSpawnRequest(intent, { inlinePrompt: inline }),
         })),
       };
+      // `prompts_by_reference` is set ONLY on the over-cap path; the
+      // inline path omits it so the host treats every prompt as present
+      // and never calls the by-reference fetch.
+      return inline ? base : { ...base, prompts_by_reference: true };
+    }
     case "ask-user":
       return {
         status: "ask-user",

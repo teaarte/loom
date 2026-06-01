@@ -2,8 +2,9 @@
 //
 // The FSM enters a GateStage; this resolver maps the gate name to a
 // `GateRole` (identity-fallback when no mapping is registered), reads
-// the active `PolicyName` from `state.gate_policies[role]` with `human`
-// as the kernel-shipped baseline, applies the global auto-replan cap
+// the active `PolicyName` for the role through a three-tier fallback
+// (operator override → bundle-declared default → kernel baseline),
+// applies the global auto-replan cap
 // BEFORE the factory runs (so a bundle resolver returning auto-reject
 // past the cap cannot loop forever), looks up the factory, and calls
 // the resolved Policy against the narrowed `BundleStateView`.
@@ -47,7 +48,17 @@ export async function resolveGatePolicy(
     return budgetExhaustionToPolicy(replanBudget, cap, totalAutoRejections);
   }
 
-  const policyName = state.gate_policies[role] ?? "human";
+  // Three-tier resolution. `state.gate_policies` is the OPERATOR-OVERRIDE
+  // layer (empty = no override; a partial map overrides only its named
+  // roles). An unset role falls through to the bundle's declared default
+  // posture — the bundle owns its role defaults — and only when the
+  // bundle declares nothing for the role does the kernel apply its
+  // conservative `human` baseline. Reading `bundle.default_gate_policies`
+  // here keeps the dispatcher domain-blind: it consumes a generic
+  // `Record<GateRole, PolicyName>` the bundle declared, never a hardcoded
+  // role posture of its own.
+  const policyName =
+    state.gate_policies[role] ?? ctx.bundle.default_gate_policies[role] ?? "human";
   const factory = registry.policyFactories.get(policyName);
   if (factory === undefined) {
     throw new KernelError({

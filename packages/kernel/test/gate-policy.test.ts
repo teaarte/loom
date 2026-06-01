@@ -614,7 +614,10 @@ describe("resolveGatePolicy", () => {
     assert.equal(result.type, "human-required");
   });
 
-  it("defaults to 'human' when gate_policies[role] is unset", async () => {
+  it("kernel 'human' floor only when neither operator nor bundle declares a posture", async () => {
+    // Both layers empty: state.gate_policies has no entry AND the
+    // fixture bundle's default_gate_policies is empty → the dispatcher
+    // applies its conservative kernel baseline.
     const bundle = makeBundle();
     const registry = makeRegistry(bundle);
     const state = makeState(); // empty gate_policies
@@ -625,6 +628,79 @@ describe("resolveGatePolicy", () => {
       registry,
     );
     assert.equal(result.type, "human-required");
+  });
+
+  it("falls through to the bundle-declared default when the operator set no override", async () => {
+    // The no-flag /task path: operator passed an empty gate_policies map.
+    // The bundle declares on-blockers for plan, so a clean tree must
+    // auto-resolve there — NOT drag a human in for a rubber-stamp.
+    // Reverting the dispatcher's bundle-default tier reddens this.
+    const bundle = makeBundle();
+    bundle.default_gate_policies = { plan: "on-blockers" } as Record<
+      GateRole,
+      PolicyName
+    >;
+    const registry = makeRegistry(bundle);
+    const state = makeState(); // empty gate_policies
+    const result = await resolveGatePolicy(
+      state,
+      "gate-plan",
+      makeCtx(bundle, { blockingCount: 0 }),
+      registry,
+    );
+    assert.equal(result.type, "auto-approve");
+    assert.match(result.reason, /clean state/);
+  });
+
+  it("bundle-default on-blockers still escalates to human on an open blocker", async () => {
+    // The behavior the relay retrospective called correct: a plan
+    // blocker pulls the human in immediately, even on the no-override
+    // (bundle-default) path.
+    const bundle = makeBundle();
+    bundle.default_gate_policies = { plan: "on-blockers" } as Record<
+      GateRole,
+      PolicyName
+    >;
+    const registry = makeRegistry(bundle);
+    const state = makeState(); // empty gate_policies
+    const result = await resolveGatePolicy(
+      state,
+      "gate-plan",
+      makeCtx(bundle, { blockingCount: 1, rolePhase: "planning" }),
+      registry,
+    );
+    assert.equal(result.type, "human-required");
+    assert.match(result.reason, /1 open blocking finding/);
+  });
+
+  it("a partial operator override leaves unnamed roles on the bundle default", async () => {
+    // Operator overrode ONLY final → human; plan is unset and must
+    // resolve to the bundle's declared posture, not the kernel floor.
+    const bundle = makeBundle();
+    bundle.default_gate_policies = {
+      plan: "on-blockers",
+      final: "on-blockers",
+    } as Record<GateRole, PolicyName>;
+    const registry = makeRegistry(bundle);
+    const state = makeState({
+      gate_policies: { final: "human" } as Record<GateRole, PolicyName>,
+    });
+
+    const planResult = await resolveGatePolicy(
+      state,
+      "gate-plan",
+      makeCtx(bundle, { blockingCount: 0 }),
+      registry,
+    );
+    assert.equal(planResult.type, "auto-approve");
+
+    const finalResult = await resolveGatePolicy(
+      state,
+      "gate-final",
+      makeCtx(bundle),
+      registry,
+    );
+    assert.equal(finalResult.type, "human-required");
   });
 
   it("POLICY_UNRESOLVED when state names a missing factory", async () => {
@@ -829,6 +905,7 @@ function buildInMemoryState(
 function buildE2ERegistry(opts: {
   gateName: string;
   gate_roles?: Record<string, GateRole>;
+  default_gate_policies?: Record<GateRole, PolicyName>;
 }): Registry {
   const stage: Stage = {
     kind: "gate",
@@ -844,7 +921,8 @@ function buildE2ERegistry(opts: {
     description: "e2e fixture",
     phases: ["p1"],
     default_flow: "default",
-    default_gate_policies: {} as Record<GateRole, PolicyName>,
+    default_gate_policies:
+      opts.default_gate_policies ?? ({} as Record<GateRole, PolicyName>),
     gate_roles: opts.gate_roles ?? {},
     agents: [],
     stages: { [opts.gateName]: stage },
@@ -894,6 +972,28 @@ describe("runFSM integration — gate-policy wiring", () => {
     if (out.directive.kind === "ask-user") {
       assert.equal(out.directive.gate, "custom-gate");
     }
+  });
+
+  it("no-flag path: empty operator map resolves the bundle default, not a rubber-stamp human", async () => {
+    // Drives a real FSM tick through a gate whose role carries the
+    // bundle's declared on-blockers default while state.gate_policies is
+    // empty (the no-flag /task case). A clean tree auto-resolves the gate
+    // and the tick advances past it — NOT an ask-user directive.
+    // Reverting the dispatcher's bundle-default tier reddens this:
+    // the empty map would fall straight to the kernel `human` floor.
+    const registry = buildE2ERegistry({
+      gateName: "gate-plan",
+      gate_roles: { "gate-plan": "plan" },
+      default_gate_policies: { plan: "on-blockers" } as Record<
+        GateRole,
+        PolicyName
+      >,
+    });
+    const now = await seedBaseline(projectDir, "default");
+    const state = buildInMemoryState(projectDir, now, "default"); // empty gate_policies
+
+    const out = await runFSM(state, registry);
+    assert.notEqual(out.directive.kind, "ask-user");
   });
 
   it("POLICY_UNRESOLVED rolls back the stage tx and surfaces as a rejection", async () => {

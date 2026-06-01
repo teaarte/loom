@@ -85,6 +85,74 @@ describe("transport-adapter — KernelDirective → TransportResponse", () => {
     }
   });
 
+  it("shuttle-batch under the inline cap ships prompts inline (no by-reference)", () => {
+    // Two small prompts sum well under the inline cap → every prompt is
+    // present inline and the host needs no get_spawn_prompt fetch.
+    // Reverting the inline branch reddens this (it would force
+    // by-reference + drop every prompt).
+    const directive: KernelDirective = {
+      kind: "shuttle-batch",
+      spawns: [
+        intent({ agent: "a1", agent_run_id: "ar-00000000-0000-0000-0000-00000000000a", prompt: "small prompt one" }),
+        intent({ agent: "a2", agent_run_id: "ar-00000000-0000-0000-0000-00000000000b", prompt: "small prompt two" }),
+      ],
+    };
+    const res = shape(directive, CTX);
+    assert.equal(res.status, "spawn-agents-parallel");
+    if (res.status !== "spawn-agents-parallel") return;
+    assert.equal(res.prompts_by_reference, undefined);
+    assert.deepEqual(
+      res.spawns.map((s) => s.spawn_request.prompt),
+      ["small prompt one", "small prompt two"],
+    );
+  });
+
+  it("shuttle-batch over the inline cap falls back to by-reference (prompts omitted)", () => {
+    // A wide/large fanout whose prompts sum over the cap keeps the
+    // spill-safe by-reference shape: prompts_by_reference: true and every
+    // spawn_request omits its prompt (model/extras still inline).
+    const big = "x".repeat(30_000); // 2 × 30k = 60k > 50k cap
+    const directive: KernelDirective = {
+      kind: "shuttle-batch",
+      spawns: [
+        intent({ agent: "a1", agent_run_id: "ar-00000000-0000-0000-0000-00000000000a", prompt: big, model: "premium" }),
+        intent({ agent: "a2", agent_run_id: "ar-00000000-0000-0000-0000-00000000000b", prompt: big, model: "premium" }),
+      ],
+    };
+    const res = shape(directive, CTX);
+    assert.equal(res.status, "spawn-agents-parallel");
+    if (res.status !== "spawn-agents-parallel") return;
+    assert.equal(res.prompts_by_reference, true);
+    for (const s of res.spawns) {
+      assert.equal(s.spawn_request.prompt, undefined);
+      assert.equal(s.spawn_request.model, "premium"); // dispatch fields stay inline
+    }
+  });
+
+  it("shuttle-batch inline boundary: exactly at the cap inlines, one char over flips to by-reference", () => {
+    // Boundary proof that the threshold is `<=`: a batch summing exactly
+    // to the cap inlines; a single extra char tips it to by-reference.
+    const atCap: KernelDirective = {
+      kind: "shuttle-batch",
+      spawns: [intent({ prompt: "y".repeat(50_000) })],
+    };
+    const atRes = shape(atCap, CTX);
+    assert.equal(atRes.status, "spawn-agents-parallel");
+    if (atRes.status !== "spawn-agents-parallel") return;
+    assert.equal(atRes.prompts_by_reference, undefined);
+    assert.equal(atRes.spawns[0]?.spawn_request.prompt?.length, 50_000);
+
+    const overCap: KernelDirective = {
+      kind: "shuttle-batch",
+      spawns: [intent({ prompt: "y".repeat(50_001) })],
+    };
+    const overRes = shape(overCap, CTX);
+    assert.equal(overRes.status, "spawn-agents-parallel");
+    if (overRes.status !== "spawn-agents-parallel") return;
+    assert.equal(overRes.prompts_by_reference, true);
+    assert.equal(overRes.spawns[0]?.spawn_request.prompt, undefined);
+  });
+
   it("ask-user is an identity passthrough using the directive's driver_state_id", () => {
     const directive: KernelDirective = {
       kind: "ask-user",

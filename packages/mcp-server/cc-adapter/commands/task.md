@@ -27,3 +27,9 @@ Then loop on the returned response's `status`:
 - **`error`** → display `message` and `recovery_options` verbatim, then call `mcp__loom__pipeline_recover({ project_dir, driver_state_id, choice })` with the option the user picks (passing `agent_run_ids` when that option lists them).
 
 After any `pipeline_continue_task` or `pipeline_recover`, loop again on the new response's `status`. Never edit the state DB by hand — `pipeline_recover` is the only repair path.
+
+## Gate modes — when the pipeline pauses for a human
+
+By default the pipeline pauses for a human only at a **real** decision: a gate where there is still an open blocking finding (e.g. a reviewer raised something that must be resolved). Clean gates resolve on their own, so a routine task runs end to end without a rubber-stamp prompt — every `ask-user` you see is a genuine choice, not a formality.
+
+A user can change that posture for a single task by prefixing the task with one leading policy flag — conceptually: **stop at every gate** (review each step), **stop only before finishing**, or **run fully unattended**. Either way, pass `$ARGUMENTS` through to `pipeline_run_task` exactly as typed: the server parses the leading flag and resolves the posture; this router never interprets it. The exact flag strings are advertised by `mcp__loom__pipeline_meta({ project_dir })` under `flag_vocabulary` (the authoritative, drift-free list) — surface them to the user if they ask which modes exist.

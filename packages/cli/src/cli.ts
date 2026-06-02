@@ -43,10 +43,11 @@ Usage:
       likely dropped transport) — resume it with /resume or 'loom resume'.
 
   loom run "<task>"
-      Drive a task to its end non-interactively, executing each spawn with a
-      configured provider instead of a host. Pauses and prints a human gate
-      rather than answering it. Needs an async provider configured for this
-      project.
+      Drive a task to its end non-interactively, executing each spawn through
+      the Claude Code CLI (claude -p) in an isolated git worktree — on your
+      existing Claude Code login (subscription), no API key required. Pauses
+      and prints a human gate rather than answering it. Needs Claude Code
+      installed and signed in.
 
   loom --help | --version
 

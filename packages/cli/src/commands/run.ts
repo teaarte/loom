@@ -1,10 +1,16 @@
 // `loom run "<task>"` — drive a task to its end non-interactively.
 //
 // This is the headless counterpart to the model-driven `/task` skill: it
-// runs the SAME transport-neutral loop (`@loomfsm/driver`'s `drive`) with a
-// provider-backed executor, so a spawn is executed in-process instead of
-// being handed to a host. The daemon will reuse this exact core; `loom run`
-// is the first non-interactive consumer of it.
+// runs the SAME transport-neutral loop (`@loomfsm/driver`'s `drive`), but
+// executes each spawn through the Claude Code CLI in print mode (`claude -p`)
+// inside an isolated git worktree, instead of handing the spawn to a live
+// host. The daemon will reuse this exact core; `loom run` is the first
+// non-interactive consumer of it.
+//
+// Subscription, not API key: the `claude -p` backend runs on the user's
+// existing Claude Code login (OAuth/keychain), so headless runs bill against
+// the subscription — no `ANTHROPIC_API_KEY` is set or required. (See
+// `createClaudeCodeExecutor`: it never passes `--bare`.)
 //
 // Like `/task`, the whole argument string is passed through verbatim and a
 // leading policy flag is parsed server-side (`parseTaskArgs`) — the CLI
@@ -19,18 +25,23 @@
 // `status` / `reset` do), so the flag-free install commands never pull
 // node:sqlite; the bin re-execs `run` with --experimental-sqlite.
 
+import { spawnSync } from "node:child_process";
+
 import type { DriveOptions, DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
 import type { CliEnv } from "../lib/env.js";
 
 // Seams for tests: a suite injects a ready registry / stub executor / fake
-// drive so it can assert the command's parsing + reporting without standing
-// up a real provider. Production leaves them unset and uses the defaults.
+// drive / claude-presence probe so it can assert the command's parsing +
+// reporting without standing up a real store or the Claude Code CLI.
+// Production leaves them unset and uses the defaults.
 export interface RunOverrides {
   resolveRegistry?: (projectDir: string) => Promise<Registry> | Registry;
   buildExecutor?: (registry: Registry) => Executor;
   driveImpl?: (projectDir: string, opts: DriveOptions) => Promise<DriveOutcome>;
+  // Probe for the Claude Code CLI; default spawns `<bin> --version`.
+  claudeAvailable?: (bin: string) => boolean;
 }
 
 export async function runTask(
@@ -65,7 +76,7 @@ export async function runTask(
   try {
     executor = overrides.buildExecutor
       ? overrides.buildExecutor(registry)
-      : await defaultExecutor(registry);
+      : await defaultExecutor(target, env, overrides.claudeAvailable);
   } catch (err) {
     env.err(`loom run: ${(err as Error).message}`);
     return 1;
@@ -82,23 +93,41 @@ export async function runTask(
   return report(outcome, env);
 }
 
-// The headless loop needs an async provider (it runs the spawn itself); the
-// deployment's first registered provider drives every spawn. A shuttle-only
-// provider hands spawns to a host and so cannot run headless — caught here
-// with a clear message rather than failing spawn-by-spawn inside the loop.
-async function defaultExecutor(registry: Registry): Promise<Executor> {
-  const provider = registry.providers.all[0];
-  if (provider === undefined) {
-    throw new Error(`no provider is registered for this project`);
-  }
-  if (provider.capabilities.execution !== "async") {
+// The headless loop runs each spawn through the Claude Code CLI (`claude -p`)
+// in an isolated git worktree. The only hard requirement is the CLI itself
+// (and a signed-in login) — probed up front so a missing/unconfigured Claude
+// Code refuses cleanly here rather than failing spawn-by-spawn inside the
+// loop. The permission posture defaults to the safe `acceptEdits` and is
+// raised only by an explicit `LOOM_CLAUDE_PERMISSION_MODE` opt-in.
+async function defaultExecutor(
+  projectDir: string,
+  env: CliEnv,
+  availableOverride: ((bin: string) => boolean) | undefined,
+): Promise<Executor> {
+  const bin = process.env["LOOM_CLAUDE_BIN"] ?? "claude";
+  const available = availableOverride ?? claudeAvailable;
+  if (!available(bin)) {
     throw new Error(
-      `provider '${provider.name}' is shuttle-only and cannot run headless; ` +
-        `configure an async provider (.claude/providers.json) to use 'loom run'`,
+      `Claude Code CLI '${bin}' was not found on PATH; install Claude Code and ` +
+        `sign in (run 'claude') to drive headless runs on your subscription`,
     );
   }
-  const { createProviderExecutor } = await import("@loomfsm/driver");
-  return createProviderExecutor(provider);
+  const permissionMode = process.env["LOOM_CLAUDE_PERMISSION_MODE"];
+  const { createClaudeCodeExecutor } = await import("@loomfsm/driver");
+  return createClaudeCodeExecutor({
+    project_dir: projectDir,
+    ...(permissionMode !== undefined && permissionMode !== ""
+      ? { permission_mode: permissionMode }
+      : {}),
+    onNotice: (message) => env.err(`loom run: ${message}`),
+  });
+}
+
+// Probe for the Claude Code CLI by spawning `<bin> --version`. A missing
+// binary surfaces as a spawn error (ENOENT); a present one exits 0.
+function claudeAvailable(bin: string): boolean {
+  const res = spawnSync(bin, ["--version"], { encoding: "utf8" });
+  return res.error === undefined && res.status === 0;
 }
 
 function report(outcome: DriveOutcome, env: CliEnv): number {

@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "prepack": "pnpm run build",
-    "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
+    "lint:no-domain-leak": "node scripts/no-domain-leak.mjs",
+    "test": "tsc && pnpm lint:no-domain-leak && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
     "@loomfsm/kernel": "workspace:*",
@@ -28,6 +29,5 @@
   },
   "publishConfig": {
     "access": "public"
-  },
-  "private": true
+  }
 }

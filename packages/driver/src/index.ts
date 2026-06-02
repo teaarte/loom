@@ -43,3 +43,16 @@ export type {
 } from "./drive.js";
 
 export { createProviderExecutor } from "./provider-executor.js";
+
+// The sandboxed-executor shell (worktree isolation + self-diff) and its
+// chosen headless backend — `claude -p` on the user's subscription login.
+export { createSandboxedExecutor } from "./sandboxed-executor.js";
+export type { RunSpawn, SandboxedExecutorOptions } from "./sandboxed-executor.js";
+export {
+  createClaudeCodeExecutor,
+  buildClaudeArgs,
+  parseClaudeResult,
+} from "./claude-code-executor.js";
+export type { ClaudeCodeExecutorOptions } from "./claude-code-executor.js";
+export { provisionWorktree, worktreePathFor } from "./worktree.js";
+export type { WorktreeProvision } from "./worktree.js";

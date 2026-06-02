@@ -11,7 +11,7 @@ import { runTask, type RunOverrides } from "../src/commands/run.js";
 import type { CliEnv } from "../src/lib/env.js";
 
 import type { DriveOutcome, Executor } from "@loomfsm/driver";
-import type { LLMProvider, Registry } from "@loomfsm/kernel";
+import type { Registry } from "@loomfsm/kernel";
 
 function makeEnv(): { env: CliEnv; out: string[]; err: string[] } {
   const out: string[] = [];
@@ -27,12 +27,8 @@ function makeEnv(): { env: CliEnv; out: string[]; err: string[] } {
 
 const stubExecutor: Executor = { execute: async () => ({ agent_output: "" }) };
 
-function registryWithProvider(provider: LLMProvider): Registry {
-  return { providers: { all: [provider] } } as unknown as Registry;
-}
-
-// Inject a registry + executor so no real provider/store is needed; the
-// drive itself is faked per test to return the outcome under assertion.
+// Inject a registry + executor so no real store or Claude Code CLI is needed;
+// the drive itself is faked per test to return the outcome under assertion.
 function overrides(outcome: DriveOutcome): RunOverrides {
   return {
     resolveRegistry: () => ({}) as unknown as Registry,
@@ -110,23 +106,18 @@ describe("loom run", () => {
     assert.ok(err.some((l) => /task is required/.test(l)));
   });
 
-  it("refuses a shuttle-only provider (cannot run headless)", async () => {
+  it("refuses cleanly when the Claude Code CLI is absent", async () => {
     const { env, err } = makeEnv();
-    const shuttle: LLMProvider = {
-      name: "shuttle-stub",
-      capabilities: { execution: "shuttle", idempotent_spawn: true, reports_usage: false },
-      async spawn() {
-        throw new Error("unused");
-      },
-    };
     // No buildExecutor override → the default executor builder runs and
-    // rejects the shuttle provider before any drive begins.
+    // probes for `claude`; an injected "not found" probe refuses before any
+    // drive begins (the headless backend is `claude -p`).
     const code = await runTask(["some work"], env, {
-      resolveRegistry: () => registryWithProvider(shuttle),
+      resolveRegistry: () => ({}) as unknown as Registry,
+      claudeAvailable: () => false,
       driveImpl: async () => ({ kind: "complete", task_id: null, verdict: "accepted", summary: "" }),
     });
     assert.equal(code, 1);
-    assert.ok(err.some((l) => /shuttle-only/.test(l)));
+    assert.ok(err.some((l) => /Claude Code CLI/.test(l)));
   });
 
   it("is routed by the dispatcher (a bare 'run' asks for a task)", async () => {

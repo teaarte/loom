@@ -217,12 +217,16 @@ Published under the `@loomfsm/*` scope: `@loomfsm/pipeline` (install this), plus
 
 ## Status & roadmap
 
-`v0.1.3`: kernel + the `code` bundle + three providers + mcp-server & cli; one task in
+`v0.1.4`: kernel + the `code` bundle + three providers + mcp-server & cli; one task in
 flight per project — a finished task is archived to `.claude/history/` so the next one
-starts clean, letting a project run a series of tasks; published on npm. Early and
-evolving. On the near horizon: richer host/driver integration, more bundles, bundle
-runtime isolation, a cross-task memory subsystem, and a daemon transport. The substrate
-is *additive* to all of these — none reshapes the kernel.
+starts clean, letting a project run a series of tasks; published on npm. Adds over
+`v0.1.3`: resume an interrupted task safely (same agent ids, idempotent re-delivery); an
+honest finding lifecycle (a settled blocker can no longer haunt an accepted task); and a
+generic conditional-verify primitive a bundle uses to escalate to an empirical check
+before it finalizes. Early and evolving. On the near horizon: a headless driver runtime
+and richer host integration, more bundles, bundle runtime isolation, a cross-task memory
+subsystem, and a daemon transport. The substrate is *additive* to all of these — none
+reshapes the kernel.
 
 ## Contributing
 

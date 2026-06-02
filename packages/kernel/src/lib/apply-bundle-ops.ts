@@ -13,7 +13,7 @@
 
 import { KernelError } from "../state/db.js";
 import type { BundleOp } from "../types/context.js";
-import type { Finding } from "../types/findings.js";
+import type { Finding, FindingSeverity, FindingStatus } from "../types/findings.js";
 import type { Phase } from "../types/row-types.js";
 import type { Transaction } from "../types/transaction.js";
 
@@ -67,6 +67,9 @@ async function applyOne(
       return;
     case "upsert_bundle_row":
       await upsertBundleRow(tx, op.table, op.row);
+      return;
+    case "update_finding_status":
+      await updateFindingStatus(tx, op.id, op.status, op.severity);
       return;
     case "audit":
       tx.audit_buffer.push(op.payload);
@@ -133,6 +136,36 @@ async function insertFinding(
       f.ref_rule_id,
       tx.now,
     ],
+  );
+}
+
+// Generic finding-status edit. Sets only the supplied lifecycle columns
+// (`status` / `severity`) on the row keyed by `id`. No clock: `recorded_at`
+// is the finding's creation time and a status edit leaves it untouched.
+// Idempotent — re-applying the same op rewrites the same column values, so a
+// replayed tick re-deriving this op is a no-op the second time. An op that
+// supplies neither column is a no-op (the SET list would be empty).
+async function updateFindingStatus(
+  tx: Transaction,
+  id: string,
+  status: FindingStatus | undefined,
+  severity: FindingSeverity | undefined,
+): Promise<void> {
+  const sets: string[] = [];
+  const values: (string | null)[] = [];
+  if (status !== undefined) {
+    sets.push("status = ?");
+    values.push(status);
+  }
+  if (severity !== undefined) {
+    sets.push("severity = ?");
+    values.push(severity);
+  }
+  if (sets.length === 0) return;
+  values.push(id);
+  await tx.exec(
+    `UPDATE findings SET ${sets.join(", ")} WHERE id = ?`,
+    values,
   );
 }
 

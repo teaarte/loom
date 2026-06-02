@@ -121,6 +121,11 @@ function effectKey(eff: StepStage["effects"][number]): string {
       return `bundle_state.set:${eff.path}`;
     case "finding.insert":
       return `finding.insert:${eff.phase}`;
+    case "finding.status.update":
+      // No static target — the row is chosen by id at runtime. The key is
+      // the kind itself, so one Step owns the override responsibility per
+      // bundle (a second declarer collides, by design).
+      return "finding.status.update";
     case "audit.emit":
       return `audit.emit:${eff.type}`;
   }

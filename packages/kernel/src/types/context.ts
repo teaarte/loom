@@ -54,6 +54,16 @@ export interface BundleScratchTx {
   record_files_modified?(paths: string[]): void;
   record_files_created?(paths: string[]): void;
   upsert_bundle_row?(table: string, row: Record<string, unknown>): void;
+  // Generic status edit of an existing finding, keyed by id. Sets only
+  // the supplied lifecycle columns (`status` / `severity`) — the columns
+  // `countBlocking` / `inv008` read for liveness — so a bundle can retire
+  // or re-assert a blocker after a later observation (the verify/escalate
+  // step's whole point). The kernel names no domain concept: it is a
+  // column setter; the bundle owns which finding and which target state.
+  update_finding_status?(
+    id: string,
+    patch: { status?: FindingStatus; severity?: FindingSeverity },
+  ): void;
 
   audit(payload: Record<string, unknown>): void;
 }
@@ -68,6 +78,12 @@ export type BundleOp =
   | { op: "record_files_modified"; paths: string[] }
   | { op: "record_files_created"; paths: string[] }
   | { op: "upsert_bundle_row"; table: string; row: Record<string, unknown> }
+  | {
+      op: "update_finding_status";
+      id: string;
+      status?: FindingStatus;
+      severity?: FindingSeverity;
+    }
   | { op: "audit"; payload: Record<string, unknown> }
   | { op: "render_view"; path: string; content: string };
 

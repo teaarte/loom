@@ -161,6 +161,11 @@
       "plan-references-nonexistent-code",
       "checkpoint-regression",
       "other"
+    ],
+    "adjudicator": [
+      "runtime-confirmed",
+      "runtime-refuted",
+      "other"
     ]
   },
   "promotion_rules": {

@@ -83,11 +83,11 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
       now,
     });
 
-    // 21 canonical agents (the source's 24 minus the three CC-harness
-    // trigger agents).
-    assert.equal(registry.agents.size, 21);
+    // 22 canonical agents (the source's 24 minus the three CC-harness
+    // trigger agents, plus the adjudicator).
+    assert.equal(registry.agents.size, 22);
     // Every agent's `.md` is read off disk into the prompt map at load.
-    assert.equal(registry.prompts?.size, 21);
+    assert.equal(registry.prompts?.size, 22);
     assert.ok((registry.prompts?.get("classifier")?.body.length ?? 0) > 0);
     assert.equal(registry.flows.size, 3);
     assert.deepEqual(
@@ -96,7 +96,7 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
         "initialize", "classify", "classify-agent", "gate-classify",
         "enrich", "plan", "plan-review", "gate-plan",
         "git-stash", "implement", "git-diff", "pre-review", "review",
-        "reconcile", "iterate", "final-checks", "test-verify",
+        "adjudicate", "reconcile", "iterate", "final-checks", "test-verify",
         "gate-final", "finish-summary", "finalize",
       ],
     );
@@ -221,8 +221,8 @@ describe("@loomfsm/bundle-code — agent templates", () => {
     }
   });
 
-  it("declares exactly the 21 canonical agents", () => {
-    assert.equal(codeBundle.agents.length, 21);
+  it("declares exactly the 22 canonical agents", () => {
+    assert.equal(codeBundle.agents.length, 22);
     const names = codeBundle.agents.map((a) => a.name).sort();
     // The three CC-harness trigger agents are NOT bundle agents.
     for (const excluded of ["fe-test-all-agent", "runtime-debug-agent", "test-all-agent"]) {

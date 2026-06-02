@@ -17,6 +17,8 @@
 import { defineBundle } from "@loomfsm/kernel";
 import type {
   BundleStateView,
+  ConditionalSpawnContext,
+  Finding,
   HookContext,
   StageContext,
   StageResult,
@@ -158,6 +160,167 @@ async function deriveFinishSummary(
   ctx.tx.set_bundle_state_field?.(
     "completion_summary",
     `the task named finish steps the engine does not perform (it never modifies your repo) — run them yourself: ${list}.`,
+  );
+}
+
+// ============================================================================
+// Adjudication — empirically verify a runtime claim instead of guessing.
+//
+// The driver's most valuable act on a real run was distrusting a soft signal
+// and verifying it empirically (the orphan-chunk lesson: a chunk EXISTING in
+// the bundle ≠ it being reached at runtime). The substrate gives a generic
+// "spawn agent X when predicate P(outcome) holds" primitive (SpawnStage.when)
+// plus a generic finding-status override (ctx.tx.update_finding_status). ALL of
+// the domain — what a "runtime claim" is, what a "coverage hole" is, build /
+// dist-chunk / entry-loading / reachability, pnpm — lives HERE, in the agent
+// prompt and these predicate bodies. The substrate names none of it.
+// ============================================================================
+
+// The behavioral / runtime subset of the reviewer category vocabulary
+// (schemas/category-vocab.json): claims about what the code DOES at run time —
+// a crash, a leak, a race, an unreachable path — that static review cannot
+// settle and a green build does not exercise. A blocking finding in one of
+// these categories is, by bundle convention, "a runtime claim in a coverage
+// hole": the reviewer asserts an outcome they could not empirically confirm.
+// This is a domain reading of the GENERIC `category` column the substrate
+// stores — not a substrate concept.
+const RUNTIME_CLAIM_CATEGORIES = new Set<string>([
+  // logic-reviewer
+  "race-condition",
+  "unhandled-async",
+  "unbounded-recursion-or-loop",
+  "ordering-assumption",
+  "leak-or-cleanup-missing",
+  "regression-risk",
+  // challenger-reviewer
+  "concurrency-failure",
+  "downstream-failure-not-handled",
+  "ordering-violation",
+  "atomicity-gap",
+  "state-leak-across-requests",
+  "retry-or-replay-issue",
+  "empty-or-null-input-failure",
+  // performance
+  "memory-leak",
+  "cache-stampede-risk",
+  "hot-key-redis",
+  "react-rerender-storm",
+]);
+
+// Files whose blast radius makes a runtime claim worth verifying even when the
+// reviewers did not split — an entry point, router, auth, or server bootstrap.
+// Heuristic over the substrate's generic file accounting.
+const HOT_PATH =
+  /(^|\/)(index|main|app|server|router|routes|middleware|auth|bootstrap)\.[a-z]+$|(^|\/)(pages|app)\/api\//i;
+
+// The adjudicator's marker categories the reconcile step reads back.
+const ADJUDICATION_CONFIRMED = "runtime-confirmed";
+const ADJUDICATION_REFUTED = "runtime-refuted";
+const ADJUDICATION_PHASE = "implementation";
+
+// `when` for the `adjudicate` SpawnStage. Reads ONLY the generic outcome subset
+// (findings severity/category/status, verdict rows, file accounting) and reads
+// it through the bundle's domain conventions. Fires when BOTH hold: there is a
+// LIVE blocking runtime claim, AND the empirical round is warranted — the
+// reviewers DISAGREE on the fact (verdict-spread on the implementation review)
+// OR the change touches a hot path. Whether a given claim is "cheaply decidable
+// by one observation" is the adjudicator's own call (its prompt); the predicate
+// only gates the escalation, not the procedure. Deterministic — no clock, no
+// randomness — so the substrate re-derives the same decision on replay.
+function shouldAdjudicate(
+  state: BundleStateView,
+  ctx: ConditionalSpawnContext,
+): boolean {
+  // 1. A LIVE blocking runtime claim must exist. countBlocking enforces
+  //    liveness (open + non-superseded); the category filter identifies the
+  //    runtime subset among them.
+  if (ctx.findings.countBlocking({ phase: ADJUDICATION_PHASE }) === 0) return false;
+  const runtimeClaims = liveRuntimeBlockers(ctx.findings);
+  if (runtimeClaims.length === 0) return false;
+
+  // 2. Escalator: reviewers split on the fact, OR the blast radius is hot.
+  return reviewersDisagree(state, ADJUDICATION_PHASE) || touchesHotPath(state);
+}
+
+// Verdict-spread across the implementation-phase reviewers: at least one
+// approve-leaning AND one changes-leaning verdict on the same review — the
+// reviewers do not agree, so a tie-breaking observation earns its keep.
+function reviewersDisagree(state: BundleStateView, phase: string): boolean {
+  const verdicts = state.agent_verdicts.filter((v) => v.phase === phase);
+  if (verdicts.length < 2) return false;
+  let approve = false;
+  let changes = false;
+  for (const v of verdicts) {
+    const verb = String(v.verdict).toUpperCase();
+    if (verb === "APPROVE" || verb === "PASS" || verb === "PASS_WITH_WARNINGS") approve = true;
+    if (verb === "REQUEST_CHANGES" || verb === "FAIL") changes = true;
+  }
+  return approve && changes;
+}
+
+function touchesHotPath(state: BundleStateView): boolean {
+  return state.files_modified.some((f) => HOT_PATH.test(f));
+}
+
+// Live blocking findings whose category is a runtime claim. Uses the
+// materialized ctx.findings (countBlocking already proved at least one is live;
+// query carries the open+blocking subset) — never tx.read.findings(), which is
+// an unwired READ_NOT_WIRED stub.
+function liveRuntimeBlockers(
+  findings: ConditionalSpawnContext["findings"],
+): Finding[] {
+  return findings
+    .query({ phase: ADJUDICATION_PHASE, severity: ["blocking"], status: ["open"] })
+    .filter((f) => RUNTIME_CLAIM_CATEGORIES.has(f.category));
+}
+
+// Apply the adjudication verdicts to the ORIGINAL findings — the override.
+// Runs right after the `adjudicate` spawn delivered (or was skipped): reads the
+// adjudicator's info-severity markers, and for each one flips the original
+// blocking runtime claim it points at (matched by file + line):
+//   - refuted   → downgrade the original to `info`; it leaves the live-blocking
+//     set so the final-gate acceptance veto no longer holds on it, and the
+//     marker keeps the refutation proof beside it.
+//   - confirmed → re-assert `blocking`/`open` (idempotent keep — the veto holds).
+// `adjudicate` skipped ⇒ no markers ⇒ no-op. The substrate's
+// `update_finding_status` is domain-blind; the confirmed/refuted semantics and
+// the file/line correlation are the bundle's.
+async function reconcileAdjudications(
+  _state: BundleStateView,
+  ctx: StageContext,
+): Promise<void> {
+  const markers = ctx.findings
+    .query({ phase: ADJUDICATION_PHASE, agent: "adjudicator" })
+    .filter(
+      (m) => m.category === ADJUDICATION_CONFIRMED || m.category === ADJUDICATION_REFUTED,
+    );
+  if (markers.length === 0) return;
+
+  const liveBlockers = liveRuntimeBlockers(ctx.findings);
+  for (const marker of markers) {
+    const target = liveBlockers.find((f) => sameLocation(f, marker));
+    if (target === undefined) continue;
+    if (marker.category === ADJUDICATION_REFUTED) {
+      ctx.tx.update_finding_status?.(target.id, { severity: "info" });
+    } else {
+      ctx.tx.update_finding_status?.(target.id, { severity: "blocking", status: "open" });
+    }
+    ctx.tx.audit({
+      type: "adjudication-applied",
+      target: target.id,
+      verdict: marker.category,
+    });
+  }
+}
+
+// A marker points at an original blocker when they share a file and start line.
+// The adjudicator echoes the target's location for exactly this correlation; a
+// marker with no file cannot be matched and is skipped (leaving the blocker live).
+function sameLocation(original: Finding, marker: Finding): boolean {
+  return (
+    original.file !== null &&
+    original.file === marker.file &&
+    original.line_start === marker.line_start
   );
 }
 
@@ -364,6 +527,11 @@ export default defineBundle({
       applies_to: (s) => !decisionEquals(s, "complexity", "simple"),
     },
     { name: "acceptance", template_path: "agents/acceptance.md", output_kind: "validator", default_model: "fast" },
+    // Empirical runtime-claim verifier — spawned only when a live blocking
+    // runtime claim warrants one decisive observation (see `adjudicate`'s
+    // `when`). A `validator`, so the substrate persists its info-severity
+    // markers; the `reconcile` step applies the override they carry.
+    { name: "adjudicator", template_path: "agents/adjudicator.md", output_kind: "validator", default_model: "balanced" },
     {
       name: "test",
       template_path: "agents/test.md",
@@ -484,7 +652,29 @@ export default defineBundle({
     // gets one logic review instead of the full adversarial fanout. The
     // fanout `review` stays for the medium/complex flows.
     "review-light": { kind: "spawn", name: "review-light", phase: "implementation", agent: "logic-reviewer" },
-    reconcile: { kind: "step", name: "reconcile", phase: "implementation", position: "positional", effects: [] },
+    // Guarded escalation: spawn the adjudicator ONLY when a live blocking
+    // runtime claim warrants one empirical observation (`shouldAdjudicate`).
+    // When the predicate is false the stage advances launching nothing — the
+    // common case. Sits after the `review` fanout and before `reconcile`, which
+    // applies whatever verdict it returns.
+    adjudicate: {
+      kind: "spawn",
+      name: "adjudicate",
+      phase: "implementation",
+      agent: "adjudicator",
+      when: shouldAdjudicate,
+    },
+    // Reconcile the review outcome — now including any adjudication verdict:
+    // the override of a runtime claim's severity/status is applied here from the
+    // adjudicator's markers. A no-op when `adjudicate` did not spawn.
+    reconcile: {
+      kind: "step",
+      name: "reconcile",
+      phase: "implementation",
+      position: "positional",
+      effects: [{ kind: "finding.status.update" }],
+      run: reconcileAdjudications,
+    },
     iterate: { kind: "step", name: "iterate", phase: "implementation", position: "positional", effects: [] },
     "sacred-tests": {
       kind: "step",
@@ -534,7 +724,7 @@ export default defineBundle({
       "initialize", "classify", "classify-agent", "gate-classify",
       "enrich", "plan", "plan-review", "gate-plan",
       "git-stash", "implement", "git-diff", "pre-review", "review",
-      "reconcile", "iterate", "final-checks", "test-verify",
+      "adjudicate", "reconcile", "iterate", "final-checks", "test-verify",
       "gate-final", "finish-summary", "finalize",
     ],
     complex: [
@@ -542,7 +732,7 @@ export default defineBundle({
       "enrich", "context-verify", "architect",
       "plan", "plan-review", "gate-plan",
       "test-first", "git-stash", "implement", "git-diff", "pre-review", "review",
-      "reconcile", "iterate", "sacred-tests",
+      "adjudicate", "reconcile", "iterate", "sacred-tests",
       "final-checks", "test-verify", "gate-final", "finish-summary", "finalize",
     ],
   },

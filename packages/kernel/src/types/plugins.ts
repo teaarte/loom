@@ -124,6 +124,7 @@ export type StepEffect =
   | { kind: "decisions.set"; key: string }
   | { kind: "bundle_state.set"; path: string }
   | { kind: "finding.insert"; phase: Phase }
+  | { kind: "finding.status.update" }
   | { kind: "audit.emit"; type: string };
 
 // Kernel-default event names plus the open-string branch for bundle

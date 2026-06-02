@@ -49,7 +49,7 @@ import type {
   HookContext,
   StageContext,
 } from "./types/context.js";
-import type { Finding } from "./types/findings.js";
+import type { Finding, FindingSeverity, FindingStatus } from "./types/findings.js";
 import type { NowToken } from "./types/now.js";
 import type { AskUserDirective, Stage, StageResult } from "./types/plugins.js";
 import type { Registry } from "./types/registry.js";
@@ -382,10 +382,14 @@ function syncStateFromOps(state: PipelineState, ops: BundleOp[]): void {
         state.files_created = [...new Set([...state.files_created, ...op.paths])];
         break;
       case "record_finding":
+      case "update_finding_status":
       case "upsert_bundle_row":
       case "audit":
       case "render_view":
-        // No aggregate-snapshot field — nothing to mirror.
+        // No aggregate-snapshot field — findings are re-materialised from
+        // SQLite each tick (`buildStageContext`), so a status edit applied
+        // this tick is visible to the next tick's `ctx.findings` / invariant
+        // snapshot; nothing to mirror onto the in-memory aggregate here.
         break;
       default: {
         const _exhaustive: never = op;
@@ -591,6 +595,17 @@ function makeBundleScratchTx(
     },
     upsert_bundle_row(table: string, row: Record<string, unknown>) {
       ops.push({ op: "upsert_bundle_row", table, row });
+    },
+    update_finding_status(
+      id: string,
+      patch: { status?: FindingStatus; severity?: FindingSeverity },
+    ) {
+      ops.push({
+        op: "update_finding_status",
+        id,
+        ...(patch.status !== undefined ? { status: patch.status } : {}),
+        ...(patch.severity !== undefined ? { severity: patch.severity } : {}),
+      });
     },
     audit(payload: Record<string, unknown>) {
       tx.audit_buffer.push(payload);

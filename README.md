@@ -193,8 +193,9 @@ Full design rationale in [WHITEPAPER.md](WHITEPAPER.md).
 ```
 packages/
   kernel/                  FSM, invariants, ledger, gate-policy, types — no vendor names
+  driver/                  transport-neutral orchestration runtime — the headless drive() loop + Executor seam
   mcp-server/              MCP transport (stdio); the /task and /done commands
-  cli/                     the `loom` install binary (setup / allowlist / init)
+  cli/                     the `loom` binary (setup / allowlist / init / status / run)
   pipeline/                @loomfsm/pipeline — the one-step `npm i -g` meta-package
   providers/
     claude-code-shuttle/   default provider, no API key needed
@@ -205,7 +206,7 @@ packages/
 ```
 
 Published under the `@loomfsm/*` scope: `@loomfsm/pipeline` (install this), plus
-`@loomfsm/{kernel,mcp-server,cli,bundle-code,provider-claude-code-shuttle,provider-anthropic-sdk,provider-openrouter}`.
+`@loomfsm/{kernel,driver,mcp-server,cli,bundle-code,provider-claude-code-shuttle,provider-anthropic-sdk,provider-openrouter}`.
 
 ## What it isn't
 

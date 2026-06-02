@@ -206,7 +206,7 @@ packages/
 ```
 
 Published under the `@loomfsm/*` scope: `@loomfsm/pipeline` (install this), plus
-`@loomfsm/{kernel,driver,mcp-server,cli,bundle-code,provider-claude-code-shuttle,provider-anthropic-sdk,provider-openrouter}`.
+`@loomfsm/{kernel,driver,daemon,mcp-server,cli,bundle-code,provider-claude-code-shuttle,provider-anthropic-sdk,provider-openrouter}`.
 
 ## What it isn't
 
@@ -217,16 +217,25 @@ Published under the `@loomfsm/*` scope: `@loomfsm/pipeline` (install this), plus
 
 ## Status & roadmap
 
+`v0.2.0`: headless, non-interactive execution. `loom run "<task>"` drives a task to the
+end without a live host, running each step through the Claude Code CLI in print mode
+inside an isolated git worktree — on your existing login, no API key. `loom daemon` wraps
+that in a long-lived supervisor that runs the work server-side and surfaces you only at
+decision points: it parks on a human gate and wakes when you answer, retries transient
+failures with backoff, recovers an interrupted task on restart, and commits finished work
+to a `loom/<task>` branch (never auto-merged into your checked-out branch). The
+code-domain toolchain moved out of the kernel, so the substrate stays domain-blind.
+Published on npm. On the near horizon: task intake (pull work from an issue tracker or a
+chat, submit from anywhere), multi-project supervision, and an HTTP transport — all
+*additive* over the same driver, none reshapes the kernel.
+
 `v0.1.4`: kernel + the `code` bundle + three providers + mcp-server & cli; one task in
 flight per project — a finished task is archived to `.claude/history/` so the next one
 starts clean, letting a project run a series of tasks; published on npm. Adds over
 `v0.1.3`: resume an interrupted task safely (same agent ids, idempotent re-delivery); an
 honest finding lifecycle (a settled blocker can no longer haunt an accepted task); and a
 generic conditional-verify primitive a bundle uses to escalate to an empirical check
-before it finalizes. Early and evolving. On the near horizon: a headless driver runtime
-and richer host integration, more bundles, bundle runtime isolation, a cross-task memory
-subsystem, and a daemon transport. The substrate is *additive* to all of these — none
-reshapes the kernel.
+before it finalizes.
 
 ## Contributing
 

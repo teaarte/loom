@@ -4,6 +4,7 @@
 // beyond what a first install needs.
 
 import { allowlistAdd, allowlistList } from "./commands/allowlist.js";
+import { daemon } from "./commands/daemon.js";
 import { init } from "./commands/init.js";
 import { history, reset } from "./commands/reset.js";
 import { runTask } from "./commands/run.js";
@@ -49,6 +50,18 @@ Usage:
       and prints a human gate rather than answering it. Needs Claude Code
       installed and signed in.
 
+  loom daemon start [--watch] [--detach] ["<task>"]
+      Run a long-lived supervisor over this project: drive the task headless,
+      PARK on a human gate and WAKE when it's answered, retry transient
+      failures with backoff, recover an in-flight task on restart, and commit
+      finished work to a 'loom/<task>' branch (never auto-merged). With a task,
+      start it; without, attach to the active task. --watch keeps supervising
+      the slot for the next task; --detach forks a background daemon.
+  loom daemon stop [path]
+      Signal a running daemon to stop gracefully.
+  loom daemon status [path]
+      Show whether a daemon is running and where its task sits.
+
   loom --help | --version
 
 Typical first run:
@@ -85,6 +98,8 @@ export function run(argv: string[], env: CliEnv = processEnv()): number | Promis
       return status(rest, env);
     case "run":
       return runTask(rest, env);
+    case "daemon":
+      return daemon(rest, env);
     case "allowlist": {
       const [sub, ...subRest] = rest;
       if (sub === "add") return allowlistAdd(subRest, env);

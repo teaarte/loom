@@ -3,8 +3,8 @@
 // status. All logic lives in `run` so the meta-package's bin shim and the
 // tests can drive the same code path without spawning a process.
 //
-// A few commands — `reset`, `status`, and `run` — open the project's SQLite
-// store, which on the pinned Node line is gated behind --experimental-sqlite.
+// A few commands — `reset`, `status`, `run`, and `daemon` — open the project's
+// SQLite store, which on the pinned Node line is gated behind --experimental-sqlite.
 // The flag rides only where SQLite is actually used: the install commands
 // (setup / allowlist / init) never open the store and keep a clean,
 // flag-free launcher, so those commands re-exec the launcher ONCE with the
@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 
 import { run } from "../cli.js";
 
-const SQLITE_COMMANDS = new Set(["reset", "status", "run"]);
+const SQLITE_COMMANDS = new Set(["reset", "status", "run", "daemon"]);
 const REEXEC_GUARD = "LOOM_SQLITE_REEXEC";
 
 function nodeSqliteAvailable(): boolean {

@@ -23,6 +23,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@loomfsm/daemon':
+        specifier: workspace:*
+        version: link:../daemon
       '@loomfsm/driver':
         specifier: workspace:*
         version: link:../driver
@@ -32,6 +35,15 @@ importers:
       '@loomfsm/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
+
+  packages/daemon:
+    dependencies:
+      '@loomfsm/driver':
+        specifier: workspace:*
+        version: link:../driver
+      '@loomfsm/kernel':
+        specifier: workspace:*
+        version: link:../kernel
 
   packages/driver:
     dependencies:
@@ -77,6 +89,9 @@ importers:
       '@loomfsm/cli':
         specifier: workspace:*
         version: link:../cli
+      '@loomfsm/daemon':
+        specifier: workspace:*
+        version: link:../daemon
       '@loomfsm/driver':
         specifier: workspace:*
         version: link:../driver

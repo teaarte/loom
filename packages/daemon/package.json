@@ -1,14 +1,11 @@
 {
-  "name": "@loomfsm/cli",
+  "name": "@loomfsm/daemon",
   "version": "0.1.4",
   "type": "module",
-  "description": "The loom command-line installer — register the MCP server and authorize projects.",
+  "description": "Long-lived supervisor over loom's headless driver-loop — drives a project's task server-side, parks on a human gate and wakes on the answer, retries transient failures, recovers in-flight work on restart, and owns the worktree lifecycle.",
   "license": "Apache-2.0",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
-  "bin": {
-    "loom": "./dist/src/bin/loom.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
@@ -23,13 +20,12 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "prepack": "pnpm run build",
-    "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
+    "lint:no-domain-leak": "node scripts/no-domain-leak.mjs",
+    "test": "tsc && pnpm lint:no-domain-leak && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
-    "@loomfsm/daemon": "workspace:*",
     "@loomfsm/driver": "workspace:*",
-    "@loomfsm/kernel": "workspace:*",
-    "@loomfsm/mcp-server": "workspace:*"
+    "@loomfsm/kernel": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

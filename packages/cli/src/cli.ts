@@ -6,6 +6,7 @@
 import { allowlistAdd, allowlistList } from "./commands/allowlist.js";
 import { init } from "./commands/init.js";
 import { history, reset } from "./commands/reset.js";
+import { runTask } from "./commands/run.js";
 import { setup } from "./commands/setup.js";
 import { status } from "./commands/status.js";
 import { processEnv, type CliEnv } from "./lib/env.js";
@@ -41,6 +42,12 @@ Usage:
       pending agents and how long they've waited. Flags a stalled task (a
       likely dropped transport) — resume it with /resume or 'loom resume'.
 
+  loom run "<task>"
+      Drive a task to its end non-interactively, executing each spawn with a
+      configured provider instead of a host. Pauses and prints a human gate
+      rather than answering it. Needs an async provider configured for this
+      project.
+
   loom --help | --version
 
 Typical first run:
@@ -75,6 +82,8 @@ export function run(argv: string[], env: CliEnv = processEnv()): number | Promis
       return history(rest, env);
     case "status":
       return status(rest, env);
+    case "run":
+      return runTask(rest, env);
     case "allowlist": {
       const [sub, ...subRest] = rest;
       if (sub === "add") return allowlistAdd(subRest, env);

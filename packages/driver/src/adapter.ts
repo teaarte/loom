@@ -1,11 +1,13 @@
-// The MCP transport adapter — pure mapping `KernelDirective →
+// The directive→wire adapter — pure mapping `KernelDirective →
 // TransportResponse`.
 //
 // No I/O, no DB reads, no clock reads: the same directive in produces a
 // structurally-equal envelope out. Pushing the kernel-to-wire seam into
 // one pure function lets every transport carry its own copy without
 // re-implementing kernel reads, and keeps the kernel free of any
-// wire-shape coupling.
+// wire-shape coupling. It lives in the shared orchestration runtime so the
+// stdio transport, the headless loop, and any future transport map
+// directives the same way.
 //
 // `runner_hint` is hard-coded to "mcp-server" on every emitted spawn
 // descriptor; the hint is opaque to the kernel and lets the host

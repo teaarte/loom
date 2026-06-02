@@ -1,0 +1,138 @@
+// `loom run` — the non-interactive driver command. These cover its parsing
+// and outcome reporting with an injected drive / executor / registry (the
+// real loop is exercised in @loomfsm/driver's own suite), plus the
+// shuttle-provider guard and dispatcher routing.
+
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import { run } from "../src/cli.js";
+import { runTask, type RunOverrides } from "../src/commands/run.js";
+import type { CliEnv } from "../src/lib/env.js";
+
+import type { DriveOutcome, Executor } from "@loomfsm/driver";
+import type { LLMProvider, Registry } from "@loomfsm/kernel";
+
+function makeEnv(): { env: CliEnv; out: string[]; err: string[] } {
+  const out: string[] = [];
+  const err: string[] = [];
+  const env: CliEnv = {
+    home: "/tmp/nonexistent-home",
+    cwd: "/tmp/nonexistent-cwd",
+    out: (l) => out.push(l),
+    err: (l) => err.push(l),
+  };
+  return { env, out, err };
+}
+
+const stubExecutor: Executor = { execute: async () => ({ agent_output: "" }) };
+
+function registryWithProvider(provider: LLMProvider): Registry {
+  return { providers: { all: [provider] } } as unknown as Registry;
+}
+
+// Inject a registry + executor so no real provider/store is needed; the
+// drive itself is faked per test to return the outcome under assertion.
+function overrides(outcome: DriveOutcome): RunOverrides {
+  return {
+    resolveRegistry: () => ({}) as unknown as Registry,
+    buildExecutor: () => stubExecutor,
+    driveImpl: async () => outcome,
+  };
+}
+
+describe("loom run", () => {
+  it("reports a completed task and exits 0 on an accepted verdict", async () => {
+    const { env, out } = makeEnv();
+    const code = await runTask(
+      ["ship", "the", "thing"],
+      env,
+      overrides({ kind: "complete", task_id: "t-1", verdict: "accepted", summary: "all green" }),
+    );
+    assert.equal(code, 0);
+    assert.ok(out.some((l) => l.includes("done — accepted")));
+    assert.ok(out.some((l) => l.includes("all green")));
+  });
+
+  it("exits 1 when the task completes with a non-accepted verdict", async () => {
+    const { env } = makeEnv();
+    const code = await runTask(
+      ["risky work"],
+      env,
+      overrides({ kind: "complete", task_id: "t-2", verdict: "rejected", summary: "nope" }),
+    );
+    assert.equal(code, 1);
+  });
+
+  it("prints a human gate and exits 2 without answering it", async () => {
+    const { env, out } = makeEnv();
+    const code = await runTask(
+      ["gated work"],
+      env,
+      overrides({
+        kind: "paused",
+        reason: "ask-user",
+        driver_state_id: "d-1",
+        gate: "approve-plan",
+        gate_event_id: "gev-1",
+        message: "Approve the plan?",
+        valid_answers: {
+          options: [{ verbs: ["yes"], label: "Approve", produces: { decision: "accept" } }],
+        },
+      }),
+    );
+    assert.equal(code, 2);
+    assert.ok(out.some((l) => l.includes("paused at gate 'approve-plan'")));
+    assert.ok(out.some((l) => l.includes("Approve the plan?")));
+  });
+
+  it("reports an error outcome on stderr and exits 1", async () => {
+    const { env, err } = makeEnv();
+    const code = await runTask(
+      ["broken work"],
+      env,
+      overrides({
+        kind: "error",
+        driver_state_id: "d-1",
+        code: "SPAWN_BUDGET_EXCEEDED",
+        message: "too slow",
+        recovery_options: [],
+      }),
+    );
+    assert.equal(code, 1);
+    assert.ok(err.some((l) => l.includes("SPAWN_BUDGET_EXCEEDED")));
+  });
+
+  it("requires a task description", async () => {
+    const { env, err } = makeEnv();
+    const code = await runTask([], env, overrides({ kind: "complete", task_id: null, verdict: "accepted", summary: "" }));
+    assert.equal(code, 1);
+    assert.ok(err.some((l) => /task is required/.test(l)));
+  });
+
+  it("refuses a shuttle-only provider (cannot run headless)", async () => {
+    const { env, err } = makeEnv();
+    const shuttle: LLMProvider = {
+      name: "shuttle-stub",
+      capabilities: { execution: "shuttle", idempotent_spawn: true, reports_usage: false },
+      async spawn() {
+        throw new Error("unused");
+      },
+    };
+    // No buildExecutor override → the default executor builder runs and
+    // rejects the shuttle provider before any drive begins.
+    const code = await runTask(["some work"], env, {
+      resolveRegistry: () => registryWithProvider(shuttle),
+      driveImpl: async () => ({ kind: "complete", task_id: null, verdict: "accepted", summary: "" }),
+    });
+    assert.equal(code, 1);
+    assert.ok(err.some((l) => /shuttle-only/.test(l)));
+  });
+
+  it("is routed by the dispatcher (a bare 'run' asks for a task)", async () => {
+    const { env, err } = makeEnv();
+    const code = await run(["run"], env);
+    assert.equal(code, 1);
+    assert.ok(err.some((l) => /task is required/.test(l)));
+  });
+});

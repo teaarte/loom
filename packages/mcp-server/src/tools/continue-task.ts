@@ -1,12 +1,12 @@
 // pipeline_continue_task — delivery handler for agent results, fanout
 // batches, and user answers.
 //
-// Composition mirrors pipeline_run_task: allowlist gate → variant
-// refusals → ledger cache lookup → deliver inside one withStateTransaction
-// (the op-shaped ledger row + a co-committed audit row land with the
-// state mutation) → run the FSM against the post-delivery state → shape
-// the next directive → materialize the cached response on the ledger
-// row(s).
+// The stdio transport shell around the shared deliver composition:
+// allowlist gate → variant refusals → ledger cache lookup → delegate to
+// `deliverAndAdvance` (shared with the headless loop, so the honest server
+// git delta, the co-committed audit + idempotency-ledger rows, the
+// resume-point persist, and the next FSM tick are computed identically by
+// every transport — no transport can silently drop the file-delta feed).
 //
 // Two variants are refused on this surface:
 //   recovery       → RECOVERY_VIA_CONTINUE_REFUSED (its own primitive).
@@ -18,24 +18,15 @@
 import {
   assertProjectDirAllowed,
   captureNow,
-  deliverContinue,
   KernelError,
-  loadState,
   openDb,
   readLedgerRow,
-  runFSM,
   TransactionImpl,
-  withStateTransaction,
-  writeLedgerRow,
   type Registry,
-  type Transaction,
 } from "@loomfsm/kernel";
+import { deliverAndAdvance, ledgerKeysFor } from "@loomfsm/driver";
 import type { TransportResponse } from "@loomfsm/transport-types";
 
-import { readDeltaBaseline } from "../lib/delta-baseline.js";
-import { gitDelta } from "../lib/git-delta.js";
-import { persistDriverStepIndex } from "../lib/persist-progress.js";
-import { createTransportAdapter } from "../transport-adapter.js";
 import type {
   ContinueTaskRequestInput,
   ContinueTaskResponse,
@@ -50,8 +41,6 @@ export interface ContinueTaskDeps {
 export function createContinueTaskTool(
   deps: ContinueTaskDeps = {},
 ): ToolHandler<ContinueTaskRequestInput, ContinueTaskResponse> {
-  const adapter = createTransportAdapter();
-
   return async (input) => {
     const driverStateId = input.driver_state_id;
 
@@ -108,106 +97,19 @@ export function createContinueTaskTool(
         ? input.client_identifier_unverified
         : "unknown";
 
-    // 3b. Compute the honest file delta server-side and fold it into the
-    //     carrier. Only the single-spawn (agent-result) path runs a tool
-    //     that mutates the working tree; the review fanout (agents-results)
-    //     does not, so the delta is gathered here. We measure the working
-    //     tree against the task-start baseline — which catches COMMITTED
-    //     work that a working-tree-vs-HEAD diff would miss — and union it
-    //     with anything the host reported (the kernel set-unions, so this
-    //     is idempotent and a host that reports nothing is fully covered).
-    //     Git I/O runs OUTSIDE the delivery tx (no held write lock); a
-    //     non-git project yields null and the host's own accounting stands.
-    const deliveredInput = await withServerComputedDelta(input.project_dir, input.input);
-
-    // 4. Deliver + co-committed audit row.
+    // 4. Delegate delivery + the next tick to the shared composition.
     try {
-      await withStateTransaction(input.project_dir, captureNow(), async (tx) => {
-        await deliverContinue(tx, {
-          input: deliveredInput,
-          driver_state_id: driverStateId,
-          resolveOutputKind: (agent) => registry.agents.get(agent)?.output_kind,
-          vocabularies: registry.vocabularies,
-          // The human-answer path resolves the gate's on_resume + the active
-          // flow from here, so a revise walks back and an abandon completes
-          // rejected instead of advancing like an accept.
-          registry,
-        });
-        const taskId = await readTaskId(tx);
-        await writeAuditRow(tx, "pipeline_continue_task", taskId, driverStateId, {
-          client_identifier_unverified: identifier,
-        });
+      const { response } = await deliverAndAdvance(input.project_dir, {
+        registry,
+        input: input.input,
+        driver_state_id: driverStateId,
+        identifier,
       });
+      return { response };
     } catch (err) {
       return refusal(err, driverStateId);
     }
-
-    // 5. Run the FSM against the post-delivery state and shape it.
-    const loaded = await readState(input.project_dir);
-    const { state: ticked, directive } = await runFSM(loaded, registry);
-    const response = adapter.shape(directive, { driver_state_id: driverStateId });
-
-    // 6. Persist the tick's paused step index + materialize the cached
-    //    response on every op key (the fanout batch shares one envelope
-    //    across all its agent_run_ids), co-committed.
-    const taskId = loaded.task_id;
-    await withStateTransaction(input.project_dir, captureNow(), async (tx) => {
-      await persistDriverStepIndex(tx, ticked.driver.step_index);
-      for (const key of keys) {
-        await writeLedgerRow(tx, key, {
-          driver_state_id: driverStateId,
-          task_id: taskId,
-          response_blob: JSON.stringify(response),
-        });
-      }
-    });
-
-    return { response };
   };
-}
-
-// Fold the server-computed git delta into an agent-result's file carrier.
-// Returns the input unchanged for every other variant (and when the
-// project is not a git work tree / has no stored baseline). The kernel
-// unions the lists, so appending to whatever the host supplied is safe and
-// idempotent — a duplicate path collapses, an empty contribution is a
-// no-op.
-async function withServerComputedDelta(
-  projectDir: string,
-  input: ContinueTaskRequestInput["input"],
-): Promise<ContinueTaskRequestInput["input"]> {
-  if (input.type !== "agent-result") return input;
-  const baseline = await readDeltaBaseline(projectDir);
-  const delta = gitDelta(projectDir, baseline);
-  if (delta === null) return input;
-  return {
-    ...input,
-    files_modified: [...(input.files_modified ?? []), ...delta.modified],
-    files_created: [...(input.files_created ?? []), ...delta.created],
-  };
-}
-
-function ledgerKeysFor(input: ContinueTaskRequestInput["input"]): string[] {
-  switch (input.type) {
-    case "agent-result":
-      return [`agent-result:${input.agent_run_id}`];
-    case "agents-results":
-      return input.results.map((r) => `agent-result:${r.agent_run_id}`);
-    case "user-answer":
-      return [`user-answer:${input.gate_event_id}`];
-    case "recovery":
-      return [];
-    default: {
-      const _exhaustive: never = input;
-      return _exhaustive;
-    }
-  }
-}
-
-async function readState(projectDir: string) {
-  const db = openDb(projectDir);
-  const tx = new TransactionImpl(db, captureNow());
-  return await loadState(tx);
 }
 
 async function readCachedDelivery(
@@ -224,28 +126,6 @@ async function readCachedDelivery(
     }
   }
   return null;
-}
-
-async function readTaskId(tx: Transaction): Promise<string | null> {
-  const row = await tx.queryRow<{ task_id: unknown }>(
-    "SELECT task_id FROM pipeline_state WHERE id = 1",
-  );
-  if (row === null || row.task_id === null) return null;
-  return String(row.task_id);
-}
-
-async function writeAuditRow(
-  tx: Transaction,
-  type: string,
-  taskId: string | null,
-  driverStateId: string,
-  payload: Record<string, unknown>,
-): Promise<void> {
-  await tx.exec(
-    "INSERT INTO audit (ts, type, task_id, driver_state_id, payload, verdict, error_class) " +
-      "VALUES (?, ?, ?, ?, ?, 'ok', NULL)",
-    [tx.now, type, taskId, driverStateId, JSON.stringify(payload)],
-  );
 }
 
 function refusal(err: unknown, driverStateId: string): ContinueTaskResponse {

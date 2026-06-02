@@ -41,6 +41,7 @@ import { after, before, describe, it } from "node:test";
 const PUBLISHABLE = [
   "packages/kernel",
   "packages/transport-types",
+  "packages/driver",
   "packages/bundles/code",
   "packages/providers/claude-code-shuttle",
   "packages/mcp-server",

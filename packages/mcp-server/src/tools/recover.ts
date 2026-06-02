@@ -54,7 +54,7 @@ import {
 } from "@loomfsm/kernel";
 import type { TransportResponse } from "@loomfsm/transport-types";
 
-import { createTransportAdapter } from "../transport-adapter.js";
+import { createTransportAdapter } from "@loomfsm/driver";
 import type {
   RecoverTaskInput,
   RecoverTaskResponse,

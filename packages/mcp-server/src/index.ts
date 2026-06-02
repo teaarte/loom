@@ -28,7 +28,7 @@ export type { ArchiveResetDeps } from "./tools/archive-reset.js";
 export { createResumeTool } from "./tools/resume.js";
 export type { ResumeDeps } from "./tools/resume.js";
 
-export { createTransportAdapter, shape } from "./transport-adapter.js";
+export { createTransportAdapter, shape } from "@loomfsm/driver";
 
 export { FLAG_TO_PRESET, parseTaskArgs } from "./lib/parse-task-args.js";
 

@@ -1,12 +1,12 @@
 // Server-side file-delta computation — the transport's honest answer to
 // "what did this task touch?".
 //
-// This lives in the transport on purpose: the kernel is side-effect-free
-// and never shells out, so ALL world-coupling (here, a git working tree)
-// belongs to whoever drives it. Computing the delta here — rather than
-// trusting a driver to report it — makes the accounting trustworthy by
-// construction: a thin or lazy driver can no longer silently feed an empty
-// list and turn the change-conditional reviewers into no-ops.
+// This lives in the transport runtime on purpose: the kernel is
+// side-effect-free and never shells out, so ALL world-coupling (here, a
+// git working tree) belongs to whoever drives it. Computing the delta here
+// — rather than trusting a driver to report it — makes the accounting
+// trustworthy by construction: a thin or lazy driver can no longer silently
+// feed an empty list and turn the change-conditional reviewers into no-ops.
 //
 // The delta is measured against a BASELINE captured at task start, not
 // against the current HEAD. A run that COMMITS its work moves HEAD forward,

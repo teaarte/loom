@@ -18,6 +18,10 @@
       "types": "./dist/src/bootstrap.d.ts",
       "import": "./dist/src/bootstrap.js"
     },
+    "./parse-task-args": {
+      "types": "./dist/src/lib/parse-task-args.d.ts",
+      "import": "./dist/src/lib/parse-task-args.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -32,6 +36,7 @@
   },
   "dependencies": {
     "@loomfsm/bundle-code": "workspace:*",
+    "@loomfsm/driver": "workspace:*",
     "@loomfsm/kernel": "workspace:*",
     "@loomfsm/provider-claude-code-shuttle": "workspace:*",
     "@loomfsm/transport-types": "workspace:*",

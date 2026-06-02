@@ -7,7 +7,7 @@ import type {
   UserAnswerSchema,
 } from "@loomfsm/kernel";
 
-import { createTransportAdapter, shape } from "../src/transport-adapter.js";
+import { createTransportAdapter, shape } from "../src/adapter.js";
 
 const CTX = { driver_state_id: "d-ctx" };
 

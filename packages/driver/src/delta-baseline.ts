@@ -1,6 +1,6 @@
 // Durable storage for the task-start delta baseline.
 //
-// The baseline (the ref the server diffs the working tree against to
+// The baseline (the ref the runtime diffs the working tree against to
 // compute the honest file delta) must outlive a process drop so a resumed
 // task still measures changes from the same starting point. It rides the
 // driver's generic `scratch` JSON bag on `driver_state` — a kernel-owned

@@ -49,22 +49,17 @@
 
 import {
   assertProjectDirAllowed,
-  buildRetryFailedDirective,
   captureNow,
   KernelError,
   loadState,
-  narrowStateForBundle,
   openDb,
   peekArchiveSlot,
-  runFSM,
   TransactionImpl,
-  type KernelDirective,
   type PipelineState,
   type Registry,
 } from "@loomfsm/kernel";
+import { createTransportAdapter, resumeDirective } from "@loomfsm/driver";
 import type { TransportResponse } from "@loomfsm/transport-types";
-
-import { createTransportAdapter } from "../transport-adapter.js";
 import type { ResumeInput, ResumeResponse, ToolHandler } from "../types.js";
 
 export interface ResumeDeps {
@@ -148,7 +143,7 @@ export function createResumeTool(
     let response: TransportResponse;
     try {
       const registry = await deps.resolveRegistry(input.project_dir);
-      const directive = await currentDirective(loaded, registry);
+      const directive = await resumeDirective(loaded, registry);
       response = adapter.shape(directive, { driver_state_id: driverStateId });
     } catch (err) {
       if (!(err instanceof KernelError)) throw err;
@@ -157,66 +152,6 @@ export function createResumeTool(
 
     return { response };
   };
-}
-
-// Re-derive the directive the task is currently paused on — the heart of
-// the tool. Order matters: pending agents are checked BEFORE the runFSM
-// fallback because a blind re-tick would re-enter the spawn stage and mint
-// fresh agent_run_ids (tripping the duplicate-window guard); the pending
-// path re-shuttles the EXISTING rows instead.
-async function currentDirective(
-  state: PipelineState,
-  registry: Registry,
-): Promise<KernelDirective> {
-  if (state.pending_agents.length > 0) {
-    const agentRunIds = state.pending_agents.map((row) => row.agent_run_id);
-    return buildRetryFailedDirective(state, registry, agentRunIds);
-  }
-  if (state.driver.pending_user_answer !== null) {
-    return reEmitAsk(state, registry);
-  }
-  const { directive } = await runFSM(state, registry);
-  return directive;
-}
-
-// Reconstruct the ask-user directive for a task parked at a human gate.
-// The persisted pending answer carries gate / message / gate_event_id but
-// NOT valid_answers (the schema is not stored), so it cannot be re-emitted
-// from state alone. Re-derive message + valid_answers from the gate stage's
-// own pure callbacks — exactly what the gate interpreter calls — and stamp
-// the PERSISTED gate_event_id (NOT a fresh one) so the answer the host
-// eventually delivers still binds to this exact ask. Fully read-only: the
-// narrowing helper and both callbacks are side-effect-free by contract.
-function reEmitAsk(state: PipelineState, registry: Registry): Promise<KernelDirective> {
-  const pending = state.driver.pending_user_answer;
-  // The caller guards pending !== null; this keeps the type honest.
-  if (pending === null) {
-    throw new KernelError({
-      code: "KERNEL_INVARIANT",
-      message: "reEmitAsk called with no pending user answer",
-    });
-  }
-  const stage = registry.stages.get(pending.gate);
-  if (stage === undefined || stage.kind !== "gate") {
-    throw new KernelError({
-      code: "STAGE_NOT_REGISTERED",
-      message: `gate stage '${pending.gate}' is not registered; cannot re-emit its ask`,
-      detail: { gate: pending.gate },
-    });
-  }
-  const view = narrowStateForBundle(state, state.now);
-  return (async () => {
-    const message = await Promise.resolve(stage.message(view));
-    const valid_answers = await Promise.resolve(stage.valid_answers(view));
-    return {
-      kind: "ask-user",
-      driver_state_id: state.driver_state_id,
-      gate: pending.gate,
-      gate_event_id: pending.gate_event_id,
-      message,
-      valid_answers,
-    };
-  })();
 }
 
 // A terminal task re-emits a `complete` envelope. An abandoned task has a

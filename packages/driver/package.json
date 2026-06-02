@@ -1,14 +1,11 @@
 {
-  "name": "@loomfsm/cli",
+  "name": "@loomfsm/driver",
   "version": "0.1.3",
   "type": "module",
-  "description": "The loom command-line installer — register the MCP server and authorize projects.",
+  "description": "Transport-neutral orchestration runtime for loom — the headless driver-loop, the directive→wire adapter, and the conformant delivery composition shared by every transport.",
   "license": "Apache-2.0",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
-  "bin": {
-    "loom": "./dist/src/bin/loom.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
@@ -26,9 +23,8 @@
     "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
-    "@loomfsm/driver": "workspace:*",
     "@loomfsm/kernel": "workspace:*",
-    "@loomfsm/mcp-server": "workspace:*"
+    "@loomfsm/transport-types": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

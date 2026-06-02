@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
-import { gitBaselineRef, gitDelta } from "../src/lib/git-delta.js";
+import { gitBaselineRef, gitDelta } from "../src/git-delta.js";
 
 // Run git for test setup; throws on failure (a broken fixture must fail
 // loudly, not silently produce a misleading assertion).

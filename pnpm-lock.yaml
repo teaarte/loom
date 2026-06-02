@@ -23,12 +23,24 @@ importers:
 
   packages/cli:
     dependencies:
+      '@loomfsm/driver':
+        specifier: workspace:*
+        version: link:../driver
       '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../kernel
       '@loomfsm/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
+
+  packages/driver:
+    dependencies:
+      '@loomfsm/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@loomfsm/transport-types':
+        specifier: workspace:*
+        version: link:../transport-types
 
   packages/kernel: {}
 
@@ -37,6 +49,9 @@ importers:
       '@loomfsm/bundle-code':
         specifier: workspace:*
         version: link:../bundles/code
+      '@loomfsm/driver':
+        specifier: workspace:*
+        version: link:../driver
       '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -62,6 +77,9 @@ importers:
       '@loomfsm/cli':
         specifier: workspace:*
         version: link:../cli
+      '@loomfsm/driver':
+        specifier: workspace:*
+        version: link:../driver
       '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../kernel

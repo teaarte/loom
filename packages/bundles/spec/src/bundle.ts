@@ -126,15 +126,10 @@ export default defineBundle({
   // commits the bundle to a resolver plus a name-matching safety floor;
   // both ship below, so the loader admits the autonomous posture.
   //
-  // The three baseline roles below are NOT used by any gate in this flow —
-  // they are present only because the gate-policy map's type names them as
-  // required keys, so even a bundle that owns an entirely different role set
-  // must enumerate them. They default to the conservative human posture and
-  // are inert: the dispatcher only ever resolves a role some gate maps to.
+  // The gate-policy map names only this bundle's own roles — the kernel's
+  // map type is partial over the role set, so a bundle that owns an entirely
+  // different vocabulary declares just the postures it gates and nothing else.
   default_gate_policies: {
-    classify: "human",
-    plan: "human",
-    final: "human",
     scope: "human",
     consult: "human",
     "spec-approval": "auto",

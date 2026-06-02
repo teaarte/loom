@@ -135,8 +135,7 @@ export function createRunTaskTool(
           ? { gate_policies: input.gate_policies as Partial<Record<GateRole, PolicyName>> }
           : {}),
         ...(input.complexity_hint !== undefined ? { complexity_hint: input.complexity_hint } : {}),
-        ...(input.tests_mode_hint !== undefined ? { tests_mode_hint: input.tests_mode_hint } : {}),
-        stack: input.stack ?? null,
+        ...(input.initial_decisions !== undefined ? { initial_decisions: input.initial_decisions } : {}),
         identifier,
       });
       return {

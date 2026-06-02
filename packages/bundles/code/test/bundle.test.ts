@@ -93,7 +93,7 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
     assert.deepEqual(
       registry.flows.get("medium"),
       [
-        "initialize", "classify", "classify-agent", "gate-classify",
+        "initialize", "classify", "classify-agent", "stack-to-bundle-state", "gate-classify",
         "enrich", "plan", "plan-review", "gate-plan",
         "git-stash", "implement", "git-diff", "pre-review", "review",
         "adjudicate", "reconcile", "iterate", "final-checks", "test-verify",
@@ -396,6 +396,60 @@ describe("@loomfsm/bundle-code — full-autonomous readiness", () => {
     });
     // The resolver + INV_safety_floor_final satisfied the auto-policy gate.
     assert.ok(registry.invariants.some((inv) => (inv as { name?: string }).name === "INV_safety_floor_final"));
+  });
+});
+
+// ============================================================================
+// stack lives in bundle_state (bundle-owned), not a kernel column
+// ============================================================================
+
+describe("@loomfsm/bundle-code — stack-to-bundle-state relocation", () => {
+  // Run the positional step over a state whose decisions carry the
+  // classifier's stack pick, capturing what it writes to bundle_state.
+  function runRelocate(decisions: Record<string, unknown>): Record<string, unknown> {
+    const captured: Record<string, unknown> = {};
+    const state = { decisions } as unknown as BundleStateView;
+    const ctx = {
+      tx: { set_bundle_state_field: (p: string, v: unknown) => { captured[p] = v; } },
+    } as unknown as StageContext;
+    const stage = codeBundle.stages["stack-to-bundle-state"];
+    assert.ok(stage !== undefined && stage.kind === "step" && stage.run !== undefined);
+    // The step is synchronous in effect; run it to completion.
+    void stage.run(state, ctx);
+    return captured;
+  }
+
+  it("relocates the classifier's stack object from decisions into bundle_state.stack", () => {
+    const stack = {
+      language: "typescript",
+      package_manager: "pnpm",
+      test_command: "pnpm test",
+      lint_command: null,
+      build_command: "pnpm build",
+      project_type: "library",
+    };
+    const captured = runRelocate({ stack, complexity: "medium" });
+    assert.deepEqual(captured["stack"], stack);
+  });
+
+  it("writes nothing when the classifier emitted no stack (null / absent)", () => {
+    assert.deepEqual(runRelocate({ stack: null }), {});
+    assert.deepEqual(runRelocate({}), {});
+  });
+
+  it("declares the bundle_state.stack write as its effect + sits at the switch boundary in every flow", () => {
+    const stage = codeBundle.stages["stack-to-bundle-state"];
+    assert.ok(stage !== undefined && stage.kind === "step");
+    assert.deepEqual(stage.effects, [{ kind: "bundle_state.set", path: "stack" }]);
+    // Index 3 (right after classify-agent) in all three flows, so the
+    // complexity switch lands on an identical stage.
+    for (const flow of ["simple", "medium", "complex"]) {
+      assert.equal(
+        codeBundle.flows[flow]?.[3],
+        "stack-to-bundle-state",
+        `flow '${flow}' must place the relocate step at the switch boundary`,
+      );
+    }
   });
 });
 

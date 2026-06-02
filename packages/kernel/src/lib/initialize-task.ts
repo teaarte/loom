@@ -22,7 +22,7 @@ import { makeDriverStateId, makeTaskId } from "../ids.js";
 import { resolvePreset } from "../policy-presets/index.js";
 import { KERNEL_SCHEMA_VERSION, KernelError } from "../state/db.js";
 import type { PolicyName } from "../types/policy.js";
-import type { GateRole, Phase, StackInfo } from "../types/row-types.js";
+import type { GateRole, Phase } from "../types/row-types.js";
 import type { Transaction } from "../types/transaction.js";
 
 import { readLedgerRow, writeLedgerRow } from "./ledger.js";
@@ -39,8 +39,11 @@ export interface InitializeTaskArgs {
   // about; unset roles resolve through the bundle default / kernel baseline.
   gate_policies?: Partial<Record<GateRole, PolicyName>>;
   complexity_hint?: "simple" | "medium" | "complex";
-  tests_mode_hint?: "tdd" | "regression-only";
-  stack?: StackInfo | null;
+  // Generic bundle-seed for the `decisions` map. A bundle's task-create
+  // caller seeds arbitrary opening decisions of its own naming without the
+  // kernel knowing any of those keys. A `complexity` value supplied here is
+  // overridden by an explicit `complexity_hint` below.
+  initial_decisions?: Record<string, unknown>;
   client_idempotency_uuid: string;
   // Phase names declared by the active bundle's flow — the caller reads
   // these off the resolved registry (`registry.bundle.phases`) and the
@@ -124,9 +127,6 @@ export async function initializeTask(
   const driverStateId = makeDriverStateId();
   const taskShort = args.task_short ?? null;
   const ownerId = args.owner_id ?? null;
-  const stackJson = args.stack !== null && args.stack !== undefined
-    ? JSON.stringify(args.stack)
-    : null;
   const decisionsJson = JSON.stringify(buildInitialDecisions(args));
 
   await tx.exec(
@@ -134,9 +134,9 @@ export async function initializeTask(
       "(id, schema_version, project_dir, bundle, task_id, task, task_short, " +
       " driver_state_id, owner_id, status, verdict, started_at, ended_at, " +
       " gate_policies, decisions, bundle_state, files_created, files_modified, " +
-      " stack, pipeline_violation, force_used) " +
+      " pipeline_violation, force_used) " +
       "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', NULL, ?, NULL, " +
-      " ?, ?, NULL, '[]', '[]', ?, NULL, 0)",
+      " ?, ?, NULL, '[]', '[]', NULL, 0)",
     [
       KERNEL_SCHEMA_VERSION,
       args.project_dir,
@@ -149,7 +149,6 @@ export async function initializeTask(
       tx.now,
       JSON.stringify(gatePolicies),
       decisionsJson,
-      stackJson,
     ],
   );
 
@@ -194,18 +193,19 @@ function resolveGatePolicies(
   return {};
 }
 
-// Seed `decisions` with the host-supplied hints. `complexity` is the
-// generic decisions key kernel invariants (and bundle policies) read;
-// `tests_mode` is bundle-consumed. Absent hints leave the key out.
+// Seed `decisions` from the host-supplied generic `initial_decisions` blob,
+// then layer the one NAMED hint the kernel recognizes. `complexity` is the
+// generic decisions key kernel invariants (and bundle policies) read, so
+// `complexity_hint` stays a first-class arg and wins over a `complexity`
+// supplied in `initial_decisions`. Every other opening decision a bundle
+// wants rides in `initial_decisions` under the bundle's own key — the kernel
+// names none of them. An absent blob / hint leaves the key out.
 function buildInitialDecisions(
   args: InitializeTaskArgs,
 ): Record<string, unknown> {
-  const decisions: Record<string, unknown> = {};
+  const decisions: Record<string, unknown> = { ...(args.initial_decisions ?? {}) };
   if (args.complexity_hint !== undefined) {
     decisions["complexity"] = args.complexity_hint;
-  }
-  if (args.tests_mode_hint !== undefined) {
-    decisions["tests_mode"] = args.tests_mode_hint;
   }
   return decisions;
 }

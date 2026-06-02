@@ -110,6 +110,48 @@ describe("dumpStateSql / applyRestoreStatements", () => {
     assert.equal(restored.task, quoted);
   });
 
+  it("restores a legacy dump still carrying the dropped `stack` column (generic projection)", async () => {
+    // A dump captured before the stack column was dropped: its
+    // CREATE TABLE IF NOT EXISTS carries `stack`, and its INSERT names it.
+    // Restoring into a migrated (no-stack) target must NOT fail — the CREATE
+    // no-ops against the existing table, and the INSERT is projected onto the
+    // live columns, dropping the retired one (and its value) before apply.
+    const target = await freshProject(false);
+    const legacyDump = [
+      "PRAGMA journal_mode=WAL;",
+      "PRAGMA wal_autocheckpoint=4000;",
+      "CREATE TABLE IF NOT EXISTS pipeline_state (id INTEGER PRIMARY KEY CHECK (id = 1), " +
+        "schema_version TEXT NOT NULL, project_dir TEXT NOT NULL, bundle TEXT NOT NULL, " +
+        "task_id TEXT, task TEXT NOT NULL, task_short TEXT, driver_state_id TEXT NOT NULL, " +
+        "owner_id TEXT, status TEXT NOT NULL, verdict TEXT, started_at TEXT NOT NULL, " +
+        "ended_at TEXT, gate_policies TEXT NOT NULL DEFAULT '{}', decisions TEXT, " +
+        "bundle_state TEXT, files_created TEXT, files_modified TEXT, stack TEXT, " +
+        "pipeline_violation TEXT, force_used INTEGER NOT NULL DEFAULT 0);",
+      "INSERT INTO pipeline_state (id, schema_version, project_dir, bundle, task_id, task, " +
+        "task_short, driver_state_id, owner_id, status, verdict, started_at, ended_at, " +
+        "gate_policies, decisions, bundle_state, files_created, files_modified, stack, " +
+        "pipeline_violation, force_used) VALUES (1, '3.0.0', '/tmp/legacy', 'code', " +
+        "'t-legacy-restore', 'legacy restore', NULL, 'd-legacy', NULL, 'in_progress', NULL, " +
+        "'2026-05-01T00:00:00.000Z', NULL, '{}', '{}', NULL, '[]', '[]', " +
+        '\'{"language":"typescript","project_type":"library"}\', NULL, 0);',
+      "INSERT INTO driver_state (id, flow_name, step_index, complete, pending_user_answer, scratch) " +
+        "VALUES (1, 'medium', 0, 0, NULL, '{}');",
+      "INSERT INTO pipeline_counters (id, agents_count, total_tokens_in, total_tokens_out, " +
+        "total_tokens_cached) VALUES (1, 0, 0, 0, 0);",
+    ].join("\n");
+
+    const statements = parseRestoreSql(legacyDump);
+    await withStateTransaction(target, NOW, (tx) => applyRestoreStatements(tx, statements));
+
+    // The restore did not throw on the retired column; the row's other data
+    // loads cleanly through the no-stack schema.
+    const restored = await withStateTransaction(target, NOW, loadState);
+    assert.equal(restored.task_id, "t-legacy-restore");
+    assert.equal(restored.task, "legacy restore");
+    assert.equal(restored.bundle, "code");
+    assert.equal(restored.status, "in_progress");
+  });
+
   it("emits the journal-mode PRAGMAs in the dump header", async () => {
     const source = await freshProject(true);
     await withStateTransaction(source, NOW, (tx) =>

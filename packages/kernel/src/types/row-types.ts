@@ -73,12 +73,3 @@ export interface PendingAgentRow {
   model: ModelName | null;
   started_at: NowToken;
 }
-
-export interface StackInfo {
-  language: string;
-  package_manager: string | null;
-  test_command: string | null;
-  lint_command: string | null;
-  build_command: string | null;
-  project_type: "frontend-app" | "backend" | "library" | "monorepo" | null;
-}

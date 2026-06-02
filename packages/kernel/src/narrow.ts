@@ -38,7 +38,6 @@ export function narrowStateForBundle(
     gate_policies: state.gate_policies,
     decisions: state.decisions,
     bundle_state: state.bundle_state,
-    stack: state.stack,
     pipeline_violation: state.pipeline_violation,
     force_used: state.force_used,
     agents_count: state.agents_count,

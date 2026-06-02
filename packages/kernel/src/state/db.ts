@@ -63,7 +63,7 @@ export function captureNow(): NowToken {
 // Tuning constants
 // ============================================================================
 
-export const KERNEL_SCHEMA_VERSION = "3.0.0";
+export const KERNEL_SCHEMA_VERSION = "3.1.0";
 export const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 
 // Per-project ceiling on borrowable connections. WAL serializes writers

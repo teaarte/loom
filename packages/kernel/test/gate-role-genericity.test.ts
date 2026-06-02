@@ -162,7 +162,6 @@ function buildState(projectDir: string, now: NowToken): PipelineState {
     gate_policies: {},
     decisions: {},
     bundle_state: null,
-    stack: null,
     pipeline_violation: null,
     force_used: false,
     agents_count: 0,

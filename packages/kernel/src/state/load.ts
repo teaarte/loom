@@ -15,7 +15,6 @@ import type {
   PendingAgentRow,
   PhaseRow,
   PhaseStatus,
-  StackInfo,
 } from "../types/row-types.js";
 import type { PipelineState } from "../types/state.js";
 import type { Transaction } from "../types/transaction.js";
@@ -151,7 +150,6 @@ export async function loadState(tx: Transaction): Promise<PipelineState> {
     ),
     decisions: parseJsonField<Record<string, unknown>>(ps.decisions, {}),
     bundle_state: parseJsonField<Record<string, unknown> | null>(ps.bundle_state, null),
-    stack: parseJsonField<StackInfo | null>(ps.stack, null),
     pipeline_violation:
       ps.pipeline_violation === null ? null : String(ps.pipeline_violation),
     force_used: Number(ps.force_used) !== 0,
@@ -203,7 +201,6 @@ interface PipelineStateRow {
   bundle_state: unknown;
   files_created: unknown;
   files_modified: unknown;
-  stack: unknown;
   pipeline_violation: unknown;
   force_used: unknown;
 }

@@ -361,7 +361,6 @@ describe("pipeline_resume", () => {
           task: "half-created",
           task_short: null,
           owner_id: "anonymous",
-          stack: null,
           client_idempotency_uuid: "uuid-halfcreate",
           phases: h.registry.bundle.phases,
           flow_name: h.registry.bundle.default_flow,

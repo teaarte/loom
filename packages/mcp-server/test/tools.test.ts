@@ -70,8 +70,8 @@ async function freshProject(opts?: {
       "INSERT INTO pipeline_state " +
         "(id, schema_version, project_dir, bundle, task_id, task, task_short, driver_state_id, owner_id, " +
         " status, verdict, started_at, ended_at, gate_policies, decisions, bundle_state, " +
-        " files_created, files_modified, stack, pipeline_violation, force_used) " +
-        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " files_created, files_modified, pipeline_violation, force_used) " +
+        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(
       "3.0.0",
       dir,
@@ -90,7 +90,6 @@ async function freshProject(opts?: {
       "{}",
       "[]",
       "[]",
-      null,
       null,
       0,
     );

@@ -11,6 +11,10 @@ export { default } from "./bundle.js";
 export { default as codeManifest } from "../manifest.js";
 export { CODE_BUNDLE_SENSITIVE_PATH_RULES } from "./sandbox-rules.js";
 export { codePolicyResolver } from "./policy-resolver.js";
+// The bundle-owned build-stack descriptor. Held here, not in the kernel, so
+// the substrate names no code-domain field; downstream consumers (and the
+// sandboxed executor ahead) read it from `bundle_state.stack`.
+export { isStackInfo, type StackInfo } from "./stack.js";
 export {
   codeBundleInvariants,
   invCode101,

@@ -111,6 +111,43 @@ describe("initializeTask", () => {
     assert.equal(ledger?.driver_state_id, ids.driver_state_id);
   });
 
+  it("seeds decisions from the generic initial_decisions blob; complexity_hint wins over a seeded complexity", async () => {
+    dir = await freshProject();
+    await withStateTransaction(dir, FIXED_NOW, (tx) =>
+      initializeTask(tx, {
+        project_dir: dir,
+        task: "seed opening decisions",
+        client_idempotency_uuid: "uuid-init-decisions",
+        complexity_hint: "complex",
+        // Arbitrary bundle-named keys ride through verbatim — the kernel
+        // names none of them. `complexity` here is overridden by the
+        // first-class complexity_hint.
+        initial_decisions: { tests_mode: "tdd", foo: 1, complexity: "simple" },
+        phases: ["context"],
+      }),
+    );
+
+    const state = await read(dir, (tx) => loadState(tx));
+    assert.equal(state.decisions["tests_mode"], "tdd");
+    assert.equal(state.decisions["foo"], 1);
+    assert.equal(state.decisions["complexity"], "complex");
+  });
+
+  it("leaves decisions empty when neither initial_decisions nor complexity_hint is supplied", async () => {
+    dir = await freshProject();
+    await withStateTransaction(dir, FIXED_NOW, (tx) =>
+      initializeTask(tx, {
+        project_dir: dir,
+        task: "no opening decisions",
+        client_idempotency_uuid: "uuid-no-decisions",
+        phases: ["context"],
+      }),
+    );
+
+    const state = await read(dir, (tx) => loadState(tx));
+    assert.deepEqual(state.decisions, {});
+  });
+
   it("replays the persisted identity for a repeat client UUID (no second row)", async () => {
     dir = await freshProject();
     const first = await withStateTransaction(dir, FIXED_NOW, (tx) =>

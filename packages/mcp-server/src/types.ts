@@ -11,7 +11,6 @@ import type {
   ExtensionKind,
   ExtensionManifest,
   PipelineStateView,
-  StackInfo,
 } from "@loomfsm/kernel";
 import type { SpawnRequest, TransportResponse } from "@loomfsm/transport-types";
 
@@ -133,8 +132,9 @@ export interface RunTaskInput {
   policy_preset?: string;
   gate_policies?: Record<string, string>;
   complexity_hint?: "simple" | "medium" | "complex";
-  tests_mode_hint?: "tdd" | "regression-only";
-  stack?: StackInfo;
+  // Generic opening-decisions seed forwarded verbatim to task-create; the
+  // transport names none of its keys.
+  initial_decisions?: Record<string, unknown>;
   owner_id?: string;
   // Opaque, unverified caller string — captured in audit only (see
   // pipeline_meta). Never an identity claim.

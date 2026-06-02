@@ -28,6 +28,7 @@ import type {
 
 import { codeBundleInvariants } from "./invariants.js";
 import { codePolicyResolver } from "./policy-resolver.js";
+import { isStackInfo, type StackInfo } from "./stack.js";
 
 // ============================================================================
 // Decision helpers — pure reads over the narrow state projection
@@ -74,6 +75,24 @@ async function writeClassifyDecisions(
     : "regression-only";
   ctx.tx.set_decision?.("complexity", complexity);
   ctx.tx.set_decision?.("tests_mode", tests_mode);
+}
+
+// Relocate the classifier's stack pick into the bundle-owned slot. The
+// classifier agent emits a `stack` object in its result header; the kernel's
+// generic decisions-merge lands it in `decisions.stack` (the substrate names no
+// such key). This step — positional, right after `classify-agent` in every
+// flow — copies it to `bundle_state.stack`, the canonical bundle-owned home
+// downstream agents (and, ahead, the sandboxed executor) read from the narrow
+// view. No emission / a non-object leaves bundle_state untouched. Idempotent:
+// re-running writes the same value.
+async function relocateStackToBundleState(
+  state: BundleStateView,
+  ctx: StageContext,
+): Promise<void> {
+  const picked = state.decisions["stack"];
+  if (!isStackInfo(picked)) return;
+  const stack: StackInfo = picked;
+  ctx.tx.set_bundle_state_field?.("stack", stack);
 }
 
 // Derive the review-shaping flags from the substrate's own file accounting
@@ -432,9 +451,12 @@ export default defineBundle({
   // classifier-agent's `complexity` has merged into decisions (right after
   // `classify-agent`), the kernel re-selects the flow ONCE: a `simple`
   // task drops to the lean flow (single reviewer, no fanout), `complex`
-  // takes the full panel. The three flows share the
-  // [initialize, classify, classify-agent] prefix so the switch keeps
-  // step_index aligned (the loader verifies this).
+  // takes the full panel. The required shared prefix is
+  // [initialize, classify, classify-agent] (indices 0–2, up to after_stage)
+  // so the switch keeps step_index aligned (the loader verifies this). The
+  // `stack-to-bundle-state` step sits at index 3 in every flow — the switch
+  // boundary itself — and is identical across them, so it runs once on
+  // whichever flow the switch lands on.
   complexity_flows: {
     decision_key: "complexity",
     after_stage: "classify-agent",
@@ -579,6 +601,18 @@ export default defineBundle({
       run: writeClassifyDecisions,
     },
     "classify-agent": { kind: "spawn", name: "classify-agent", phase: "context", agent: "classifier" },
+    // Move the classifier's stack pick from the generic decisions map into the
+    // bundle-owned bundle_state slot. Positional at index 3 in every flow — the
+    // same boundary the complexity switch fires at, so the three flows stay
+    // prefix-aligned (the stage is identical across them).
+    "stack-to-bundle-state": {
+      kind: "step",
+      name: "stack-to-bundle-state",
+      phase: "context",
+      position: "positional",
+      effects: [{ kind: "bundle_state.set", path: "stack" }],
+      run: relocateStackToBundleState,
+    },
     "gate-classify": { kind: "gate", name: "gate-classify", phase: "context", message: gateClassifyMsg, valid_answers: classifyGateAnswers },
     enrich: { kind: "spawn", name: "enrich", phase: "context", agent: "code-analyzer" },
     "context-verify": { kind: "spawn", name: "context-verify", phase: "context", agent: "context-doc-verifier" },
@@ -716,19 +750,19 @@ export default defineBundle({
     // classify-agent] prefix with the other flows so the complexity switch
     // lands here without misaligning step_index.
     simple: [
-      "initialize", "classify", "classify-agent",
+      "initialize", "classify", "classify-agent", "stack-to-bundle-state",
       "plan", "implement", "git-diff", "pre-review",
       "review-light", "final-checks", "gate-final", "finish-summary", "finalize",
     ],
     medium: [
-      "initialize", "classify", "classify-agent", "gate-classify",
+      "initialize", "classify", "classify-agent", "stack-to-bundle-state", "gate-classify",
       "enrich", "plan", "plan-review", "gate-plan",
       "git-stash", "implement", "git-diff", "pre-review", "review",
       "adjudicate", "reconcile", "iterate", "final-checks", "test-verify",
       "gate-final", "finish-summary", "finalize",
     ],
     complex: [
-      "initialize", "classify", "classify-agent", "gate-classify",
+      "initialize", "classify", "classify-agent", "stack-to-bundle-state", "gate-classify",
       "enrich", "context-verify", "architect",
       "plan", "plan-review", "gate-plan",
       "test-first", "git-stash", "implement", "git-diff", "pre-review", "review",

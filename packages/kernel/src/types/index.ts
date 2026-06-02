@@ -3,7 +3,7 @@
 // Source modules are organized by topic:
 //   now.ts            — NowToken (replay-safe wall-clock)
 //   vocabulary.ts     — open-enum primitive + kernel vocabulary map
-//   row-types.ts      — Phase / gate / verdict row shapes + StackInfo
+//   row-types.ts      — Phase / gate / verdict / pending-agent row shapes
 //   state.ts          — PipelineState + BundleStateView projection
 //   policy.ts         — gate-policy primitive + context + result
 //   user-answer.ts    — gate reply protocol + answer schema

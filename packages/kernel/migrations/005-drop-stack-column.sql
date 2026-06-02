@@ -1,0 +1,17 @@
+-- Drop the unused `stack` column from pipeline_state.
+--
+-- The column held a domain-specific build-stack descriptor that NOTHING in
+-- the substrate ever consumed (no invariant, guard, FSM step, or policy read
+-- it) and nothing wrote post-create — a bundle that needs to track a build
+-- stack now keeps it in the generic `bundle_state` blob it already owns. This
+-- removes a domain-named field from the substrate's row surface.
+--
+-- Applies on every store: a fresh DB ran 001 (which created the column), then
+-- this drops it; an existing store from before this migration drops it in
+-- place. Both converge on the same stack-free schema.
+--
+-- Any value already in the column is discarded, not migrated: it was unread
+-- and is re-derivable downstream, and copying it elsewhere would name the
+-- consuming key here in the substrate's own migration. SQLite drops the
+-- column cleanly despite its inline json_valid CHECK (no table rebuild).
+ALTER TABLE pipeline_state DROP COLUMN stack;

@@ -28,6 +28,8 @@
 
 import type { Transaction } from "../types/transaction.js";
 
+import { extractInsertTable, KERNEL_OWNED_TABLES } from "./ddl-allowlist.js";
+
 // Order matters for the foreign-key edge agent_records.phase →
 // phases(name): phases must be created and populated before agent_records.
 const DUMP_TABLES: readonly string[] = [
@@ -111,14 +113,154 @@ export async function dumpStateSql(tx: Transaction): Promise<string> {
 // switch is illegal inside the BEGIN IMMEDIATE this runs under. They are
 // header hints for an external consumer; the kernel DB already sets both
 // at open, so skipping them leaves the restore round-trip correct.
+//
+// Forward-compat column projection: an INSERT into a kernel-owned table is
+// reshaped against the LIVE schema (PRAGMA table_info) — any column the dump
+// names that the current table no longer has is dropped along with its value.
+// A dump captured before a column-removal migration carries the retired
+// column in its INSERT; the dump's own `CREATE TABLE IF NOT EXISTS` no-ops
+// against the already-migrated table, so without this the stale column would
+// hit a "no such column" on apply. The projection is generic — it names no
+// column — so it covers ANY past or future column drop, not one field. Adding
+// a column is the symmetric case and needs nothing: an older dump simply omits
+// the new column and the table default fills it.
 export async function applyRestoreStatements(
   tx: Transaction,
   statements: string[],
 ): Promise<void> {
+  const liveColsByTable = new Map<string, Set<string>>();
   for (const stmt of statements) {
     if (/^PRAGMA\b/i.test(stmt)) continue;
-    await tx.exec(stmt);
+    const toRun = /^INSERT\s+INTO\b/i.test(stmt)
+      ? await projectInsertToLiveSchema(tx, stmt, liveColsByTable)
+      : stmt;
+    await tx.exec(toRun);
   }
+}
+
+// Reshape an `INSERT INTO <kernel table> (cols) VALUES (vals)` so its column
+// list is the intersection of the dump's columns and the live table's
+// columns, in the dump's order. Returns the statement unchanged when it is
+// not a recognizable single-row INSERT into a kernel-owned table, when no
+// column needs dropping, or when the parse is ambiguous (a degenerate shape
+// is left to fail loud rather than silently rewritten wrong).
+async function projectInsertToLiveSchema(
+  tx: Transaction,
+  stmt: string,
+  cache: Map<string, Set<string>>,
+): Promise<string> {
+  const table = extractInsertTable(stmt);
+  if (table === null || !KERNEL_OWNED_TABLES.has(table)) return stmt;
+
+  let liveCols = cache.get(table);
+  if (liveCols === undefined) {
+    // table is from the validated kernel-owned set, never caller input.
+    const rows = await tx.queryAll<{ name: unknown }>(`PRAGMA table_info(${table})`);
+    liveCols = new Set(rows.map((r) => String(r.name)));
+    cache.set(table, liveCols);
+  }
+
+  const open1 = stmt.indexOf("(");
+  if (open1 === -1) return stmt;
+  const close1 = matchParen(stmt, open1);
+  if (close1 === -1) return stmt;
+  const valuesKw = /^\s*VALUES\s*\(/i.exec(stmt.slice(close1 + 1));
+  if (valuesKw === null) return stmt;
+  const open2 = close1 + valuesKw[0].length; // index of the VALUES '('
+  const close2 = matchParen(stmt, open2);
+  if (close2 === -1) return stmt;
+
+  const cols = splitListItems(stmt.slice(open1 + 1, close1)).map(stripIdentifier);
+  const vals = splitListItems(stmt.slice(open2 + 1, close2));
+  if (cols.length === 0 || cols.length !== vals.length) return stmt;
+
+  const keep: number[] = [];
+  for (let i = 0; i < cols.length; i += 1) {
+    if (liveCols.has(cols[i] as string)) keep.push(i);
+  }
+  if (keep.length === cols.length || keep.length === 0) return stmt;
+
+  const head = stmt.slice(0, open1);
+  const tail = stmt.slice(close2 + 1);
+  const newCols = keep.map((i) => cols[i]).join(", ");
+  const newVals = keep.map((i) => vals[i]).join(", ");
+  return `${head}(${newCols}) VALUES (${newVals})${tail}`;
+}
+
+// Index of the `)` that closes the `(` at `open`, honoring single-quote
+// string literals (with the SQL `''` escape) so a paren inside a value does
+// not throw off the depth count. -1 when unbalanced.
+function matchParen(s: string, open: number): number {
+  let depth = 0;
+  let i = open;
+  const n = s.length;
+  while (i < n) {
+    const ch = s[i] as string;
+    if (ch === "'") {
+      i += 1;
+      while (i < n) {
+        const c = s[i] as string;
+        i += 1;
+        if (c === "'") {
+          if (i < n && s[i] === "'") { i += 1; continue; }
+          break;
+        }
+      }
+      continue;
+    }
+    if (ch === "(") depth += 1;
+    else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+    i += 1;
+  }
+  return -1;
+}
+
+// Split a parenthesized list body on top-level commas, honoring single-quote
+// string literals (with the `''` escape) so a comma inside a value does not
+// split it. Trims each item; mirrors the scanner in ddl-allowlist.ts.
+function splitListItems(body: string): string[] {
+  const items: string[] = [];
+  let buf = "";
+  let i = 0;
+  const n = body.length;
+  while (i < n) {
+    const ch = body[i] as string;
+    if (ch === "'") {
+      buf += ch;
+      i += 1;
+      while (i < n) {
+        const c = body[i] as string;
+        buf += c;
+        i += 1;
+        if (c === "'") {
+          if (i < n && body[i] === "'") { buf += "'"; i += 1; continue; }
+          break;
+        }
+      }
+      continue;
+    }
+    if (ch === ",") {
+      items.push(buf.trim());
+      buf = "";
+      i += 1;
+      continue;
+    }
+    buf += ch;
+    i += 1;
+  }
+  items.push(buf.trim());
+  return items;
+}
+
+// Strip an optional surrounding quote/backtick pair from a column identifier.
+// The kernel dump emits bare identifiers; this is defensive only.
+function stripIdentifier(raw: string): string {
+  const t = raw.trim();
+  if (t.length >= 2 && /^(["'`]).*\1$/.test(t)) return t.slice(1, -1);
+  return t;
 }
 
 async function tableDdl(tx: Transaction, table: string): Promise<string | null> {

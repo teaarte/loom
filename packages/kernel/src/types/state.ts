@@ -12,7 +12,6 @@ import type {
   GateRow,
   PendingAgentRow,
   PhaseRow,
-  StackInfo,
 } from "./row-types.js";
 
 export interface PipelineState {
@@ -37,7 +36,6 @@ export interface PipelineState {
   gate_policies: Partial<Record<GateRole, PolicyName>>;
   decisions: Record<string, unknown>;
   bundle_state: Record<string, unknown> | null;
-  stack: StackInfo | null;
   pipeline_violation: string | null;
   force_used: boolean;
   agents_count: number;
@@ -93,7 +91,6 @@ export interface BundleStateView {
   gate_policies: Partial<Record<GateRole, PolicyName>>;
   decisions: Record<string, unknown>;
   bundle_state: Record<string, unknown> | null;
-  stack: StackInfo | null;
   pipeline_violation: string | null;
   force_used: boolean;
   agents_count: number;

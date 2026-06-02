@@ -374,7 +374,6 @@ function inMemoryState(dir: string): PipelineState {
     gate_policies: {} as Record<GateRole, PolicyName>,
     decisions: {},
     bundle_state: null,
-    stack: null,
     pipeline_violation: null,
     force_used: false,
     agents_count: 0,

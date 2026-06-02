@@ -27,7 +27,6 @@ function fullPipelineState(): PipelineState {
     gate_policies: {} as Record<GateRole, PolicyName>,
     decisions: { complexity: "medium" },
     bundle_state: { extra: 1 },
-    stack: null,
     pipeline_violation: null,
     force_used: false,
     agents_count: 3,
@@ -91,7 +90,6 @@ describe("narrowStateForBundle", () => {
     assert.equal(view.gate_policies, state.gate_policies);
     assert.equal(view.decisions, state.decisions);
     assert.equal(view.bundle_state, state.bundle_state);
-    assert.equal(view.stack, state.stack);
     assert.equal(view.pipeline_violation, state.pipeline_violation);
     assert.equal(view.force_used, state.force_used);
     assert.equal(view.agents_count, state.agents_count);

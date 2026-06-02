@@ -36,7 +36,6 @@ import {
   type ProviderShuttleIntent,
   type RecoveryChoice,
   type Registry,
-  type StackInfo,
   type UserAnswerSchema,
 } from "@loomfsm/kernel";
 import type { TransportResponse } from "@loomfsm/transport-types";
@@ -87,8 +86,9 @@ export interface DriveOptions {
   policy_preset?: string;
   gate_policies?: Partial<Record<GateRole, PolicyName>>;
   complexity_hint?: "simple" | "medium" | "complex";
-  tests_mode_hint?: "tdd" | "regression-only";
-  stack?: StackInfo | null;
+  // Generic opening-decisions seed; the loop names none of its keys and
+  // passes it straight through to the kernel's task-create.
+  initial_decisions?: Record<string, unknown>;
   owner_id?: string;
   // Reuse VERBATIM on a retry of the same logical drive; minted per call
   // when absent. Keys the task-create idempotency ledger.
@@ -488,8 +488,7 @@ function createArgs(
     ...(opts.policy_preset !== undefined ? { policy_preset: opts.policy_preset } : {}),
     ...(opts.gate_policies !== undefined ? { gate_policies: opts.gate_policies } : {}),
     ...(opts.complexity_hint !== undefined ? { complexity_hint: opts.complexity_hint } : {}),
-    ...(opts.tests_mode_hint !== undefined ? { tests_mode_hint: opts.tests_mode_hint } : {}),
-    ...(opts.stack !== undefined ? { stack: opts.stack } : {}),
+    ...(opts.initial_decisions !== undefined ? { initial_decisions: opts.initial_decisions } : {}),
     ...(opts.identifier !== undefined ? { identifier: opts.identifier } : {}),
   };
 }

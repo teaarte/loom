@@ -13,9 +13,9 @@
 //     (state, agent, registry). It substitutes the context-scoped
 //     variables into the materialized body, appends a deterministic
 //     `## Spawn context` block (the task, its canonical ids, the project,
-//     the decisions taken so far, the detected stack, the flow's active
-//     agents, and the bundle's pre-materialized context assets scoped to
-//     this agent), and returns the prompt string. No filesystem, no clock
+//     the decisions taken so far, the flow's active agents, and the
+//     bundle's pre-materialized context assets scoped to this agent), and
+//     returns the prompt string. No filesystem, no clock
 //     — so the spawn interpreter keeps its synchronous shape and the tick
 //     stays inside the replay contract.
 //
@@ -311,10 +311,10 @@ function appendSpawnContext(
 // Assemble the `## Spawn context` block. Pure, synchronous, and byte-stable
 // for a given (state, agent, registry): no clock, no Map iteration-order
 // dependence (decision keys sorted, active agents sorted). The first
-// sections draw from `state` alone (task / ids / project / decisions /
-// detected stack); the remainder draw from the registry — the active-agent
-// roster for this flow and the bundle's materialized context assets, scoped
-// to the spawning agent. Subheading names match what the agent templates
+// sections draw from `state` alone (task / ids / project / decisions); the
+// remainder draw from the registry — the active-agent roster for this flow
+// and the bundle's materialized context assets, scoped to the spawning
+// agent. Subheading names match what the agent templates
 // are told to read ("Canonical identifiers", "Task description", and the
 // bundle-chosen asset headings), so an instruction to "copy the task_id
 // from the 'Canonical identifiers' section" resolves to where it lands.

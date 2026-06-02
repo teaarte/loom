@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -107,8 +107,9 @@ describe("openDb", () => {
       "002-installed-extensions",
       "003-bypass-markers",
       "004-finding-supersede",
+      "005-drop-stack-column",
     ]);
-    for (const r of rows) assert.equal(r.version, "3.0.0");
+    for (const r of rows) assert.equal(r.version, "3.1.0");
   });
 
   it("returns the same Database instance across calls (singleton)", () => {
@@ -137,7 +138,72 @@ describe("migration runner — idempotent", () => {
       "002-installed-extensions",
       "003-bypass-markers",
       "004-finding-supersede",
+      "005-drop-stack-column",
     ]);
+  });
+});
+
+describe("migration 005 — drop stack column", () => {
+  let projectDir: string;
+  beforeEach(() => { projectDir = freshProject(); });
+  afterEach(() => cleanup(projectDir));
+
+  it("a fresh store has no `stack` column in pipeline_state", () => {
+    const db = openDb(projectDir);
+    const cols = (db.prepare("PRAGMA table_info(pipeline_state)").all() as { name: string }[])
+      .map((r) => r.name);
+    assert.ok(!cols.includes("stack"), "005 must leave a fresh store without the stack column");
+  });
+
+  it("migrates a pre-005 store forward: drops stack, preserves the row's other data", () => {
+    // Hand-build a store at the pre-005 schema (pipeline_state carries the
+    // stack column) with 001–004 already recorded, so the runner applies
+    // ONLY 005 when the pool opens it. A populated stack value is discarded;
+    // every other column survives the drop.
+    const dbPath = join(projectDir, ".claude", "state.db");
+    mkdirSync(join(projectDir, ".claude"), { recursive: true });
+    const raw = new DatabaseSync(dbPath);
+    raw.exec(
+      "CREATE TABLE kernel_schema_versions (component TEXT PRIMARY KEY, " +
+        "version TEXT NOT NULL, applied_at TEXT NOT NULL)",
+    );
+    for (const c of [
+      "001-initial",
+      "002-installed-extensions",
+      "003-bypass-markers",
+      "004-finding-supersede",
+    ]) {
+      raw
+        .prepare("INSERT INTO kernel_schema_versions VALUES (?, ?, ?)")
+        .run(c, "3.0.0", "2026-06-02T00:00:00.000Z");
+    }
+    raw.exec(
+      "CREATE TABLE pipeline_state (" +
+        "id INTEGER PRIMARY KEY CHECK (id = 1), schema_version TEXT NOT NULL, " +
+        "task_id TEXT, task TEXT NOT NULL, bundle TEXT NOT NULL, " +
+        "stack TEXT CHECK (stack IS NULL OR json_valid(stack)), " +
+        "force_used INTEGER NOT NULL DEFAULT 0)",
+    );
+    raw
+      .prepare(
+        "INSERT INTO pipeline_state (id, schema_version, task_id, task, bundle, stack, force_used) " +
+          "VALUES (1, ?, ?, ?, ?, ?, 0)",
+      )
+      .run("3.0.0", "t-legacy", "legacy task", "code", JSON.stringify({ language: "typescript" }));
+    raw.close();
+
+    // Opening the pool runs the pending 005 against the existing store.
+    const db = openDb(projectDir);
+    const cols = (db.prepare("PRAGMA table_info(pipeline_state)").all() as { name: string }[])
+      .map((r) => r.name);
+    assert.ok(!cols.includes("stack"), "005 must drop the stack column on an existing store");
+
+    const row = db
+      .prepare("SELECT task_id, task, bundle FROM pipeline_state WHERE id = 1")
+      .get() as { task_id: string; task: string; bundle: string };
+    assert.equal(row.task_id, "t-legacy");
+    assert.equal(row.task, "legacy task");
+    assert.equal(row.bundle, "code");
   });
 });
 
@@ -286,7 +352,7 @@ describe("loadState — rich snapshot materialization", () => {
         "UPDATE pipeline_state SET " +
           "task_id = ?, task_short = ?, owner_id = ?, " +
           "gate_policies = ?, decisions = ?, bundle_state = ?, " +
-          "files_created = ?, files_modified = ?, stack = ?, " +
+          "files_created = ?, files_modified = ?, " +
           "pipeline_violation = ?, force_used = ? WHERE id = 1",
         [
           "t-2026-05-28-fixture",
@@ -297,14 +363,6 @@ describe("loadState — rich snapshot materialization", () => {
           JSON.stringify({ extra: 42 }),
           JSON.stringify(["src/new.ts"]),
           JSON.stringify(["src/old.ts", "src/other.ts"]),
-          JSON.stringify({
-            language: "typescript",
-            package_manager: "pnpm",
-            test_command: "pnpm test",
-            lint_command: null,
-            build_command: "pnpm build",
-            project_type: "library",
-          }),
           "pending-cancel",
           1,
         ],
@@ -398,14 +456,6 @@ describe("loadState — rich snapshot materialization", () => {
       assert.deepEqual(state.bundle_state, { extra: 42 });
       assert.deepEqual(state.files_created, ["src/new.ts"]);
       assert.deepEqual(state.files_modified, ["src/old.ts", "src/other.ts"]);
-      assert.deepEqual(state.stack, {
-        language: "typescript",
-        package_manager: "pnpm",
-        test_command: "pnpm test",
-        lint_command: null,
-        build_command: "pnpm build",
-        project_type: "library",
-      });
 
       // Counters
       assert.equal(state.agents_count, 7);

@@ -193,7 +193,7 @@ function extractIndexTable(stmt: string): string | null {
   return m && m[1] !== undefined ? m[1] : null;
 }
 
-function extractInsertTable(stmt: string): string | null {
+export function extractInsertTable(stmt: string): string | null {
   const m = /^INSERT\s+INTO\s+["'`]?([A-Za-z_][A-Za-z0-9_]*)/i.exec(stmt);
   return m && m[1] !== undefined ? m[1] : null;
 }

@@ -205,8 +205,8 @@ describe("validateManifest — kernel_api range", () => {
   beforeEach(() => { projectDir = freshProject(); });
   afterEach(() => cleanup(projectDir));
 
-  it("accepts exact match 3.0.0", async () => {
-    const m = makeValidManifest({ requires: { kernel_api: "3.0.0" } });
+  it("accepts exact match 3.1.0", async () => {
+    const m = makeValidManifest({ requires: { kernel_api: "3.1.0" } });
     const now = captureNow();
     const report = await reconcileExtensions({
       manifests: [asDiscovered(m)],
@@ -232,7 +232,7 @@ describe("validateManifest — kernel_api range", () => {
     }
   });
 
-  it("rejects ^4.0 against KERNEL_SCHEMA_VERSION 3.0.0", async () => {
+  it("rejects ^4.0 against KERNEL_SCHEMA_VERSION 3.1.0", async () => {
     const m = makeValidManifest({ requires: { kernel_api: "^4.0" } });
     const report = await reconcileExtensions({
       manifests: [asDiscovered(m)],
@@ -240,7 +240,7 @@ describe("validateManifest — kernel_api range", () => {
       now: captureNow(),
     });
     assert.equal(report.failed.length, 1);
-    assert.equal(report.failed[0]?.failure_reason, "kernel-api-mismatch: ^4.0 vs 3.0.0");
+    assert.equal(report.failed[0]?.failure_reason, "kernel-api-mismatch: ^4.0 vs 3.1.0");
     const row = readRow(projectDir, "bundle:code");
     assert.equal(row?.status, "failed");
   });
@@ -622,19 +622,19 @@ describe("satisfiesRange — semver edges via reconcileExtensions", () => {
     assert.equal(report.failed.length, 1, `range ${range} should fail`);
     assert.equal(
       report.failed[0]?.failure_reason,
-      `kernel-api-mismatch: ${range} vs 3.0.0`,
+      `kernel-api-mismatch: ${range} vs 3.1.0`,
     );
   }
 
-  it("caret with patch above kernel fails (^3.0.5 vs 3.0.0)", async () => {
-    await assertRangeFails("^3.0.5");
+  it("caret with patch above kernel fails (^3.1.5 vs 3.1.0)", async () => {
+    await assertRangeFails("^3.1.5");
   });
 
-  it("caret with minor above kernel fails (^3.1 vs 3.0.0)", async () => {
-    await assertRangeFails("^3.1");
+  it("caret with minor above kernel fails (^3.2 vs 3.1.0)", async () => {
+    await assertRangeFails("^3.2");
   });
 
-  it("exact mismatch fails (3.0.1 vs 3.0.0)", async () => {
+  it("exact mismatch fails (3.0.1 vs 3.1.0)", async () => {
     await assertRangeFails("3.0.1");
   });
 

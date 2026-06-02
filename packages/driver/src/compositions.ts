@@ -41,7 +41,6 @@ import {
   type PolicyName,
   type RecoveryChoice,
   type Registry,
-  type StackInfo,
 } from "@loomfsm/kernel";
 import type { TransportResponse } from "@loomfsm/transport-types";
 
@@ -61,8 +60,9 @@ export interface CreateAndStartArgs {
   policy_preset?: string;
   gate_policies?: Partial<Record<GateRole, PolicyName>>;
   complexity_hint?: "simple" | "medium" | "complex";
-  tests_mode_hint?: "tdd" | "regression-only";
-  stack?: StackInfo | null;
+  // Generic opening-decisions seed passed straight to the kernel; the
+  // driver names none of its keys.
+  initial_decisions?: Record<string, unknown>;
   // Forensic-only caller identity; the kernel never branches on it.
   identifier?: string;
 }
@@ -99,8 +99,7 @@ export async function createAndStart(
       ...(args.policy_preset !== undefined ? { policy_preset: args.policy_preset } : {}),
       ...(args.gate_policies !== undefined ? { gate_policies: args.gate_policies } : {}),
       ...(args.complexity_hint !== undefined ? { complexity_hint: args.complexity_hint } : {}),
-      ...(args.tests_mode_hint !== undefined ? { tests_mode_hint: args.tests_mode_hint } : {}),
-      stack: args.stack ?? null,
+      ...(args.initial_decisions !== undefined ? { initial_decisions: args.initial_decisions } : {}),
       client_idempotency_uuid: args.client_idempotency_uuid,
       phases: args.registry.bundle.phases,
       flow_name: args.registry.bundle.default_flow,

@@ -35,6 +35,9 @@ importers:
       '@loomfsm/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
+      '@loomfsm/server':
+        specifier: workspace:*
+        version: link:../server
 
   packages/daemon:
     dependencies:
@@ -137,6 +140,18 @@ importers:
       openai:
         specifier: ^6.0.0
         version: 6.39.0(zod@4.4.3)
+
+  packages/server:
+    dependencies:
+      '@loomfsm/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@loomfsm/driver':
+        specifier: workspace:*
+        version: link:../driver
+      '@loomfsm/kernel':
+        specifier: workspace:*
+        version: link:../kernel
 
   packages/transport-types:
     dependencies:

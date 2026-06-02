@@ -8,6 +8,7 @@ import { daemon } from "./commands/daemon.js";
 import { init } from "./commands/init.js";
 import { history, reset } from "./commands/reset.js";
 import { runTask } from "./commands/run.js";
+import { serve } from "./commands/serve.js";
 import { setup } from "./commands/setup.js";
 import { status } from "./commands/status.js";
 import { processEnv, type CliEnv } from "./lib/env.js";
@@ -62,6 +63,18 @@ Usage:
   loom daemon status [path]
       Show whether a daemon is running and where its task sits.
 
+  loom serve [--project <dir>]... [--host h] [--port p] [--token t] [--detach]
+      Run a network control plane: supervise a fleet of projects from one
+      process (each over the same headless loop) and expose them over HTTP on
+      loopback — submit a task, read status, answer a gate, tail the log. A
+      dashboard is served at the bind address. Re-attaches every registered
+      project on start; a token makes the API require a bearer header.
+  loom serve stop
+      Signal a running control plane to stop gracefully.
+  loom serve status
+      Show whether the control plane is running, where it binds, and how many
+      projects it supervises.
+
   loom --help | --version
 
 Typical first run:
@@ -100,6 +113,8 @@ export function run(argv: string[], env: CliEnv = processEnv()): number | Promis
       return runTask(rest, env);
     case "daemon":
       return daemon(rest, env);
+    case "serve":
+      return serve(rest, env);
     case "allowlist": {
       const [sub, ...subRest] = rest;
       if (sub === "add") return allowlistAdd(subRest, env);

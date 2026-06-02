@@ -1,0 +1,166 @@
+// `startControlPlane` — assemble and run the whole control plane: claim the
+// server lock, build the supervisor registry, re-attach the durable
+// project set (and any `--project` dirs), start the HTTP transport on
+// loopback, and wire graceful shutdown.
+//
+// It is bundle/provider-agnostic, exactly like `drive()` and the daemon: the
+// caller injects `resolveRegistry` (the bundle/provider choice) and
+// `buildExecutor` (how a spawn runs). The CLI's `loom serve` is the thin
+// wrapper that injects `assembleRegistry` + the `claude -p` factory, mirroring
+// `loom run` / `loom daemon`.
+
+import type { AddressInfo } from "node:net";
+
+import {
+  systemClock,
+  type Clock,
+  type DaemonLogger,
+  type ExecutorBuildContext,
+  type RetryPolicy,
+  type WakeOptions,
+} from "@loomfsm/daemon";
+import type { Executor } from "@loomfsm/driver";
+import type { Registry } from "@loomfsm/kernel";
+import type { Server } from "node:http";
+
+import { createControlServer } from "./http.js";
+import { acquireServerLock, type ServerHandle } from "./process-control.js";
+import { SupervisorRegistry, type ProjectListing } from "./registry.js";
+
+export const DEFAULT_HOST = "127.0.0.1";
+export const DEFAULT_PORT = 4317;
+
+export interface ControlPlaneOptions {
+  stateDir: string;
+  host?: string;
+  port?: number;
+  token?: string;
+  // Initial projects to supervise (in addition to the durable set).
+  projects?: string[];
+
+  resolveRegistry: (projectDir: string) => Promise<Registry> | Registry;
+  buildExecutor: (projectDir: string, ctx: ExecutorBuildContext) => Executor;
+  makeLogger?: (projectDir: string) => DaemonLogger;
+  max_concurrent_spawns?: number;
+  retry_policy?: RetryPolicy;
+  wake?: WakeOptions;
+  clock?: Clock;
+  // Idle-poll cadence each watcher uses between tasks (default 5s).
+  watch_idle_ms?: number;
+
+  // Shutdown trigger (the CLI wires SIGINT/SIGTERM; a test drives it directly).
+  signal?: AbortSignal;
+  // Test seam for the advisory lock's pid.
+  pid?: number;
+  // Operational logging for the server lifecycle (NOT per-project audit).
+  serverLog?: (line: string) => void;
+}
+
+export interface ControlPlaneHandle {
+  host: string;
+  port: number;
+  registry: SupervisorRegistry;
+  server: Server;
+  attached: ProjectListing[];
+  // Stop everything: drain the fleet, close the socket, release the lock.
+  // Idempotent.
+  stop(): Promise<void>;
+  // Resolves once a `stop()` has fully completed (the await-to-exit handle).
+  closed: Promise<void>;
+}
+
+export async function startControlPlane(opts: ControlPlaneOptions): Promise<ControlPlaneHandle> {
+  const host = opts.host ?? DEFAULT_HOST;
+  const desiredPort = opts.port ?? DEFAULT_PORT;
+  const clock = opts.clock ?? systemClock;
+  const log = opts.serverLog ?? ((): void => {});
+
+  // Claim the control plane (refuses if a live one already owns this state dir).
+  const lock: ServerHandle = acquireServerLock(opts.stateDir, host, desiredPort, {
+    clock,
+    ...(opts.pid !== undefined ? { pid: opts.pid } : {}),
+  });
+
+  const registry = new SupervisorRegistry({
+    resolveRegistry: opts.resolveRegistry,
+    buildExecutor: opts.buildExecutor,
+    stateDir: opts.stateDir,
+    ...(opts.makeLogger !== undefined ? { makeLogger: opts.makeLogger } : {}),
+    ...(opts.max_concurrent_spawns !== undefined
+      ? { max_concurrent_spawns: opts.max_concurrent_spawns }
+      : {}),
+    ...(opts.retry_policy !== undefined ? { retry_policy: opts.retry_policy } : {}),
+    ...(opts.wake !== undefined ? { wake: opts.wake } : {}),
+    ...(opts.watch_idle_ms !== undefined ? { watch_idle_ms: opts.watch_idle_ms } : {}),
+    clock,
+  });
+
+  // Re-attach the durable set first (the fleet-wide recovery head), then add
+  // any explicitly-requested projects (idempotent — a dir in both is one
+  // watcher).
+  const attached = await registry.recover();
+  for (const dir of opts.projects ?? []) {
+    try {
+      attached.push(registry.register(dir));
+    } catch (err) {
+      log(`loom serve: could not supervise ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  const server = createControlServer({
+    registry,
+    resolveRegistry: opts.resolveRegistry,
+    ...(opts.token !== undefined && opts.token.length > 0 ? { token: opts.token } : {}),
+    onError: (err) => log(`loom serve: internal error: ${err instanceof Error ? err.message : String(err)}`),
+  });
+
+  const port = await listen(server, desiredPort, host);
+  lock.update("serving", registry.size());
+
+  // ----- graceful shutdown -----
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((r) => {
+    resolveClosed = r;
+  });
+  let stopping: Promise<void> | null = null;
+  const stop = (): Promise<void> => {
+    if (stopping !== null) return stopping;
+    stopping = (async () => {
+      lock.update("stopping", registry.size());
+      await registry.shutdown();
+      await closeServer(server);
+      lock.release();
+      log("loom serve: stopped");
+      resolveClosed();
+    })();
+    return stopping;
+  };
+
+  if (opts.signal !== undefined) {
+    if (opts.signal.aborted) void stop();
+    else opts.signal.addEventListener("abort", () => void stop(), { once: true });
+  }
+
+  return { host, port, registry, server, attached, stop, closed };
+}
+
+function listen(server: Server, port: number, host: string): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.removeListener("error", reject);
+      const addr = server.address() as AddressInfo | null;
+      resolve(addr !== null && typeof addr === "object" ? addr.port : port);
+    });
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    // `close` waits for open connections (an SSE stream) to end; the registry
+    // shutdown already aborted the watchers, and the dashboard's EventSource
+    // closes on the next failed tick. Nudge any idle keep-alives shut.
+    server.closeAllConnections?.();
+  });
+}

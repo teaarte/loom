@@ -1,6 +1,6 @@
 # Loom — Whitepaper
 
-> A substrate for multi-agent LLM workflows. Atomic state. Replay-deterministic FSM. Policy-as-function autonomy.
+> A substrate for multi-agent LLM workflows. Atomic state. Replay-deterministic FSM. Policy-as-function autonomy. Run it interactively, headless, or as a self-driving daemon.
 
 ## Abstract
 
@@ -43,7 +43,7 @@ flowchart TB
         direction LR
         MCP["mcp-server"]
         CLI["cli"]
-        DMN["daemon · planned"]
+        DMN["daemon"]
     end
 
     KERNEL["⚙️ @loomfsm/kernel — generic FSM<br/>(no domain or vendor names)<br/>·<br/>runFSM · 5-variant Stage interpreter<br/>withTransaction · atomic state<br/>invariants · in-tx, rollback on violation<br/>gate-policy dispatcher · policy-as-function<br/>idempotency ledger · replay dedup<br/>NowToken clock-as-data · append-only audit"]
@@ -66,7 +66,7 @@ flowchart TB
     KERNEL ==> Providers
 ```
 
-The three plug axes — **Bundles**, **Providers**, **Transports** — are orthogonal. Any (transport × provider × bundle) combination is valid at the kernel boundary. The v1 MVP ships one bundle (code review), three providers (claude-code-shuttle, anthropic-sdk, openrouter), and two transports (mcp-server, cli; daemon planned).
+The three plug axes — **Bundles**, **Providers**, **Transports** — are orthogonal. Any (transport × provider × bundle) combination is valid at the kernel boundary. Today loom ships one bundle (code review), the zero-config `claude-code-shuttle` provider (with `anthropic-sdk` and `openrouter` in-repo), and three transports — `mcp-server` (stdio), the `cli`, and the local-process **daemon**. Between the transports and the kernel sits one shared runtime, **`@loomfsm/driver`**, which holds the transport-neutral orchestration loop that the headless `loom run` and the daemon both wrap (see *One contract, three ways to run it*, below).
 
 ### A run, end to end
 
@@ -98,6 +98,16 @@ sequenceDiagram
     K-->>S: directive — complete (verdict)
     S-->>U: summary (/done)
 ```
+
+### One contract, three ways to run it
+
+The directive loop above is **transport-neutral**: the kernel emits a `KernelDirective`, something executes it, and the result is delivered back. *What* executes a spawn is a single injected seam — the `Executor` — so the same workflow, the same gates, and the same invariants run in three modes:
+
+- **Interactive (host-relay).** Your agent host (e.g. Claude Code over MCP) executes each spawn and delivers the result; you approve gates inline. This is the sequence above.
+- **Headless one-shot (`loom run`).** The `@loomfsm/driver` runtime wraps the same loop in `drive()` and executes each spawn through the Claude Code CLI in print mode (`claude -p`) inside an isolated git worktree — on the operator's existing login, *no API key*. A genuine human gate pauses and is surfaced; nothing else needs a human.
+- **Autonomous daemon (`loom daemon`).** A long-lived supervisor over `drive()` that runs the work server-side and surfaces a human *only at decision points*: it **parks** on a gate and **wakes** when it's answered, **retries** transient failures with backoff, **recovers** an interrupted task on restart (the store is the only state — a restart re-attaches and the idempotency ledger dedups, so a slept laptop or killed process just resumes), and **commits** finished work to a `loom/<task>` branch — reviewable, never auto-merged.
+
+None of this is a kernel change. `drive()`, the `Executor`, and the daemon are transport-layer runtime over the same directive contract; the kernel stays generic and side-effect-free. The headless backend runs Claude Code as a *subprocess*, so even there the kernel imports no vendor SDK — principle 5 still holds.
 
 ### What the `code` bundle does
 
@@ -166,23 +176,23 @@ Pure functions over state, called inside `runInvariants(tx)` at exactly three si
 
 **State is observable.** Operators inspect with `sqlite3 state.db`. The wiki is also the operator's runbook. There is no proprietary state format; there is no telemetry pipeline you need to stand up before you can debug.
 
-## 6. What this design deliberately doesn't ship in v1.0
+## 6. What this design deliberately doesn't ship yet
 
-Scope honesty matters more than feature counting. The following are intentionally out of this release — additive, planned for later:
+Scope honesty matters more than feature counting. The following are intentionally out of the current release — additive, planned for later:
 
-- **Bundle runtime isolation (worker-thread fence).** v1 MVP runs bundles in-process under curated trust. Manifest declares capabilities; the bundle-loader checks them at load. The *runtime* fence (separate worker, RPC marshalling of `BundleOp[]`) lands when the third-party marketplace lands. The MVP threat model has zero third-party bundles.
+- **Networked / multi-tenant transport.** The local-process daemon ships (`loom daemon` — supervise, park/wake, retry, recover, branch merge-back). What's still additive: an HTTP transport (remote control, a web dashboard, task intake from an issue tracker or a chat) and multi-project supervision in one control-plane — the same `drive()` behind an adapter, as stdio sits behind MCP. No kernel change.
+- **Multi-bundle / multi-task in one project.** loom runs one bundle and one in-flight task per project, by design — a finished task archives so the next starts clean. Running several *projects* in parallel already works (one daemon per project, isolated stores); several bundles or tasks *in the same project* is the part the substrate doesn't orchestrate yet.
+- **Bundle runtime isolation (worker-thread fence).** loom runs bundles in-process under curated trust. Manifest declares capabilities; the bundle-loader checks them at load. The *runtime* fence (separate worker, RPC marshalling of `BundleOp[]`) lands when the third-party marketplace lands. The current threat model has zero third-party bundles.
 - **Memory subsystem.** Cross-task and cross-project memory is a deferred plugin. Substrate reserves the capability vocabulary and the `memory_query` MCP tool slot.
-- **Daemon-mode transport.** The transport interface accommodates it; the daemon binary is planned. Single-process CLI + MCP-server are the current surface.
-- **Multi-bundle parallelism in one project directory.** v1 enforces one bundle per project. The architecture admits more; the substrate doesn't ship the orchestration for it.
 - **Observability backends beyond local logs and `/metrics`.** OTel attributes are declared but the production-grade collector wiring is planned.
 
 The substrate is *additive* to all of these. None requires re-shaping the kernel. That property is what most of the architectural rigour is paying for.
 
 ## 7. Honest scope and timeline
 
-- **Kernel size**: ~12-15k LOC, before the bundle.
+- **Kernel size**: ~12-15k LOC, before the bundle. The headless `@loomfsm/driver` runtime and the `@loomfsm/daemon` supervisor are separate, lean packages — additive over the kernel, not part of it.
 - **Bundle authoring**: a new bundle is a focused, self-contained effort given the substrate — agents, flows, and invariants as data, no kernel changes.
-- **Validation**: the `code` bundle has driven real `/task` runs end to end through an MCP host to `complete:accepted`, with the audit log recording every spawn, finding, verdict, and gate.
+- **Validation**: the `code` bundle has driven real `/task` runs end to end through an MCP host to `complete:accepted`, with the audit log recording every spawn, finding, verdict, and gate. As of `0.2.0` the same flow also runs **headless** (`loom run`) and under the **daemon**, executing each spawn through `claude -p` in an isolated worktree; the deterministic paths are covered by the test suite, with an opt-in real-`claude` end-to-end.
 
 The kernel is not "production-ready" because of architectural elegance; it is production-ready because it is exercised on real work and the audit log lets an operator see what happened. Architectural elegance is the precondition, not the proof.
 
@@ -192,4 +202,4 @@ Solo-authored. Licensed under Apache 2.0 (see [LICENSE](LICENSE)) — permissive
 
 ---
 
-*Whitepaper version 1.0 · status: `v0.2.0`, published to npm under `@loomfsm/*`.*
+*Whitepaper version 1.1 · status: `v0.2.0`, published to npm under `@loomfsm/*` (headless run + daemon).*

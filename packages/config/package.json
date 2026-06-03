@@ -1,14 +1,11 @@
 {
-  "name": "@loomfsm/cli",
+  "name": "@loomfsm/config",
   "version": "0.2.1",
   "type": "module",
-  "description": "The loom command-line installer — register the MCP server and authorize projects.",
+  "description": "loom's persistent control layer — the global config + secrets + project catalog, and the one layered resolver every face (CLI today, server/UI later) reads. A leaf: it depends on nothing else in loom and learns no domain. Configure keys/models once; inherit them in every project.",
   "license": "Apache-2.0",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
-  "bin": {
-    "loom": "./dist/src/bin/loom.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
@@ -23,15 +20,11 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "prepack": "pnpm run build",
-    "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
+    "lint:no-domain-leak": "node scripts/no-domain-leak.mjs",
+    "test": "tsc && pnpm lint:no-domain-leak && node --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
-    "@loomfsm/config": "workspace:*",
-    "@loomfsm/daemon": "workspace:*",
-    "@loomfsm/driver": "workspace:*",
-    "@loomfsm/kernel": "workspace:*",
-    "@loomfsm/mcp-server": "workspace:*",
-    "@loomfsm/server": "workspace:*"
+    "zod": "^4.4.3"
   },
   "publishConfig": {
     "access": "public"

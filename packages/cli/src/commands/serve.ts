@@ -26,6 +26,7 @@ import type { ExecutorBuildContext, MergeBackResult } from "@loomfsm/daemon";
 import type { DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
+import { effectiveEnv } from "../lib/config.js";
 import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
 import { resolveNotifier } from "../lib/notify.js";
 import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
@@ -112,6 +113,12 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
     return detach(argv, env);
   }
 
+  // Fold the persisted config in as a lower-priority env layer (the real
+  // environment still wins). The control plane has no single project, so the
+  // project layer is the operator's cwd; the global notify + resilience are what
+  // a fleet reads.
+  const cfgEnv = effectiveEnv(env.cwd, env, process.env);
+
   // Resolve the production registry resolver + the per-project executor factory
   // (container or `claude -p` worktree, per the toggle), mirroring `loom run` /
   // `loom daemon`.
@@ -122,7 +129,7 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
   try {
     factory = overrides.buildExecutor
       ? { buildExecutor: overrides.buildExecutor }
-      : await defaultServeFactory(env, modeResult.mode, overrides);
+      : await defaultServeFactory(env, modeResult.mode, overrides, cfgEnv);
   } catch (err) {
     env.err(`loom serve: ${(err as Error).message}`);
     return 1;
@@ -133,7 +140,7 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
 
   // One env-resolved notifier shared across the fleet; the registry stamps each
   // project's id onto its events. Off (no channels) → skip the wiring entirely.
-  const baseNotifier = await resolveNotifier(process.env, (m) => env.err(`loom serve: notify: ${m}`));
+  const baseNotifier = await resolveNotifier(cfgEnv, (m) => env.err(`loom serve: notify: ${m}`));
 
   // Graceful shutdown: a test injects a signal; the real binary wires OS signals.
   const controller = new AbortController();
@@ -155,7 +162,7 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
       resolveRegistry,
       buildExecutor: factory.buildExecutor,
       ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
-      ...resolveSupervisionKnobs(process.env),
+      ...resolveSupervisionKnobs(cfgEnv),
       makeLogger: (dir: string) => createFileLogger(dir, { echo: () => {} }),
       ...(baseNotifier !== nullNotifier ? { makeNotifier: () => baseNotifier } : {}),
       signal,
@@ -276,15 +283,16 @@ async function defaultServeFactory(
   env: CliEnv,
   mode: ContainerMode,
   overrides: ServeOverrides,
+  cfgEnv: NodeJS.ProcessEnv,
 ): Promise<ServeFactory> {
   const plan = resolveContainerPlan({
     mode,
-    env: process.env,
+    env: cfgEnv,
     home: env.home.length > 0 ? env.home : homedir(),
     dockerAvailable: overrides.dockerAvailable ?? dockerAvailableDefault,
     onNotice: (message) => env.err(`loom serve: ${message}`),
   });
-  const timeouts = resolveSpawnTimeouts(process.env);
+  const timeouts = resolveSpawnTimeouts(cfgEnv);
 
   if (plan.useDocker) {
     const { createContainerExecutor } = await import("@loomfsm/driver");
@@ -303,7 +311,7 @@ async function defaultServeFactory(
     };
   }
 
-  const bin = process.env["LOOM_CLAUDE_BIN"] ?? "claude";
+  const bin = cfgEnv["LOOM_CLAUDE_BIN"] ?? "claude";
   const available = overrides.claudeAvailable ?? claudeAvailable;
   if (!available(bin)) {
     throw new Error(
@@ -311,7 +319,7 @@ async function defaultServeFactory(
         `sign in (run 'claude') to drive headless runs on your subscription`,
     );
   }
-  const permissionMode = process.env["LOOM_CLAUDE_PERMISSION_MODE"];
+  const permissionMode = cfgEnv["LOOM_CLAUDE_PERMISSION_MODE"];
   const { createClaudeCodeExecutor } = await import("@loomfsm/driver");
   return {
     buildExecutor: (projectDir, ctx) =>

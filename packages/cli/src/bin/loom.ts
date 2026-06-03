@@ -17,7 +17,11 @@ import { createRequire } from "node:module";
 
 import { run } from "../cli.js";
 
-const SQLITE_COMMANDS = new Set(["reset", "status", "run", "daemon", "serve"]);
+// `models` loads the bundle roster (kernel) and `projects` reads project status
+// through the store — both pull node:sqlite, so they re-exec with the flag like
+// the other store-touching commands. `config` / `secrets` stay flag-free (pure
+// @loomfsm/config).
+const SQLITE_COMMANDS = new Set(["reset", "status", "run", "daemon", "serve", "models", "projects"]);
 const REEXEC_GUARD = "LOOM_SQLITE_REEXEC";
 
 function nodeSqliteAvailable(): boolean {

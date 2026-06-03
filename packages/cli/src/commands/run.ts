@@ -31,6 +31,7 @@ import { homedir } from "node:os";
 import type { DriveOptions, DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
+import { effectiveEnv } from "../lib/config.js";
 import { containerModeFrom, formatUsage, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
 import { resolveSpawnTimeouts } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
@@ -89,11 +90,15 @@ export async function runTask(
     return 1;
   }
 
+  // Fold the persisted config in as a lower-priority env layer (the real
+  // environment still wins) so spawn-timeout knobs configured once apply here.
+  const cfgEnv = effectiveEnv(target, env, process.env);
+
   let executor: Executor;
   try {
     executor = overrides.buildExecutor
       ? overrides.buildExecutor(registry)
-      : await defaultExecutor(target, env, modeResult.mode, overrides);
+      : await defaultExecutor(target, env, modeResult.mode, overrides, cfgEnv);
   } catch (err) {
     env.err(`loom run: ${(err as Error).message}`);
     return 1;
@@ -123,15 +128,16 @@ async function defaultExecutor(
   env: CliEnv,
   mode: ContainerMode,
   overrides: RunOverrides,
+  cfgEnv: NodeJS.ProcessEnv,
 ): Promise<Executor> {
   const plan = resolveContainerPlan({
     mode,
-    env: process.env,
+    env: cfgEnv,
     home: env.home.length > 0 ? env.home : homedir(),
     dockerAvailable: overrides.dockerAvailable ?? (() => dockerAvailableDefault()),
     onNotice: (message) => env.err(`loom run: ${message}`),
   });
-  const timeouts = resolveSpawnTimeouts(process.env);
+  const timeouts = resolveSpawnTimeouts(cfgEnv);
 
   if (plan.useDocker) {
     const { createContainerExecutor } = await import("@loomfsm/driver");
@@ -144,7 +150,7 @@ async function defaultExecutor(
     });
   }
 
-  const bin = process.env["LOOM_CLAUDE_BIN"] ?? "claude";
+  const bin = cfgEnv["LOOM_CLAUDE_BIN"] ?? "claude";
   const available = overrides.claudeAvailable ?? claudeAvailable;
   if (!available(bin)) {
     throw new Error(
@@ -152,7 +158,7 @@ async function defaultExecutor(
         `sign in (run 'claude') to drive headless runs on your subscription`,
     );
   }
-  const permissionMode = process.env["LOOM_CLAUDE_PERMISSION_MODE"];
+  const permissionMode = cfgEnv["LOOM_CLAUDE_PERMISSION_MODE"];
   const { createClaudeCodeExecutor } = await import("@loomfsm/driver");
   return createClaudeCodeExecutor({
     project_dir: projectDir,

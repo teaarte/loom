@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@loomfsm/bundle-code": "workspace:*",
+    "@loomfsm/config": "workspace:*",
     "@loomfsm/driver": "workspace:*",
     "@loomfsm/kernel": "workspace:*",
     "@loomfsm/provider-claude-code-shuttle": "workspace:*",
@@ -43,6 +44,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
+    "@loomfsm/bundle-spec": "workspace:*",
     "@loomfsm/provider-ollama": "workspace:*"
   },
   "publishConfig": {

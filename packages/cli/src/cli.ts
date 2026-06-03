@@ -4,10 +4,14 @@
 // beyond what a first install needs.
 
 import { allowlistAdd, allowlistList } from "./commands/allowlist.js";
+import { config } from "./commands/config.js";
 import { daemon } from "./commands/daemon.js";
 import { init } from "./commands/init.js";
+import { models } from "./commands/models.js";
+import { projects } from "./commands/projects.js";
 import { history, reset } from "./commands/reset.js";
 import { runTask } from "./commands/run.js";
+import { secrets } from "./commands/secrets.js";
 import { serve } from "./commands/serve.js";
 import { setup } from "./commands/setup.js";
 import { status } from "./commands/status.js";
@@ -75,6 +79,20 @@ Usage:
       Show whether the control plane is running, where it binds, and how many
       projects it supervises.
 
+  loom config get [key] | set <key> <value>
+      Read or edit the global config (~/.config/loom/config.json): the backend
+      mode and the notify / resilience defaults. Configure once; every project
+      inherits it. (Models: 'loom models'; secrets: 'loom secrets'.)
+  loom secrets set <name> <value> | list
+      Manage the global, machine-local secret store (chmod 600). Reference a
+      secret from config as 'secret:<name>'. 'list' shows masked values.
+  loom models set <agent> <provider:model|tier> | list
+      Bind a bundle's agents to models in the global config. Rejects a model the
+      configured backend can't run. 'list' shows each agent's effective model.
+  loom projects add [path] [--label <l>] | list | remove <id|path>
+      The project catalog — the projects you've worked on, with their current
+      status (read even when idle). Distinct from the live supervised set.
+
   loom --help | --version
 
 Typical first run:
@@ -122,6 +140,14 @@ export function run(argv: string[], env: CliEnv = processEnv()): number | Promis
       env.err(`loom allowlist: expected 'add' or 'list', got ${sub ?? "(nothing)"}`);
       return 1;
     }
+    case "config":
+      return config(rest, env);
+    case "secrets":
+      return secrets(rest, env);
+    case "models":
+      return models(rest, env);
+    case "projects":
+      return projects(rest, env);
     default:
       env.err(`loom: unknown command '${command}'`);
       env.err("run 'loom --help' for usage");

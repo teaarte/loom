@@ -30,6 +30,7 @@ import type { DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
 import { firstUnknownFlag, parseArgs } from "../lib/args.js";
+import { effectiveEnv } from "../lib/config.js";
 import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
 import { resolveNotifier } from "../lib/notify.js";
 import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
@@ -101,6 +102,10 @@ async function start(argv: string[], env: CliEnv, overrides: DaemonOverrides): P
     return detach(target, watch, task, env, flags);
   }
 
+  // Fold the persisted config in as a lower-priority env layer (the real
+  // environment still wins) so notify + resilience configured once apply here.
+  const cfgEnv = effectiveEnv(target, env, process.env);
+
   // Resolve the pipeline + build the executor factory, mirroring `loom run`.
   const resolveRegistry =
     overrides.resolveRegistry ?? (await import("@loomfsm/mcp-server/bootstrap")).assembleRegistry;
@@ -116,7 +121,7 @@ async function start(argv: string[], env: CliEnv, overrides: DaemonOverrides): P
   try {
     factory = overrides.buildExecutor
       ? { buildExecutor: overrides.buildExecutor }
-      : await defaultDriveFactory(target, env, modeResult.mode, overrides);
+      : await defaultDriveFactory(target, env, modeResult.mode, overrides, cfgEnv);
   } catch (err) {
     env.err(`loom daemon start: ${(err as Error).message}`);
     return 1;
@@ -149,13 +154,13 @@ async function start(argv: string[], env: CliEnv, overrides: DaemonOverrides): P
   }
 
   const logger = createFileLogger(target, { echo: (line) => env.err(line.replace(/\n$/, "")) });
-  const notifier = await resolveNotifier(process.env, (m) => logger.warn("notify", { message: m }));
+  const notifier = await resolveNotifier(cfgEnv, (m) => logger.warn("notify", { message: m }));
   const opts = {
     buildExecutor: factory.buildExecutor,
     resolveRegistry: () => registry,
     ...(task.length > 0 ? { task } : {}),
     ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
-    ...resolveSupervisionKnobs(process.env),
+    ...resolveSupervisionKnobs(cfgEnv),
     logger,
     notifier,
     handle,
@@ -284,15 +289,16 @@ async function defaultDriveFactory(
   env: CliEnv,
   mode: ContainerMode,
   overrides: DaemonOverrides,
+  cfgEnv: NodeJS.ProcessEnv,
 ): Promise<DriveFactory> {
   const plan = resolveContainerPlan({
     mode,
-    env: process.env,
+    env: cfgEnv,
     home: env.home.length > 0 ? env.home : homedir(),
     dockerAvailable: overrides.dockerAvailable ?? dockerAvailableDefault,
     onNotice: (message) => env.err(`loom daemon start: ${message}`),
   });
-  const timeouts = resolveSpawnTimeouts(process.env);
+  const timeouts = resolveSpawnTimeouts(cfgEnv);
 
   if (plan.useDocker) {
     const { createContainerExecutor } = await import("@loomfsm/driver");
@@ -311,7 +317,7 @@ async function defaultDriveFactory(
     };
   }
 
-  const bin = process.env["LOOM_CLAUDE_BIN"] ?? "claude";
+  const bin = cfgEnv["LOOM_CLAUDE_BIN"] ?? "claude";
   const available = overrides.claudeAvailable ?? claudeAvailable;
   if (!available(bin)) {
     throw new Error(
@@ -319,7 +325,7 @@ async function defaultDriveFactory(
         `sign in (run 'claude') to drive headless runs on your subscription`,
     );
   }
-  const permissionMode = process.env["LOOM_CLAUDE_PERMISSION_MODE"];
+  const permissionMode = cfgEnv["LOOM_CLAUDE_PERMISSION_MODE"];
   const { createClaudeCodeExecutor } = await import("@loomfsm/driver");
   return {
     buildExecutor: (ctx) =>

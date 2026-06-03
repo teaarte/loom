@@ -32,11 +32,18 @@ import { dirname, join, resolve } from "node:path";
 
 import codeBundle, { codeManifest } from "@loomfsm/bundle-code";
 import {
+  resolveBundleModels,
+  resolveConfig,
+  type BundleRoster,
+  type ResolvedModel,
+} from "@loomfsm/config";
+import {
   captureNow,
   loadBundle,
   openDb,
   reconcileExtensions,
   type LLMProvider,
+  type ProviderRoute,
   type ProvidersConfig,
   type Registry,
 } from "@loomfsm/kernel";
@@ -144,7 +151,7 @@ async function buildRegistry(
     bundle_source_dir: bundleSourceDir,
     project_dir: projectDir,
     providers,
-    providers_config: readProvidersConfig(projectDir),
+    providers_config: composeProvidersConfig(projectDir, codeBundle, providers),
     now: captureNow(),
   });
 }
@@ -169,9 +176,120 @@ function readProvidersConfig(projectDir: string): ProvidersConfig | undefined {
   }
 }
 
+// Compose the routing config the loader consumes from the layered control plane
+// PLUS the legacy per-project `providers.json`, preserving the project-rung
+// precedence: the global model map is the floor, the legacy `providers.json` sits
+// above it, and the project `loom.json` model map wins on top —
+//
+//   built-in ← bundle defaults ← global ← [ providers.json ← loom.json ]
+//
+// The control layer (`@loomfsm/config`) hands back a GENERIC per-agent model map;
+// this kernel-aware seam (where `providers.json` is already read) is the one place
+// that turns it into a `ProvidersConfig`, feeding the existing `resolveSpawnModel`
+// path with ZERO kernel change. A 0.2.1 project with only `providers.json` and no
+// control-layer files composes to exactly its `providers.json` — nothing regresses.
+function composeProvidersConfig(
+  projectDir: string,
+  bundle: typeof codeBundle,
+  providers: LLMProvider[],
+): ProvidersConfig | undefined {
+  const defaultProvider = bundle.default_provider ?? providers[0]?.name;
+  const resolved = resolveConfig({ projectDir, env: process.env });
+  const roster: BundleRoster = {
+    name: bundle.name,
+    agents: bundle.agents,
+    ...(bundle.default_model_tiers !== undefined
+      ? { default_model_tiers: bundle.default_model_tiers }
+      : {}),
+    ...(bundle.default_provider !== undefined ? { default_provider: bundle.default_provider } : {}),
+  };
+
+  const pcGlobal =
+    defaultProvider !== undefined
+      ? providersConfigFromModelMap(resolveBundleModels(resolved.layers.global, roster), defaultProvider)
+      : {};
+  const pcLegacy = readProvidersConfig(projectDir) ?? {};
+  const pcProject =
+    defaultProvider !== undefined
+      ? providersConfigFromModelMap(resolveBundleModels(resolved.layers.project, roster), defaultProvider)
+      : {};
+
+  const composed = mergeProvidersConfig(mergeProvidersConfig(pcGlobal, pcLegacy), pcProject);
+  return isEmptyProvidersConfig(composed) ? undefined : composed;
+}
+
+// Turn a generic per-agent model map into routing. Each configured agent gets an
+// `agent_routing` entry on the default backend pointing at a per-agent synthetic
+// tier alias carrying the resolved model — so the kernel's `resolveModel` returns
+// that model verbatim. The synthetic tier name is unique per agent, so layers
+// merge without colliding with real bundle tiers. (The provider FAMILY a
+// `provider:model` ref carries is for per-backend dispatch later; today only the
+// single default backend runs, so only the model name is consumed here.)
+export function providersConfigFromModelMap(
+  resolved: Record<string, ResolvedModel>,
+  defaultProvider: string,
+): ProvidersConfig {
+  const agent_routing: Record<string, ProviderRoute> = {};
+  const tier_aliases: Record<string, { model: string }> = {};
+  for (const [agent, m] of Object.entries(resolved)) {
+    const tier = `__loom:${agent}`;
+    agent_routing[agent] = { provider: defaultProvider, tier };
+    tier_aliases[tier] = { model: m.model };
+  }
+  const out: ProvidersConfig = {};
+  if (Object.keys(agent_routing).length > 0) {
+    out.agent_routing = agent_routing;
+    out.tier_aliases = tier_aliases;
+  }
+  return out;
+}
+
+// Merge two routing configs, the second winning per key. Map-valued fields union
+// (a higher layer overrides a lower layer's entry for the SAME agent / tier /
+// phase / key); scalars take the higher value when present.
+export function mergeProvidersConfig(lower: ProvidersConfig, higher: ProvidersConfig): ProvidersConfig {
+  const out: ProvidersConfig = {};
+  const dp = higher.default_provider ?? lower.default_provider;
+  if (dp !== undefined) out.default_provider = dp;
+  const dmt = higher.default_model_tier ?? lower.default_model_tier;
+  if (dmt !== undefined) out.default_model_tier = dmt;
+
+  const agentRouting = { ...lower.agent_routing, ...higher.agent_routing };
+  if (Object.keys(agentRouting).length > 0) out.agent_routing = agentRouting;
+  const phaseRouting = { ...lower.phase_routing, ...higher.phase_routing };
+  if (Object.keys(phaseRouting).length > 0) out.phase_routing = phaseRouting;
+  const tierAliases = { ...lower.tier_aliases, ...higher.tier_aliases };
+  if (Object.keys(tierAliases).length > 0) out.tier_aliases = tierAliases;
+  const modelOverrides = { ...lower.model_overrides, ...higher.model_overrides };
+  if (Object.keys(modelOverrides).length > 0) out.model_overrides = modelOverrides;
+
+  return out;
+}
+
+function isEmptyProvidersConfig(pc: ProvidersConfig): boolean {
+  return Object.keys(pc).length === 0;
+}
+
 // Test seam: drop the default resolver's per-project cache so a suite can
 // rebuild a registry for a reused project path. Resolvers built via
 // `createAssembleRegistry` own their own caches (fresh per construction).
 export function _resetRegistryCacheForTest(): void {
   defaultResolverCache.clear();
+}
+
+// The roster of the bundle this server runs — agent names, tiers, and the tier
+// defaults — as plain data, with no DB open or registry build. The control-layer
+// verbs (`loom models …`) read it to bind agents to models by name; it is the
+// single source of the roster so nothing hardcodes an agent or tier name.
+export function activeBundleRoster(): BundleRoster {
+  return {
+    name: codeBundle.name,
+    agents: codeBundle.agents,
+    ...(codeBundle.default_model_tiers !== undefined
+      ? { default_model_tiers: codeBundle.default_model_tiers }
+      : {}),
+    ...(codeBundle.default_provider !== undefined
+      ? { default_provider: codeBundle.default_provider }
+      : {}),
+  };
 }

@@ -13,14 +13,17 @@
 //       materialized and whose context assets carry the bundle's reference
 //       catalog — i.e. the bundle's on-disk assets resolved from node_modules.
 //
-// No npm install runs: the only external dependency in this graph
-// (@modelcontextprotocol/sdk) is never loaded by these paths, so extracting
-// the @loomfsm tarballs into one flat node_modules is a faithful, offline stand-in
-// for `npm i -g`.
+// No npm install runs: `@modelcontextprotocol/sdk` is never loaded by these
+// paths, and the one external runtime dep that IS loaded (`zod`, via the
+// `@loomfsm/config` leaf the registry build reads) is zero-dependency, so it is
+// copied in from the workspace — a faithful, offline stand-in for what `npm i -g`
+// would fetch. Extracting the @loomfsm tarballs into one flat node_modules then
+// matches a global install.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -30,6 +33,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +47,7 @@ const PUBLISHABLE = [
   "packages/transport-types",
   "packages/driver",
   "packages/bundles/code",
+  "packages/config",
   "packages/providers/claude-code-shuttle",
   "packages/mcp-server",
   "packages/cli",
@@ -95,6 +100,16 @@ function packAndInstall(root: string, store: string, prefix: string): void {
     mkdirSync(dirname(dest), { recursive: true });
     renameSync(join(extractDir, "package"), dest);
   }
+
+  // `@loomfsm/config` carries one real external dep, `zod`, which IS loaded by
+  // the registry-build path. zod is zero-dependency, so copy its package dir in
+  // from the workspace (dereferencing pnpm's symlink) — the offline equivalent
+  // of `npm i` fetching it. Resolve it from the config package's own resolution
+  // paths so the lookup is robust to pnpm's (non-root) layout.
+  const zodPkgJson = createRequire(import.meta.url).resolve("zod/package.json", {
+    paths: [join(root, "packages", "config")],
+  });
+  cpSync(dirname(zodPkgJson), join(nodeModules, "zod"), { recursive: true, dereference: true });
 }
 
 describe("npm pack — self-contained install smoke", () => {

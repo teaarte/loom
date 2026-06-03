@@ -32,8 +32,11 @@ export { waitForWake, type WakeOptions, type WakeResult } from "./wake.js";
 
 export {
   commitToBranchMergeBack,
+  commitToBranchMergeBackFromClone,
   removeWorktree,
+  removeClone,
   sweepOrphanWorktree,
+  sweepOrphanClone,
   type MergeBackResult,
 } from "./worktree-lifecycle.js";
 

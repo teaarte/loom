@@ -16,7 +16,7 @@
 // the store, never from supervisor memory. The advisory status file is the
 // only thing it writes outside the store, and recovery never depends on it.
 
-import { drive, readState, type DriveOutcome, type Executor } from "@loomfsm/driver";
+import { drive, readState, type DriveOutcome, type Executor, type SpawnUsage } from "@loomfsm/driver";
 import {
   peekArchiveSlot,
   ZOMBIE_PENDING_MS,
@@ -36,7 +36,7 @@ import {
   type ErrorClassifier,
   type RetryPolicy,
 } from "./retry.js";
-import { sweepOrphanWorktree } from "./worktree-lifecycle.js";
+import { sweepOrphanClone, sweepOrphanWorktree } from "./worktree-lifecycle.js";
 import { commitToBranchMergeBack, type MergeBackResult } from "./worktree-lifecycle.js";
 import type { DaemonPhase } from "./process-control.js";
 import { waitForWake, type WakeOptions } from "./wake.js";
@@ -51,9 +51,12 @@ export interface StatusUpdater {
 }
 
 export interface ExecutorBuildContext {
-  // Wire the executor's non-fatal notices (D2's degraded/no-isolation
+  // Wire the executor's non-fatal notices (the degraded/no-isolation
   // warning) into the supervisor's audit sink.
   onNotice: (message: string) => void;
+  // Wire per-spawn usage (tokens / cost the backend reports) into the
+  // supervisor's audit sink — observable now; not persisted by the loop.
+  onUsage: (usage: SpawnUsage) => void;
   // The attempt's abort signal (graceful shutdown ∪ optional per-drive
   // deadline) — a sandboxed `claude -p` executor passes it to the child so a
   // hung spawn is actually interrupted.
@@ -244,10 +247,13 @@ export async function superviseWatch(projectDir: string, opts: SuperviseOptions)
   const logger = opts.logger ?? nullLogger;
   const idlePoll = opts.watch_idle_ms ?? 5_000;
 
-  // Startup GC: prune stale worktree admin + drop an orphaned worktree when
-  // no task is live to own it.
+  // Startup GC: prune stale worktree admin + drop an orphaned isolation dir
+  // (worktree OR container clone) when no task is live to own it. Mode-blind —
+  // each sweep is a no-op if its dir is absent.
   const slot0 = await peekArchiveSlot(projectDir);
-  sweepOrphanWorktree(projectDir, { slotInProgress: slot0?.status === "in_progress" });
+  const slotInProgress0 = slot0?.status === "in_progress";
+  sweepOrphanWorktree(projectDir, { slotInProgress: slotInProgress0 });
+  sweepOrphanClone(projectDir, { slotInProgress: slotInProgress0 });
 
   let seedTask = opts.task;
   for (;;) {
@@ -316,6 +322,14 @@ async function driveWithDeadline(
 
   const executor = opts.buildExecutor({
     onNotice: (message) => logger.warn("executor-notice", { message }),
+    onUsage: (usage) =>
+      logger.info("spawn-usage", {
+        ...(usage.cost_usd !== undefined ? { cost_usd: usage.cost_usd } : {}),
+        ...(usage.tokens !== undefined
+          ? { tokens_in: usage.tokens.in, tokens_out: usage.tokens.out, tokens_cached: usage.tokens.cached }
+          : {}),
+        ...(usage.num_turns !== undefined ? { num_turns: usage.num_turns } : {}),
+      }),
     signal: controller.signal,
   });
 

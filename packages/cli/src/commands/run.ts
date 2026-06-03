@@ -26,15 +26,17 @@
 // node:sqlite; the bin re-execs `run` with --experimental-sqlite.
 
 import { spawnSync } from "node:child_process";
+import { homedir } from "node:os";
 
 import type { DriveOptions, DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
+import { containerModeFrom, formatUsage, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
 import type { CliEnv } from "../lib/env.js";
 
 // Seams for tests: a suite injects a ready registry / stub executor / fake
-// drive / claude-presence probe so it can assert the command's parsing +
-// reporting without standing up a real store or the Claude Code CLI.
+// drive / CLI-presence probes so it can assert the command's parsing +
+// reporting without standing up a real store, the Claude Code CLI, or Docker.
 // Production leaves them unset and uses the defaults.
 export interface RunOverrides {
   resolveRegistry?: (projectDir: string) => Promise<Registry> | Registry;
@@ -42,6 +44,8 @@ export interface RunOverrides {
   driveImpl?: (projectDir: string, opts: DriveOptions) => Promise<DriveOutcome>;
   // Probe for the Claude Code CLI; default spawns `<bin> --version`.
   claudeAvailable?: (bin: string) => boolean;
+  // Probe for the Docker CLI; default spawns `docker version`.
+  dockerAvailable?: () => boolean;
 }
 
 export async function runTask(
@@ -49,7 +53,19 @@ export async function runTask(
   env: CliEnv,
   overrides: RunOverrides = {},
 ): Promise<number> {
-  const raw = argv.join(" ").trim();
+  // Pull the container toggle out before the rest of argv becomes the task
+  // string (the CLI interprets nothing else about the task — it rides verbatim).
+  const dockerFlag = argv.includes("--docker");
+  const noDockerFlag = argv.includes("--no-docker");
+  const modeResult = containerModeFrom({ docker: dockerFlag, noDocker: noDockerFlag });
+  if ("error" in modeResult) {
+    env.err(`loom run: ${modeResult.error}`);
+    return 1;
+  }
+  const raw = argv
+    .filter((a) => a !== "--docker" && a !== "--no-docker")
+    .join(" ")
+    .trim();
   if (raw.length === 0) {
     env.err('loom run: a task is required — e.g. loom run "add a health check route"');
     return 1;
@@ -76,7 +92,7 @@ export async function runTask(
   try {
     executor = overrides.buildExecutor
       ? overrides.buildExecutor(registry)
-      : await defaultExecutor(target, env, overrides.claudeAvailable);
+      : await defaultExecutor(target, env, modeResult.mode, overrides);
   } catch (err) {
     env.err(`loom run: ${(err as Error).message}`);
     return 1;
@@ -93,19 +109,40 @@ export async function runTask(
   return report(outcome, env);
 }
 
-// The headless loop runs each spawn through the Claude Code CLI (`claude -p`)
-// in an isolated git worktree. The only hard requirement is the CLI itself
-// (and a signed-in login) — probed up front so a missing/unconfigured Claude
-// Code refuses cleanly here rather than failing spawn-by-spawn inside the
-// loop. The permission posture defaults to the safe `acceptEdits` and is
+// Build the headless executor for the resolved container mode. In container
+// mode each spawn runs `claude -p` inside a container (the fence that makes
+// bypassPermissions safe), authenticated on the subscription via an OAuth
+// token; otherwise it runs in an isolated git worktree. Each path probes its
+// own hard requirement up front (Docker for container, the Claude Code CLI for
+// worktree) so a missing tool refuses cleanly here rather than failing
+// spawn-by-spawn. The worktree posture defaults to the safe `acceptEdits`,
 // raised only by an explicit `LOOM_CLAUDE_PERMISSION_MODE` opt-in.
 async function defaultExecutor(
   projectDir: string,
   env: CliEnv,
-  availableOverride: ((bin: string) => boolean) | undefined,
+  mode: ContainerMode,
+  overrides: RunOverrides,
 ): Promise<Executor> {
+  const plan = resolveContainerPlan({
+    mode,
+    env: process.env,
+    home: env.home.length > 0 ? env.home : homedir(),
+    dockerAvailable: overrides.dockerAvailable ?? (() => dockerAvailableDefault()),
+    onNotice: (message) => env.err(`loom run: ${message}`),
+  });
+
+  if (plan.useDocker) {
+    const { createContainerExecutor } = await import("@loomfsm/driver");
+    return createContainerExecutor({
+      project_dir: projectDir,
+      ...plan.container,
+      onNotice: (message) => env.err(`loom run: ${message}`),
+      onUsage: (usage) => env.err(`loom run: ${formatUsage(usage)}`),
+    });
+  }
+
   const bin = process.env["LOOM_CLAUDE_BIN"] ?? "claude";
-  const available = availableOverride ?? claudeAvailable;
+  const available = overrides.claudeAvailable ?? claudeAvailable;
   if (!available(bin)) {
     throw new Error(
       `Claude Code CLI '${bin}' was not found on PATH; install Claude Code and ` +
@@ -120,6 +157,7 @@ async function defaultExecutor(
       ? { permission_mode: permissionMode }
       : {}),
     onNotice: (message) => env.err(`loom run: ${message}`),
+    onUsage: (usage) => env.err(`loom run: ${formatUsage(usage)}`),
   });
 }
 
@@ -127,6 +165,13 @@ async function defaultExecutor(
 // binary surfaces as a spawn error (ENOENT); a present one exits 0.
 function claudeAvailable(bin: string): boolean {
   const res = spawnSync(bin, ["--version"], { encoding: "utf8" });
+  return res.error === undefined && res.status === 0;
+}
+
+// Probe for the Docker CLI + a reachable daemon by spawning `docker version`.
+function dockerAvailableDefault(): boolean {
+  const bin = process.env["LOOM_DOCKER_BIN"] ?? "docker";
+  const res = spawnSync(bin, ["version", "--format", "{{.Server.Version}}"], { encoding: "utf8" });
   return res.error === undefined && res.status === 0;
 }
 

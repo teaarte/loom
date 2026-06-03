@@ -50,13 +50,31 @@ import {
 } from "./compositions.js";
 import { resumeDirective } from "./resume-directive.js";
 
+// Per-spawn resource accounting a backend can surface when its envelope
+// carries it (e.g. `claude -p --output-format json` reports `usage` +
+// `total_cost_usd`). The token shape mirrors the kernel's `AgentResult.tokens`
+// so a future delivery-input field carries it straight through to the store;
+// `cost_usd` is a backend-computed figure the kernel does not model (it tracks
+// neutral tokens), surfaced here for audit/observability only.
+export interface SpawnUsage {
+  tokens?: { in: number; out: number; cached?: number };
+  cost_usd?: number;
+  num_turns?: number;
+  duration_ms?: number;
+}
+
 // What an executor returns. `agent_output` is the spawn's text; the file
 // lists are OPTIONAL host-authoritative accounting the loop unions with the
 // server-computed git delta (set semantics, so reporting nothing is safe).
+// `usage` is OPTIONAL per-spawn cost/token accounting a backend surfaces when
+// its envelope carries it — the loop does not yet deliver it into the kernel
+// (the delivery input has no token field), so it is currently observed via the
+// executor's own `onUsage` sink, not persisted.
 export interface ExecutorResult {
   agent_output: string;
   files_modified?: string[];
   files_created?: string[];
+  usage?: SpawnUsage;
 }
 
 // The single injected seam — "how to run one spawn". The input is the

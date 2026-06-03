@@ -40,19 +40,26 @@ export type {
   DriveOutcome,
   Executor,
   ExecutorResult,
+  SpawnUsage,
 } from "./drive.js";
 
 export { createProviderExecutor } from "./provider-executor.js";
 
-// The sandboxed-executor shell (worktree isolation + self-diff) and its
-// chosen headless backend — `claude -p` on the user's subscription login.
+// The sandboxed-executor shell (per-task isolation + self-diff) and its
+// chosen headless backends — `claude -p` on the user's subscription login,
+// either in a worktree (default) or inside a container (the isolation fence
+// that makes bypassPermissions safe).
 export { createSandboxedExecutor } from "./sandboxed-executor.js";
-export type { RunSpawn, SandboxedExecutorOptions } from "./sandboxed-executor.js";
+export type { RunSpawn, RunSpawnResult, SandboxedExecutorOptions } from "./sandboxed-executor.js";
 export {
   createClaudeCodeExecutor,
   buildClaudeArgs,
   parseClaudeResult,
+  parseClaudeUsage,
 } from "./claude-code-executor.js";
 export type { ClaudeCodeExecutorOptions } from "./claude-code-executor.js";
+export { createContainerExecutor, buildDockerArgs, dockerAvailable } from "./container-executor.js";
+export type { ContainerExecutorOptions, DockerArgsOptions } from "./container-executor.js";
 export { provisionWorktree, worktreePathFor } from "./worktree.js";
 export type { WorktreeProvision } from "./worktree.js";
+export { provisionClone, clonePathFor } from "./clone.js";

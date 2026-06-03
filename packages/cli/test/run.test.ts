@@ -126,4 +126,43 @@ describe("loom run", () => {
     assert.equal(code, 1);
     assert.ok(err.some((l) => /task is required/.test(l)));
   });
+
+  it("rejects --docker and --no-docker together", async () => {
+    const { env, err } = makeEnv();
+    const code = await runTask(
+      ["--docker", "--no-docker", "work"],
+      env,
+      overrides({ kind: "complete", task_id: "t", verdict: "accepted", summary: "" }),
+    );
+    assert.equal(code, 1);
+    assert.ok(err.some((l) => /mutually exclusive/.test(l)));
+  });
+
+  it("strips the container toggle from the task string", async () => {
+    const { env } = makeEnv();
+    let seenTask: string | undefined;
+    const code = await runTask(["--docker", "ship", "it"], env, {
+      resolveRegistry: () => ({}) as unknown as Registry,
+      buildExecutor: () => stubExecutor,
+      driveImpl: async (_dir, opts) => {
+        seenTask = opts.task;
+        return { kind: "complete", task_id: "t", verdict: "accepted", summary: "" };
+      },
+    });
+    assert.equal(code, 0);
+    assert.equal(seenTask, "ship it");
+  });
+
+  it("refuses cleanly when --docker is required but Docker is absent", async () => {
+    const { env, err } = makeEnv();
+    // No buildExecutor override → the default builder resolves the container
+    // plan; require mode + an absent Docker probe refuses before any drive.
+    const code = await runTask(["--docker", "some work"], env, {
+      resolveRegistry: () => ({}) as unknown as Registry,
+      dockerAvailable: () => false,
+      driveImpl: async () => ({ kind: "complete", task_id: null, verdict: "accepted", summary: "" }),
+    });
+    assert.equal(code, 1);
+    assert.ok(err.some((l) => /--docker requires/.test(l)));
+  });
 });

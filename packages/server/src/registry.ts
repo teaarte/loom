@@ -34,11 +34,21 @@ import {
   type DaemonHandle,
   type DaemonLogger,
   type ExecutorBuildContext,
+  type MergeBackResult,
   type RetryPolicy,
   type WakeOptions,
 } from "@loomfsm/daemon";
-import type { Executor } from "@loomfsm/driver";
+import type { DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
+
+// The worktree integration the supervisor runs on `complete` — forwarded
+// fleet-wide so the deployment's chosen backend (worktree vs container clone)
+// brings its matching merge-back. Mirrors the daemon's `SuperviseOptions`.
+type CompleteOutcome = Extract<DriveOutcome, { kind: "complete" }>;
+export type FleetMergeBack = (
+  projectDir: string,
+  outcome: CompleteOutcome,
+) => MergeBackResult | Promise<MergeBackResult>;
 
 import { ServerError } from "./errors.js";
 import { gatedExecutor } from "./executor-gate.js";
@@ -53,6 +63,10 @@ export interface RegistryDeps {
   // wraps it with the shared concurrency gate. The CLI injects the `claude -p`
   // factory.
   buildExecutor: (projectDir: string, ctx: ExecutorBuildContext) => Executor;
+  // Worktree integration on `complete`, applied to every watcher. Omitted →
+  // the supervisor's default (commit-to-branch from the worktree). The CLI
+  // injects the clone variant when serving in container mode.
+  mergeBack?: FleetMergeBack;
   // Where the durable registered-dir set is persisted.
   stateDir: string;
   // Total concurrent backend spawns across the WHOLE fleet. Default 4.
@@ -149,6 +163,7 @@ export class SupervisorRegistry {
       handle,
       clock: this.clock,
       signal: controller.signal,
+      ...(this.deps.mergeBack !== undefined ? { mergeBack: this.deps.mergeBack } : {}),
       ...(this.deps.retry_policy !== undefined ? { retry_policy: this.deps.retry_policy } : {}),
       ...(this.deps.wake !== undefined ? { wake: this.deps.wake } : {}),
       ...(this.deps.watch_idle_ms !== undefined ? { watch_idle_ms: this.deps.watch_idle_ms } : {}),

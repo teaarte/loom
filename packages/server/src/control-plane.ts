@@ -25,7 +25,7 @@ import type { Server } from "node:http";
 
 import { createControlServer } from "./http.js";
 import { acquireServerLock, type ServerHandle } from "./process-control.js";
-import { SupervisorRegistry, type ProjectListing } from "./registry.js";
+import { SupervisorRegistry, type FleetMergeBack, type ProjectListing } from "./registry.js";
 
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4317;
@@ -40,6 +40,10 @@ export interface ControlPlaneOptions {
 
   resolveRegistry: (projectDir: string) => Promise<Registry> | Registry;
   buildExecutor: (projectDir: string, ctx: ExecutorBuildContext) => Executor;
+  // Worktree integration on `complete`, applied fleet-wide. Omitted → the
+  // supervisor default (worktree commit-to-branch). The CLI injects the clone
+  // variant when serving in container mode.
+  mergeBack?: FleetMergeBack;
   makeLogger?: (projectDir: string) => DaemonLogger;
   max_concurrent_spawns?: number;
   retry_policy?: RetryPolicy;
@@ -85,6 +89,7 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
     resolveRegistry: opts.resolveRegistry,
     buildExecutor: opts.buildExecutor,
     stateDir: opts.stateDir,
+    ...(opts.mergeBack !== undefined ? { mergeBack: opts.mergeBack } : {}),
     ...(opts.makeLogger !== undefined ? { makeLogger: opts.makeLogger } : {}),
     ...(opts.max_concurrent_spawns !== undefined
       ? { max_concurrent_spawns: opts.max_concurrent_spawns }

@@ -10,10 +10,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { provisionWorktree, worktreePathFor } from "@loomfsm/driver";
+import { clonePathFor, provisionClone, provisionWorktree, worktreePathFor } from "@loomfsm/driver";
 
 import {
   commitToBranchMergeBack,
+  commitToBranchMergeBackFromClone,
+  removeClone,
+  sweepOrphanClone,
   removeWorktree,
   sweepOrphanWorktree,
 } from "../src/index.js";
@@ -123,6 +126,82 @@ describe("worktree-lifecycle — GC", () => {
       assert.equal(removeWorktree(dir), false);
     } finally {
       cleanup(dir);
+    }
+  });
+});
+
+function cleanupClone(dir: string): void {
+  rmSync(clonePathFor(dir), { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true });
+}
+
+describe("worktree-lifecycle — container clone merge-back", () => {
+  it("EXTRACTS the clone's loom/<task> branch into the shared repo, checkout untouched", () => {
+    const dir = freshGitRepo();
+    try {
+      const clone = provisionClone(dir);
+      // The agent left an edit + a new file in the dedicated clone.
+      writeFileSync(join(clone.dir, "generated.ts"), "export const x = 1;\n", "utf8");
+      writeFileSync(join(clone.dir, "seed.ts"), "export const seed = 2;\n", "utf8");
+
+      const result = commitToBranchMergeBackFromClone(dir, "task-abc-123");
+
+      assert.equal(result.merged, true);
+      assert.equal(result.branch, "loom/task-abc-123");
+      assert.ok(result.files_changed?.includes("generated.ts"));
+      assert.ok(result.files_changed?.includes("seed.ts"));
+      assert.equal(result.worktree_removed, true);
+
+      // The branch exists in the SHARED repo (extracted from the clone) and
+      // carries the work...
+      assert.ok(git(dir, "rev-parse", "--verify", "loom/task-abc-123").ok);
+      assert.equal(git(dir, "show", "loom/task-abc-123:generated.ts").stdout, "export const x = 1;");
+      // ...but the checked-out tree was NOT touched (never auto-merged).
+      assert.equal(existsSync(join(dir, "generated.ts")), false);
+      assert.equal(readFileSync(join(dir, "seed.ts"), "utf8"), "export const seed = 1;\n");
+      // The clone dir is gone (GC ran); its extracted branch survived it.
+      assert.equal(existsSync(clonePathFor(dir)), false);
+    } finally {
+      cleanupClone(dir);
+    }
+  });
+
+  it("makes no branch when the clone has no changes", () => {
+    const dir = freshGitRepo();
+    try {
+      provisionClone(dir); // provision, but write nothing
+      const result = commitToBranchMergeBackFromClone(dir, "task-empty");
+      assert.equal(result.merged, false);
+      assert.equal(result.reason, "no-changes");
+      assert.equal(git(dir, "rev-parse", "--verify", "loom/task-empty").ok, false);
+    } finally {
+      cleanupClone(dir);
+    }
+  });
+
+  it("is a clean no-op when there is no clone", () => {
+    const dir = freshGitRepo();
+    try {
+      const result = commitToBranchMergeBackFromClone(dir, "task-none");
+      assert.equal(result.merged, false);
+      assert.equal(result.reason, "no-clone");
+    } finally {
+      cleanupClone(dir);
+    }
+  });
+
+  it("sweepOrphanClone removes an orphan clone only when no task is live", () => {
+    const dir = freshGitRepo();
+    try {
+      provisionClone(dir);
+      assert.deepEqual(sweepOrphanClone(dir, { slotInProgress: true }), { removed: false });
+      assert.equal(existsSync(clonePathFor(dir)), true);
+      assert.deepEqual(sweepOrphanClone(dir, { slotInProgress: false }), { removed: true });
+      assert.equal(existsSync(clonePathFor(dir)), false);
+      // Idempotent when nothing remains.
+      assert.equal(removeClone(dir), false);
+    } finally {
+      cleanupClone(dir);
     }
   });
 });

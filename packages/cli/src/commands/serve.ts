@@ -22,19 +22,31 @@ import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
-import type { ExecutorBuildContext } from "@loomfsm/daemon";
-import type { Executor } from "@loomfsm/driver";
+import type { ExecutorBuildContext, MergeBackResult } from "@loomfsm/daemon";
+import type { DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
+import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
 import type { CliEnv } from "../lib/env.js";
+
+type CompleteOutcome = Extract<DriveOutcome, { kind: "complete" }>;
+type ServeMergeBack = (
+  projectDir: string,
+  outcome: CompleteOutcome,
+) => MergeBackResult | Promise<MergeBackResult>;
+type ServeFactory = {
+  buildExecutor: (projectDir: string, ctx: ExecutorBuildContext) => Executor;
+  mergeBack?: ServeMergeBack;
+};
 
 // Test seams — a suite injects a ready registry / executor factory / a fake
 // startControlPlane / an injected shutdown signal so it can assert parsing +
-// reporting + lifecycle wiring without standing up the Claude Code CLI.
+// reporting + lifecycle wiring without standing up the Claude Code CLI or Docker.
 export interface ServeOverrides {
   resolveRegistry?: (projectDir: string) => Promise<Registry> | Registry;
   buildExecutor?: (projectDir: string, ctx: ExecutorBuildContext) => Executor;
   claudeAvailable?: (bin: string) => boolean;
+  dockerAvailable?: () => boolean;
   startImpl?: (opts: unknown) => Promise<{ host: string; port: number; closed: Promise<void>; stop: () => Promise<void> }>;
   stateDir?: string;
   signal?: AbortSignal;
@@ -46,6 +58,8 @@ interface ServeFlags {
   port?: number;
   token?: string;
   detach: boolean;
+  docker: boolean;
+  noDocker: boolean;
   unknown?: string;
   badPort?: string;
 }
@@ -80,6 +94,12 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
     return 1;
   }
 
+  const modeResult = containerModeFrom({ docker: flags.docker, noDocker: flags.noDocker });
+  if ("error" in modeResult) {
+    env.err(`loom serve: ${modeResult.error}`);
+    return 1;
+  }
+
   const stateDir = resolveStateDir(env, overrides);
   const token = flags.token ?? envToken();
   const host = flags.host ?? process.env["LOOM_SERVER_HOST"];
@@ -90,14 +110,17 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
     return detach(argv, env);
   }
 
-  // Resolve the production registry resolver + the per-project `claude -p`
-  // executor factory (mirroring `loom run` / `loom daemon`).
+  // Resolve the production registry resolver + the per-project executor factory
+  // (container or `claude -p` worktree, per the toggle), mirroring `loom run` /
+  // `loom daemon`.
   const resolveRegistry =
     overrides.resolveRegistry ?? (await import("@loomfsm/mcp-server/bootstrap")).assembleRegistry;
 
-  let buildExecutor: (projectDir: string, ctx: ExecutorBuildContext) => Executor;
+  let factory: ServeFactory;
   try {
-    buildExecutor = overrides.buildExecutor ?? (await defaultExecutorFactory(overrides.claudeAvailable));
+    factory = overrides.buildExecutor
+      ? { buildExecutor: overrides.buildExecutor }
+      : await defaultServeFactory(env, modeResult.mode, overrides);
   } catch (err) {
     env.err(`loom serve: ${(err as Error).message}`);
     return 1;
@@ -124,7 +147,8 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
       ...(token !== undefined && token.length > 0 ? { token } : {}),
       projects,
       resolveRegistry,
-      buildExecutor,
+      buildExecutor: factory.buildExecutor,
+      ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
       makeLogger: (dir: string) => createFileLogger(dir, { echo: () => {} }),
       signal,
       serverLog: (line: string) => env.err(line),
@@ -183,7 +207,7 @@ async function serveStatus(env: CliEnv, overrides: ServeOverrides): Promise<numb
 // ----- internals ---------------------------------------------------------
 
 function parseServeFlags(argv: string[]): ServeFlags {
-  const out: ServeFlags = { projects: [], detach: false };
+  const out: ServeFlags = { projects: [], detach: false, docker: false, noDocker: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === undefined) continue;
@@ -201,6 +225,10 @@ function parseServeFlags(argv: string[]): ServeFlags {
       out.token = argv[++i];
     } else if (a === "--detach") {
       out.detach = true;
+    } else if (a === "--docker") {
+      out.docker = true;
+    } else if (a === "--no-docker") {
+      out.noDocker = true;
     } else if (a.startsWith("-")) {
       out.unknown = a;
       return out;
@@ -230,14 +258,43 @@ function envPort(): number | undefined {
   return Number.isInteger(n) && n >= 0 && n <= 65535 ? n : undefined;
 }
 
-// The per-project `claude -p` executor factory: probe the CLI ONCE up front
-// (refuse cleanly when absent) and build a fresh executor per project per
-// drive attempt so the attempt's abort signal reaches the child.
-async function defaultExecutorFactory(
-  availableOverride: ((bin: string) => boolean) | undefined,
-): Promise<(projectDir: string, ctx: ExecutorBuildContext) => Executor> {
+// The per-project drive factory: resolve the container toggle ONCE (the toggle
+// + env are server-wide), probe the chosen requirement (Docker for container,
+// the Claude Code CLI for worktree) up front and refuse cleanly when absent,
+// then build a fresh executor per project per drive attempt so the attempt's
+// abort signal reaches the child. Container mode also brings the matching clone
+// merge-back, applied fleet-wide.
+async function defaultServeFactory(
+  env: CliEnv,
+  mode: ContainerMode,
+  overrides: ServeOverrides,
+): Promise<ServeFactory> {
+  const plan = resolveContainerPlan({
+    mode,
+    env: process.env,
+    home: env.home.length > 0 ? env.home : homedir(),
+    dockerAvailable: overrides.dockerAvailable ?? dockerAvailableDefault,
+    onNotice: (message) => env.err(`loom serve: ${message}`),
+  });
+
+  if (plan.useDocker) {
+    const { createContainerExecutor } = await import("@loomfsm/driver");
+    const { commitToBranchMergeBackFromClone } = await import("@loomfsm/daemon");
+    return {
+      buildExecutor: (projectDir, ctx) =>
+        createContainerExecutor({
+          project_dir: projectDir,
+          ...plan.container,
+          onNotice: ctx.onNotice,
+          onUsage: ctx.onUsage,
+          signal: ctx.signal,
+        }),
+      mergeBack: (dir, outcome) => commitToBranchMergeBackFromClone(dir, outcome.task_id),
+    };
+  }
+
   const bin = process.env["LOOM_CLAUDE_BIN"] ?? "claude";
-  const available = availableOverride ?? claudeAvailable;
+  const available = overrides.claudeAvailable ?? claudeAvailable;
   if (!available(bin)) {
     throw new Error(
       `Claude Code CLI '${bin}' was not found on PATH; install Claude Code and ` +
@@ -246,17 +303,26 @@ async function defaultExecutorFactory(
   }
   const permissionMode = process.env["LOOM_CLAUDE_PERMISSION_MODE"];
   const { createClaudeCodeExecutor } = await import("@loomfsm/driver");
-  return (projectDir, ctx) =>
-    createClaudeCodeExecutor({
-      project_dir: projectDir,
-      ...(permissionMode !== undefined && permissionMode !== "" ? { permission_mode: permissionMode } : {}),
-      onNotice: ctx.onNotice,
-      signal: ctx.signal,
-    });
+  return {
+    buildExecutor: (projectDir, ctx) =>
+      createClaudeCodeExecutor({
+        project_dir: projectDir,
+        ...(permissionMode !== undefined && permissionMode !== "" ? { permission_mode: permissionMode } : {}),
+        onNotice: ctx.onNotice,
+        onUsage: ctx.onUsage,
+        signal: ctx.signal,
+      }),
+  };
 }
 
 function claudeAvailable(bin: string): boolean {
   const res = spawnSync(bin, ["--version"], { encoding: "utf8" });
+  return res.error === undefined && res.status === 0;
+}
+
+function dockerAvailableDefault(): boolean {
+  const bin = process.env["LOOM_DOCKER_BIN"] ?? "docker";
+  const res = spawnSync(bin, ["version", "--format", "{{.Server.Version}}"], { encoding: "utf8" });
   return res.error === undefined && res.status === 0;
 }
 

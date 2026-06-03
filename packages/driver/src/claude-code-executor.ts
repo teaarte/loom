@@ -25,12 +25,11 @@
 // The driver gains NO npm dependency: it shells out to the external `claude`
 // binary via node:child_process.
 
-import { spawn } from "node:child_process";
-
 import { KernelError, type ProviderShuttleIntent } from "@loomfsm/kernel";
 
-import type { Executor } from "./drive.js";
-import { createSandboxedExecutor, type RunSpawn } from "./sandboxed-executor.js";
+import type { Executor, SpawnUsage } from "./drive.js";
+import { createSandboxedExecutor, type RunSpawn, type RunSpawnResult } from "./sandboxed-executor.js";
+import { spawnCapture } from "./spawn-cli.js";
 
 const DEFAULT_PERMISSION_MODE = "acceptEdits";
 
@@ -47,6 +46,9 @@ export interface ClaudeCodeExecutorOptions {
   signal?: AbortSignal;
   // Sink for the shell's degraded-mode notice.
   onNotice?: (message: string) => void;
+  // Sink for per-spawn usage (tokens / cost) parsed from the `claude -p`
+  // JSON envelope. Surfaced for audit; not persisted by the loop.
+  onUsage?: (usage: SpawnUsage) => void;
   // Test seam: inject the per-spawn runner instead of spawning the real
   // binary, so the shell (worktree + self-diff) can be exercised offline.
   runSpawn?: RunSpawn;
@@ -119,62 +121,69 @@ export function parseClaudeResult(stdout: string): string {
   return obj.result;
 }
 
-function spawnClaude(
+function finiteNumber(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+// Extract per-spawn usage from a `claude -p --output-format json` envelope:
+// token counts (mapped to the kernel's neutral in/out/cached shape) plus the
+// backend-computed `total_cost_usd` and turn/duration figures. Returns
+// undefined when the envelope carries no usage (so nothing is invented).
+// Never throws — usage is best-effort accounting, never a failure path.
+export function parseClaudeUsage(stdout: string): SpawnUsage | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const obj = parsed as Record<string, unknown>;
+  const usage: SpawnUsage = {};
+
+  const u = obj["usage"];
+  if (typeof u === "object" && u !== null) {
+    const uo = u as Record<string, unknown>;
+    const inTok = finiteNumber(uo["input_tokens"]);
+    const outTok = finiteNumber(uo["output_tokens"]);
+    const cached = finiteNumber(uo["cache_read_input_tokens"]);
+    if (inTok !== undefined || outTok !== undefined || cached !== undefined) {
+      usage.tokens = {
+        in: inTok ?? 0,
+        out: outTok ?? 0,
+        ...(cached !== undefined ? { cached } : {}),
+      };
+    }
+  }
+  const cost = finiteNumber(obj["total_cost_usd"]);
+  if (cost !== undefined) usage.cost_usd = cost;
+  const turns = finiteNumber(obj["num_turns"]);
+  if (turns !== undefined) usage.num_turns = turns;
+  const dur = finiteNumber(obj["duration_ms"]);
+  if (dur !== undefined) usage.duration_ms = dur;
+
+  return Object.keys(usage).length > 0 ? usage : undefined;
+}
+
+async function spawnClaude(
   bin: string,
   args: string[],
   cwd: string,
   signal: AbortSignal | undefined,
-): Promise<string> {
-  return new Promise<string>((resolveRun, reject) => {
-    const child = spawn(bin, args, {
-      cwd,
-      ...(signal !== undefined ? { signal } : {}),
-    });
-
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-
-    child.on("error", (err) => {
-      const code = (err as { code?: unknown }).code;
-      if (code === "ENOENT") {
-        reject(
-          new KernelError({
-            code: "EXECUTOR_NOT_FOUND",
-            message:
-              `Claude Code CLI '${bin}' was not found; install Claude Code and ` +
-              `sign in (run 'claude') to drive headless runs on your subscription`,
-            detail: { bin },
-          }),
-        );
-        return;
-      }
-      reject(err instanceof Error ? err : new Error(String(err)));
-    });
-
-    child.on("close", (exitCode) => {
-      if (exitCode !== 0) {
-        reject(
-          new KernelError({
-            code: "EXECUTOR_FAILED",
-            message: `claude -p exited with code ${exitCode}`,
-            detail: { exit_code: exitCode, stderr_head: stderr.slice(0, 1000) },
-          }),
-        );
-        return;
-      }
-      try {
-        resolveRun(parseClaudeResult(stdout));
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
-    });
+): Promise<RunSpawnResult> {
+  const stdout = await spawnCapture({
+    bin,
+    args,
+    cwd,
+    label: "claude -p",
+    notFoundMessage:
+      `Claude Code CLI '${bin}' was not found; install Claude Code and ` +
+      `sign in (run 'claude') to drive headless runs on your subscription`,
+    ...(signal !== undefined ? { signal } : {}),
   });
+  const output = parseClaudeResult(stdout);
+  const usage = parseClaudeUsage(stdout);
+  return usage !== undefined ? { output, usage } : { output };
 }
 
 export function createClaudeCodeExecutor(opts: ClaudeCodeExecutorOptions): Executor {
@@ -190,5 +199,6 @@ export function createClaudeCodeExecutor(opts: ClaudeCodeExecutorOptions): Execu
     runSpawn,
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     ...(opts.onNotice !== undefined ? { onNotice: opts.onNotice } : {}),
+    ...(opts.onUsage !== undefined ? { onUsage: opts.onUsage } : {}),
   });
 }

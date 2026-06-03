@@ -22,30 +22,51 @@
 
 import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
-import type { Executor, ExecutorResult } from "./drive.js";
+import type { Executor, ExecutorResult, SpawnUsage } from "./drive.js";
 import { gitDelta } from "./git-delta.js";
 import { provisionWorktree, type WorktreeProvision } from "./worktree.js";
 
-// The injected backend: run one spawn in `worktreeDir` and return the
-// agent's text output. Throws on failure — the loop's executor-retry /
-// error-surfacing handles it (a thrown executor re-resumes the same
-// agent_run_id, no double spawn).
+// What a backend run returns: the agent's text output, optionally paired with
+// per-spawn usage when the backend's envelope reports it. A plain string is
+// still accepted (a backend that surfaces no usage just returns text), so
+// existing runners need no change.
+export interface RunSpawnResult {
+  output: string;
+  usage?: SpawnUsage;
+}
+
+// The injected backend: run one spawn in `worktreeDir` and return the agent's
+// output (text, or text + usage). Throws on failure — the loop's
+// executor-retry / error-surfacing handles it (a thrown executor re-resumes
+// the same agent_run_id, no double spawn).
 export type RunSpawn = (
   intent: ProviderShuttleIntent,
   worktreeDir: string,
   signal?: AbortSignal,
-) => Promise<string>;
+) => Promise<string | RunSpawnResult>;
 
 export interface SandboxedExecutorOptions {
-  // The project root. The worktree is derived deterministically from it.
+  // The project root. The sandbox dir is derived deterministically from it.
   project_dir: string;
-  // How a spawn is actually executed in the provisioned worktree.
+  // How a spawn is actually executed in the provisioned sandbox dir.
   runSpawn: RunSpawn;
+  // How the per-task isolated working copy is provisioned (and reused across
+  // re-resume). Default = a detached git worktree (`provisionWorktree`). The
+  // container backend injects a dedicated-clone provisioner so the same
+  // self-diff + reuse logic runs over a clone instead. The result's `dir` is
+  // where the spawn runs and the tree the self-diff measures; `isolated:false`
+  // surfaces the degraded notice. A provisioner that cannot isolate may throw
+  // (the container's clone refuses a non-git project) rather than degrade.
+  provision?: () => WorktreeProvision;
   // Aborts an in-flight backend run when the drive is cancelled.
   signal?: AbortSignal;
-  // Sink for non-fatal notices (e.g. the degraded "no worktree isolation"
-  // warning). Omitted → notices are dropped.
+  // Sink for non-fatal notices (e.g. the degraded "no isolation" warning, or
+  // a container backend's fallback notice). Omitted → notices are dropped.
   onNotice?: (message: string) => void;
+  // Sink for per-spawn usage (tokens / cost) when the backend reports it.
+  // Surfaced for audit/observability — the loop does not persist it. Omitted →
+  // usage is dropped.
+  onUsage?: (usage: SpawnUsage) => void;
   // Whether re-running a spawn (same agent_run_id) is safe. Default true: the
   // worktree is deterministic, a re-run just redoes the work in the isolated
   // tree, and the resume restart-head de-dups delivery through the ledger. A
@@ -59,12 +80,13 @@ export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executo
   // for every spawn of that task. The deterministic worktree path makes a
   // SEPARATE executor instance (a re-resume) reuse the same worktree too.
   let provisioned: WorktreeProvision | null = null;
+  const doProvision = opts.provision ?? ((): WorktreeProvision => provisionWorktree(opts.project_dir));
   const provision = (): WorktreeProvision => {
     if (provisioned === null) {
-      provisioned = provisionWorktree(opts.project_dir);
+      provisioned = doProvision();
       if (!provisioned.isolated) {
         opts.onNotice?.(
-          `git worktree isolation unavailable (not a git work tree); ` +
+          `sandbox isolation unavailable (not a git work tree); ` +
             `running in ${opts.project_dir} without isolation`,
         );
       }
@@ -82,10 +104,16 @@ export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executo
     idempotent: opts.idempotent ?? true,
     async execute(intent: ProviderShuttleIntent): Promise<ExecutorResult> {
       const wt = provision();
-      const agent_output = await opts.runSpawn(intent, wt.dir, opts.signal);
+      const ran = await opts.runSpawn(intent, wt.dir, opts.signal);
+      const agent_output = typeof ran === "string" ? ran : ran.output;
+      const usage = typeof ran === "string" ? undefined : ran.usage;
 
       const result: ExecutorResult = { agent_output };
-      // Self-diff the worktree against the provision-time baseline so the
+      if (usage !== undefined) {
+        result.usage = usage;
+        opts.onUsage?.(usage);
+      }
+      // Self-diff the isolated tree against the provision-time baseline so the
       // carrier is fed natively — no dependence on the backend to report it.
       const delta = gitDelta(wt.dir, wt.baseline);
       if (delta !== null) {

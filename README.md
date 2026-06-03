@@ -137,8 +137,8 @@ loom allowlist add [path] [--dry-run]                 authorize a project direct
 loom allowlist list                                   show authorized directories
 loom init [--dry-run]                                 ensure .claude/ + authorize this project
 
-loom run "<task>"                                     drive a task to the end headless (claude -p, isolated worktree)
-loom daemon start [--watch] [--detach] ["<task>"]     supervise a project: park/wake, retry, recover, merge-back
+loom run "<task>" [--docker|--no-docker]              drive a task to the end headless (claude -p, isolated worktree)
+loom daemon start [--watch] [--detach] [--docker] ["<task>"]  supervise a project: park/wake, retry, recover, merge-back
 loom daemon stop  [path]                              signal a running daemon to stop gracefully
 loom daemon status [path]                             show the daemon + where the task sits
 
@@ -152,6 +152,33 @@ loom --help | --version
 > on your subscription). The interactive `/task` path does not — it uses your host
 > directly. The permission posture defaults to safe (`acceptEdits` — file edits proceed,
 > shell stays gated); raise it deliberately with `LOOM_CLAUDE_PERMISSION_MODE`.
+
+#### Container isolation — a real fence for unattended runs (`--docker`)
+
+The git-worktree default isolates the *file tree* but not the process: a full-power
+(`bypassPermissions`) agent could still reach the host filesystem, your other repos, and
+your credentials. For "set it and forget it", `--docker` runs each spawn inside a
+container that mounts **only** a dedicated clone of the project (never your live
+checkout) plus the one credential needed to sign in — a real blast-radius bound that
+makes full autonomy safe to leave running.
+
+```bash
+export LOOM_DOCKER_IMAGE=loom-claude:latest        # an image with the Claude Code CLI + git (see docker/)
+export CLAUDE_CODE_OAUTH_TOKEN="$(claude setup-token)"   # subscription token, NOT an API key
+loom run --docker "refactor the payment module"    # require the fence: no fence, no run
+loom daemon start --docker --watch                 # autonomous, fenced
+```
+
+- **auto** (default): use Docker if it's available, else fall back to the worktree with a
+  loud notice. `--docker` **requires** it (refuse cleanly when Docker / an image / a
+  credential is missing); `--no-docker` forces the worktree.
+- The agent works in a `git clone --local` of the project, so it has full git inside the
+  fence; finished work is extracted to a `loom/<task>` branch exactly as the worktree
+  path does — **your checked-out tree is never touched.**
+- Honesty rule: loom claims only the isolation it actually provides. No Docker → it says
+  so and degrades; it never runs unsandboxed while implying a sandbox.
+- Knobs: `LOOM_DOCKER_IMAGE` (required), `LOOM_DOCKER_NETWORK`, `LOOM_DOCKER_USER`,
+  `LOOM_CLAUDE_MAX_TURNS`. A reference image is in [`docker/`](docker/).
 
 ## Why loom
 

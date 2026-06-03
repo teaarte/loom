@@ -22,21 +22,31 @@
 // opened lazily; the bin re-execs `daemon` with --experimental-sqlite.
 
 import { spawn, spawnSync } from "node:child_process";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 
-import type { Executor } from "@loomfsm/driver";
+import type { ExecutorBuildContext, MergeBackResult } from "@loomfsm/daemon";
+import type { DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
 import { firstUnknownFlag, parseArgs } from "../lib/args.js";
+import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
 import type { CliEnv } from "../lib/env.js";
+
+type CompleteOutcome = Extract<DriveOutcome, { kind: "complete" }>;
+type DriveFactory = {
+  buildExecutor: (ctx: ExecutorBuildContext) => Executor;
+  mergeBack?: (projectDir: string, outcome: CompleteOutcome) => MergeBackResult | Promise<MergeBackResult>;
+};
 
 // Test seams: inject a ready registry / executor / a fake supervise so a
 // suite asserts parsing + reporting + lifecycle wiring without standing up a
-// real store or the Claude Code CLI. Production leaves them unset.
+// real store, the Claude Code CLI, or Docker. Production leaves them unset.
 export interface DaemonOverrides {
   resolveRegistry?: (projectDir: string) => Promise<Registry> | Registry;
-  buildExecutor?: (ctx: { onNotice: (m: string) => void; signal: AbortSignal }) => Executor;
+  buildExecutor?: (ctx: ExecutorBuildContext) => Executor;
   claudeAvailable?: (bin: string) => boolean;
+  dockerAvailable?: () => boolean;
   // Replace the supervisor entrypoints (default imports from @loomfsm/daemon).
   superviseImpl?: (projectDir: string, opts: unknown) => Promise<unknown>;
   superviseWatchImpl?: (projectDir: string, opts: unknown) => Promise<void>;
@@ -44,7 +54,7 @@ export interface DaemonOverrides {
   signal?: AbortSignal;
 }
 
-const START_KNOWN_FLAGS = ["watch", "detach", "foreground"] as const;
+const START_KNOWN_FLAGS = ["watch", "detach", "foreground", "docker", "no-docker"] as const;
 const STOPSTATUS_KNOWN_FLAGS = [] as const;
 
 export async function daemon(
@@ -78,9 +88,15 @@ async function start(argv: string[], env: CliEnv, overrides: DaemonOverrides): P
   const watch = flags.has("watch");
   const task = positionals.join(" ").trim();
 
+  const modeResult = containerModeFrom({ docker: flags.has("docker"), noDocker: flags.has("no-docker") });
+  if ("error" in modeResult) {
+    env.err(`loom daemon start: ${modeResult.error}`);
+    return 1;
+  }
+
   // --detach forks a background foreground-daemon and returns immediately.
   if (flags.has("detach")) {
-    return detach(target, watch, task, env);
+    return detach(target, watch, task, env, flags);
   }
 
   // Resolve the pipeline + build the executor factory, mirroring `loom run`.
@@ -94,9 +110,11 @@ async function start(argv: string[], env: CliEnv, overrides: DaemonOverrides): P
     return 1;
   }
 
-  let buildExecutor: (ctx: { onNotice: (m: string) => void; signal: AbortSignal }) => Executor;
+  let factory: DriveFactory;
   try {
-    buildExecutor = overrides.buildExecutor ?? (await defaultExecutorFactory(target, overrides.claudeAvailable));
+    factory = overrides.buildExecutor
+      ? { buildExecutor: overrides.buildExecutor }
+      : await defaultDriveFactory(target, env, modeResult.mode, overrides);
   } catch (err) {
     env.err(`loom daemon start: ${(err as Error).message}`);
     return 1;
@@ -130,9 +148,10 @@ async function start(argv: string[], env: CliEnv, overrides: DaemonOverrides): P
 
   const logger = createFileLogger(target, { echo: (line) => env.err(line.replace(/\n$/, "")) });
   const opts = {
-    buildExecutor,
+    buildExecutor: factory.buildExecutor,
     resolveRegistry: () => registry,
     ...(task.length > 0 ? { task } : {}),
+    ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
     logger,
     handle,
     signal,
@@ -249,15 +268,44 @@ function resolveTarget(positionals: string[], env: CliEnv): string {
   return first !== undefined && first.length > 0 ? resolve(env.cwd, first) : env.cwd;
 }
 
-// The `claude -p` executor factory, mirroring `loom run`'s defaultExecutor:
-// probe the CLI up front (refuse cleanly when absent) and build a fresh
-// executor per drive attempt so the attempt's abort signal reaches the child.
-async function defaultExecutorFactory(
+// The per-attempt drive factory, mirroring `loom run`'s defaultExecutor: in
+// container mode it builds a `createContainerExecutor` (Docker fence + clone)
+// and the matching clone merge-back; otherwise the `claude -p` worktree
+// executor with the supervisor's default worktree merge-back. The chosen
+// requirement is probed up front (refuse cleanly when absent), and a fresh
+// executor is built per attempt so the attempt's abort signal reaches the child.
+async function defaultDriveFactory(
   projectDir: string,
-  availableOverride: ((bin: string) => boolean) | undefined,
-): Promise<(ctx: { onNotice: (m: string) => void; signal: AbortSignal }) => Executor> {
+  env: CliEnv,
+  mode: ContainerMode,
+  overrides: DaemonOverrides,
+): Promise<DriveFactory> {
+  const plan = resolveContainerPlan({
+    mode,
+    env: process.env,
+    home: env.home.length > 0 ? env.home : homedir(),
+    dockerAvailable: overrides.dockerAvailable ?? dockerAvailableDefault,
+    onNotice: (message) => env.err(`loom daemon start: ${message}`),
+  });
+
+  if (plan.useDocker) {
+    const { createContainerExecutor } = await import("@loomfsm/driver");
+    const { commitToBranchMergeBackFromClone } = await import("@loomfsm/daemon");
+    return {
+      buildExecutor: (ctx) =>
+        createContainerExecutor({
+          project_dir: projectDir,
+          ...plan.container,
+          onNotice: ctx.onNotice,
+          onUsage: ctx.onUsage,
+          signal: ctx.signal,
+        }),
+      mergeBack: (dir, outcome) => commitToBranchMergeBackFromClone(dir, outcome.task_id),
+    };
+  }
+
   const bin = process.env["LOOM_CLAUDE_BIN"] ?? "claude";
-  const available = availableOverride ?? claudeAvailable;
+  const available = overrides.claudeAvailable ?? claudeAvailable;
   if (!available(bin)) {
     throw new Error(
       `Claude Code CLI '${bin}' was not found on PATH; install Claude Code and ` +
@@ -266,15 +314,18 @@ async function defaultExecutorFactory(
   }
   const permissionMode = process.env["LOOM_CLAUDE_PERMISSION_MODE"];
   const { createClaudeCodeExecutor } = await import("@loomfsm/driver");
-  return (ctx) =>
-    createClaudeCodeExecutor({
-      project_dir: projectDir,
-      ...(permissionMode !== undefined && permissionMode !== ""
-        ? { permission_mode: permissionMode }
-        : {}),
-      onNotice: ctx.onNotice,
-      signal: ctx.signal,
-    });
+  return {
+    buildExecutor: (ctx) =>
+      createClaudeCodeExecutor({
+        project_dir: projectDir,
+        ...(permissionMode !== undefined && permissionMode !== ""
+          ? { permission_mode: permissionMode }
+          : {}),
+        onNotice: ctx.onNotice,
+        onUsage: ctx.onUsage,
+        signal: ctx.signal,
+      }),
+  };
 }
 
 function claudeAvailable(bin: string): boolean {
@@ -282,10 +333,16 @@ function claudeAvailable(bin: string): boolean {
   return res.error === undefined && res.status === 0;
 }
 
+function dockerAvailableDefault(): boolean {
+  const bin = process.env["LOOM_DOCKER_BIN"] ?? "docker";
+  const res = spawnSync(bin, ["version", "--format", "{{.Server.Version}}"], { encoding: "utf8" });
+  return res.error === undefined && res.status === 0;
+}
+
 // Fork a detached foreground daemon: re-exec the launcher with the same
-// task/watch in the background, print its pid, and return. The child writes
-// its own status/PID file via `acquireLock`, so `stop`/`status` find it.
-function detach(target: string, watch: boolean, task: string, env: CliEnv): number {
+// task/watch/toggle in the background, print its pid, and return. The child
+// writes its own status/PID file via `acquireLock`, so `stop`/`status` find it.
+function detach(target: string, watch: boolean, task: string, env: CliEnv, flags: Set<string>): number {
   const entry = process.argv[1];
   if (entry === undefined) {
     env.err("loom daemon start: cannot locate the launcher to detach");
@@ -293,6 +350,8 @@ function detach(target: string, watch: boolean, task: string, env: CliEnv): numb
   }
   const args = ["--experimental-sqlite", "--no-warnings", entry, "daemon", "start"];
   if (watch) args.push("--watch");
+  if (flags.has("docker")) args.push("--docker");
+  if (flags.has("no-docker")) args.push("--no-docker");
   if (task.length > 0) args.push(task);
   const child = spawn(process.execPath, args, {
     cwd: target,

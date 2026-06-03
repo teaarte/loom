@@ -32,6 +32,7 @@ import type { DriveOptions, DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
 import { containerModeFrom, formatUsage, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
+import { resolveSpawnTimeouts } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
 // Seams for tests: a suite injects a ready registry / stub executor / fake
@@ -130,12 +131,14 @@ async function defaultExecutor(
     dockerAvailable: overrides.dockerAvailable ?? (() => dockerAvailableDefault()),
     onNotice: (message) => env.err(`loom run: ${message}`),
   });
+  const timeouts = resolveSpawnTimeouts(process.env);
 
   if (plan.useDocker) {
     const { createContainerExecutor } = await import("@loomfsm/driver");
     return createContainerExecutor({
       project_dir: projectDir,
       ...plan.container,
+      ...timeouts,
       onNotice: (message) => env.err(`loom run: ${message}`),
       onUsage: (usage) => env.err(`loom run: ${formatUsage(usage)}`),
     });
@@ -156,6 +159,7 @@ async function defaultExecutor(
     ...(permissionMode !== undefined && permissionMode !== ""
       ? { permission_mode: permissionMode }
       : {}),
+    ...timeouts,
     onNotice: (message) => env.err(`loom run: ${message}`),
     onUsage: (usage) => env.err(`loom run: ${formatUsage(usage)}`),
   });

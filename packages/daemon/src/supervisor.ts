@@ -43,6 +43,17 @@ import { waitForWake, type WakeOptions } from "./wake.js";
 
 type DriveCompleteOutcome = Extract<DriveOutcome, { kind: "complete" }>;
 
+// Wait this long on a recognised rate-limit before re-driving — long enough to
+// outlast a subscription usage window without escalating, short enough to
+// re-probe periodically. A fixed wait (the backend's envelope carries no
+// machine-readable reset) the deployment can override.
+export const DEFAULT_RATE_LIMIT_WAIT_MS = 3_600_000; // 1h
+
+// After this many consecutive error escalations on the SAME in-progress slot,
+// `superviseWatch` stops re-driving it (parks) instead of looping — a wedged
+// task must not be hammered. Generic by COUNT.
+export const DEFAULT_WATCH_ERROR_PARK_AFTER = 3;
+
 // The minimal advisory-status surface the supervisor pokes (a `DaemonHandle`
 // satisfies it). Optional — embedders that don't run the process-control
 // file omit it.
@@ -84,8 +95,15 @@ export interface SuperviseOptions {
   // Abort a single drive that runs longer than this (a hung spawn); treated
   // as a transient failure and re-driven. Omitted → no per-drive deadline.
   drive_deadline_ms?: number;
+  // Wait this long on a recognised rate-limit before re-driving — does NOT
+  // count against `retry_policy.max_attempts`. Default 1h.
+  rate_limit_wait_ms?: number;
   // Idle-poll cadence for `superviseWatch` between tasks. Default 5s.
   watch_idle_ms?: number;
+  // After this many consecutive error escalations on one in-progress slot,
+  // `superviseWatch` parks it (stops re-driving) instead of tight-looping.
+  // Default 3.
+  watch_error_park_after?: number;
 
   // Integrate the worktree on `complete`. Default = commit-to-branch
   // `loom/<task>` + GC (`commitToBranchMergeBack`).
@@ -126,6 +144,7 @@ export async function superviseToTerminal(
   const logger = opts.logger ?? nullLogger;
   const policy = opts.retry_policy ?? DEFAULT_RETRY_POLICY;
   const classify = opts.classifyError ?? defaultClassifier;
+  const rateLimitWaitMs = opts.rate_limit_wait_ms ?? DEFAULT_RATE_LIMIT_WAIT_MS;
   const mergeBack =
     opts.mergeBack ?? ((dir, o): MergeBackResult => commitToBranchMergeBack(dir, o.task_id));
   const uuidFor = opts.idempotencyUuidFor ?? deterministicUuid;
@@ -217,6 +236,17 @@ export async function superviseToTerminal(
         : `unexpected outcome ${outcome.kind}`;
     const disposition = timedOut ? "transient" : classify(code);
 
+    // A recognised rate-limit clears only with time — wait the configured
+    // duration and re-drive, WITHOUT spending the transient-retry budget on a
+    // wall that retrying cannot move. Abort during the wait → aborted.
+    if (disposition === "rate-limited") {
+      logger.warn("rate-limit-wait", { code, message, wait_ms: rateLimitWaitMs });
+      opts.handle?.update("backing-off", { detail: "rate-limited" });
+      await clock.sleep(rateLimitWaitMs, opts.signal);
+      if (opts.signal?.aborted) return { kind: "aborted", reason: "shutdown" };
+      continue;
+    }
+
     if (disposition === "terminal") {
       logger.error("escalate", { code, message });
       opts.handle?.update("stopping", { detail: code });
@@ -225,12 +255,12 @@ export async function superviseToTerminal(
 
     transientAttempts += 1;
     if (transientAttempts > policy.max_attempts) {
-      logger.error("escalate-ceiling", { code, attempts: transientAttempts });
+      logger.error("escalate-ceiling", { code, message, attempts: transientAttempts });
       opts.handle?.update("stopping", { detail: code });
       return { kind: "error", code, message, attempts: transientAttempts };
     }
     const delay = backoffDelayMs(policy, transientAttempts);
-    logger.warn("retry", { code, attempt: transientAttempts, delay_ms: delay });
+    logger.warn("retry", { code, message, attempt: transientAttempts, delay_ms: delay });
     opts.handle?.update("backing-off", { detail: code });
     await clock.sleep(delay, opts.signal);
     if (opts.signal?.aborted) return { kind: "aborted", reason: "shutdown" };
@@ -245,7 +275,9 @@ export async function superviseToTerminal(
 export async function superviseWatch(projectDir: string, opts: SuperviseOptions): Promise<void> {
   const clock = opts.clock ?? systemClock;
   const logger = opts.logger ?? nullLogger;
+  const policy = opts.retry_policy ?? DEFAULT_RETRY_POLICY;
   const idlePoll = opts.watch_idle_ms ?? 5_000;
+  const parkAfter = opts.watch_error_park_after ?? DEFAULT_WATCH_ERROR_PARK_AFTER;
 
   // Startup GC: prune stale worktree admin + drop an orphaned isolation dir
   // (worktree OR container clone) when no task is live to own it. Mode-blind —
@@ -256,6 +288,16 @@ export async function superviseWatch(projectDir: string, opts: SuperviseOptions)
   sweepOrphanClone(projectDir, { slotInProgress: slotInProgress0 });
 
   let seedTask = opts.task;
+  // Cool-down / park bookkeeping for an escalating slot: when a drive escalates
+  // (`{kind:"error"}`) the slot stays `in_progress`, so without this the loop
+  // would re-drive immediately — a tight loop hammering the backend. We
+  // exponentially cool down after each error and, after `parkAfter` consecutive
+  // errors on the SAME task, PARK the slot: stop re-driving and idle-poll until
+  // it leaves `in_progress` (an operator resets/abandons it, or a new task
+  // lands). Generic by COUNT + TIME; keyed by task_id so a new task resets it.
+  let consecutiveErrors = 0;
+  let parkedTaskId: string | null = null;
+
   for (;;) {
     if (opts.signal?.aborted) {
       logger.info("watch-stop");
@@ -265,9 +307,50 @@ export async function superviseWatch(projectDir: string, opts: SuperviseOptions)
     const inProgress = slot !== null && slot.status === "in_progress";
 
     if (inProgress) {
-      await superviseToTerminal(projectDir, { ...opts, task: undefined });
+      const taskId = slot.task_id ?? null;
+      // A different task than the one we parked → the wedge is gone; reset.
+      if (parkedTaskId !== null && parkedTaskId !== taskId) {
+        parkedTaskId = null;
+        consecutiveErrors = 0;
+      }
+      // Parked on this exact wedged slot: do NOT re-drive — idle-poll until it
+      // leaves `in_progress`.
+      if (parkedTaskId === taskId) {
+        opts.handle?.update("idle", { detail: "parked-on-error" });
+        await clock.sleep(idlePoll, opts.signal);
+        continue;
+      }
+      const result = await superviseToTerminal(projectDir, { ...opts, task: undefined });
+      if (result.kind === "error") {
+        consecutiveErrors += 1;
+        if (consecutiveErrors >= parkAfter) {
+          parkedTaskId = taskId;
+          logger.error("watch-park", {
+            code: result.code,
+            message: result.message,
+            after: consecutiveErrors,
+          });
+          opts.handle?.update("idle", { detail: "parked-on-error" });
+          await clock.sleep(idlePoll, opts.signal);
+          continue;
+        }
+        const cool = backoffDelayMs(policy, consecutiveErrors);
+        logger.warn("watch-cool-down", {
+          code: result.code,
+          attempt: consecutiveErrors,
+          delay_ms: cool,
+        });
+        opts.handle?.update("backing-off", { detail: "watch-error" });
+        await clock.sleep(cool, opts.signal);
+      } else {
+        consecutiveErrors = 0;
+      }
       continue;
     }
+
+    // Not in_progress → any earlier wedge is gone; clear the park.
+    parkedTaskId = null;
+    consecutiveErrors = 0;
     if (seedTask !== undefined) {
       await superviseToTerminal(projectDir, { ...opts, task: seedTask });
       seedTask = undefined;

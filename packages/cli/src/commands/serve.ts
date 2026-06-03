@@ -27,6 +27,7 @@ import type { DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
 import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
+import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
 type CompleteOutcome = Extract<DriveOutcome, { kind: "complete" }>;
@@ -149,6 +150,7 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
       resolveRegistry,
       buildExecutor: factory.buildExecutor,
       ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
+      ...resolveSupervisionKnobs(process.env),
       makeLogger: (dir: string) => createFileLogger(dir, { echo: () => {} }),
       signal,
       serverLog: (line: string) => env.err(line),
@@ -276,6 +278,7 @@ async function defaultServeFactory(
     dockerAvailable: overrides.dockerAvailable ?? dockerAvailableDefault,
     onNotice: (message) => env.err(`loom serve: ${message}`),
   });
+  const timeouts = resolveSpawnTimeouts(process.env);
 
   if (plan.useDocker) {
     const { createContainerExecutor } = await import("@loomfsm/driver");
@@ -285,6 +288,7 @@ async function defaultServeFactory(
         createContainerExecutor({
           project_dir: projectDir,
           ...plan.container,
+          ...timeouts,
           onNotice: ctx.onNotice,
           onUsage: ctx.onUsage,
           signal: ctx.signal,
@@ -308,6 +312,7 @@ async function defaultServeFactory(
       createClaudeCodeExecutor({
         project_dir: projectDir,
         ...(permissionMode !== undefined && permissionMode !== "" ? { permission_mode: permissionMode } : {}),
+        ...timeouts,
         onNotice: ctx.onNotice,
         onUsage: ctx.onUsage,
         signal: ctx.signal,

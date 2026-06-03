@@ -34,6 +34,7 @@ import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 import { buildClaudeArgs, parseClaudeResult, parseClaudeUsage } from "./claude-code-executor.js";
 import { provisionClone } from "./clone.js";
 import type { Executor, SpawnUsage } from "./drive.js";
+import { defaultRateLimitDetector, type RateLimitDetector } from "./rate-limit.js";
 import { createSandboxedExecutor, type RunSpawn, type RunSpawnResult } from "./sandboxed-executor.js";
 import { spawnCapture } from "./spawn-cli.js";
 
@@ -56,6 +57,15 @@ export interface ContainerExecutorOptions {
   permission_mode?: string;
   // Cap on agentic turns (`claude --max-turns`). Omitted → CC's own default.
   max_turns?: number;
+  // Kill a spawn whose whole `docker run` exceeds this wall-time → EXECUTOR_TIMEOUT
+  // (transient → re-drive). Omitted → no session cap.
+  session_timeout_ms?: number;
+  // Kill a spawn that emits no output for this long → EXECUTOR_IDLE_TIMEOUT
+  // (transient → re-drive). Omitted → no idle cap.
+  idle_timeout_ms?: number;
+  // Recognise a sustained rate-limit → EXECUTOR_RATE_LIMITED (wait, never
+  // escalate). Injectable; default reads the envelope's `api_error_status`.
+  detectRateLimit?: RateLimitDetector;
   // `docker run --network`. Omitted → docker's default bridge (outbound egress
   // for the model API; no inbound, no host network). Isolation here is
   // filesystem + process, not egress — egress is required to reach the API.
@@ -108,12 +118,20 @@ export interface DockerArgsOptions {
 }
 
 // Build the full `docker` argv (everything after "docker") for one spawn:
-// `run --rm` + the spike-proven isolation flags + the clone mount + the inner
-// command. Pure → unit-tested without invoking docker.
+// `run --rm --init` + the spike-proven isolation flags + the clone mount + the
+// inner command. Pure → unit-tested without invoking docker.
+//
+// `--init` runs a real init as PID1 that forwards signals and reaps children.
+// It is what makes a timeout-kill tear the container down cleanly: a session /
+// idle timeout SIGTERMs the `docker run` client, which forwards SIGTERM to
+// PID1 — but a bare `claude` AS PID1 has no default SIGTERM handler and would
+// IGNORE it, leaving the container running after the client is force-killed and
+// `--rm` never firing. With `--init`, PID1 terminates on SIGTERM and `--rm`
+// cleans up. No orphaned containers from a timeout.
 export function buildDockerArgs(opts: DockerArgsOptions, command: string[]): string[] {
   const workspace = opts.workspace ?? DEFAULT_WORKSPACE;
   const home = opts.home ?? DEFAULT_HOME;
-  const args = ["run", "--rm"];
+  const args = ["run", "--rm", "--init"];
   if (opts.user !== undefined && opts.user !== "") args.push("--user", opts.user);
   // Writable HOME for an arbitrary (host) uid, kept OUT of the clone so the
   // agent's CLI config never shows up in the self-diff.
@@ -151,6 +169,7 @@ export function createContainerExecutor(opts: ContainerExecutorOptions): Executo
   const claudeBin = opts.claude_bin ?? "claude";
   const permissionMode = opts.permission_mode ?? DEFAULT_PERMISSION_MODE;
   const user = opts.user ?? defaultUser();
+  const detectRateLimit = opts.detectRateLimit ?? defaultRateLimitDetector;
 
   const runSpawn: RunSpawn =
     opts.runSpawn ??
@@ -183,10 +202,13 @@ export function createContainerExecutor(opts: ContainerExecutorOptions): Executo
         notFoundMessage:
           `Docker CLI '${dockerBin}' was not found or its daemon is unreachable; ` +
           `install/start Docker to run the container-isolation backend, or run without --docker`,
+        detectRateLimit,
+        ...(opts.session_timeout_ms !== undefined ? { session_timeout_ms: opts.session_timeout_ms } : {}),
+        ...(opts.idle_timeout_ms !== undefined ? { idle_timeout_ms: opts.idle_timeout_ms } : {}),
         ...(childEnv !== undefined ? { env: childEnv } : {}),
         ...(signal !== undefined ? { signal } : {}),
       });
-      const output = parseClaudeResult(stdout);
+      const output = parseClaudeResult(stdout, detectRateLimit);
       const usage = parseClaudeUsage(stdout);
       return usage !== undefined ? { output, usage } : { output };
     });

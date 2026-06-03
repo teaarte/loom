@@ -18,11 +18,12 @@ import {
   readState,
   type Executor,
 } from "@loomfsm/driver";
-import type { ProviderShuttleIntent } from "@loomfsm/kernel";
+import { KernelError, type ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import {
   detectStaleness,
   superviseToTerminal,
+  superviseWatch,
   type Clock,
   type RetryPolicy,
 } from "../src/index.js";
@@ -212,6 +213,139 @@ describe("supervisor — retry / backoff (generic, by code + time)", () => {
         // max_attempts re-drives, then one more drive trips the ceiling.
         assert.equal(result.attempts, FAST_RETRY.max_attempts + 1);
       }
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe("supervisor — rate-limit-aware wait (a time class, not a retry)", () => {
+  it("waits out a rate-limit then re-drives, NOT against the retry ceiling", async () => {
+    const dir = await freshProject();
+    try {
+      const registry = singleSpawnRegistry();
+      let calls = 0;
+      let waited = 0;
+      // The wait sleep is recorded; everything else runs at the fixed instant.
+      const waitClock: Clock = {
+        now: () => FIXED_MS,
+        sleep: async () => {
+          waited += 1;
+        },
+      };
+      const rateLimitedOnce: Executor = {
+        execute: async (s: ProviderShuttleIntent) => {
+          calls += 1;
+          if (calls === 1) {
+            throw new KernelError({ code: "EXECUTOR_RATE_LIMITED", message: "rate limited" });
+          }
+          return { agent_output: `done ${s.agent}` };
+        },
+      };
+
+      const result = await superviseToTerminal(dir, {
+        buildExecutor: () => rateLimitedOnce,
+        resolveRegistry: () => registry,
+        task: "rate-limited work",
+        clock: waitClock,
+        retry_policy: FAST_RETRY,
+        rate_limit_wait_ms: 9_999,
+      });
+
+      assert.equal(result.kind, "complete");
+      // The wait is NOT a transient retry — the ceiling budget is untouched.
+      if (result.kind === "complete") assert.equal(result.attempts, 0);
+      assert.ok(waited >= 1, "the supervisor must have waited out the rate-limit");
+      assert.ok(calls >= 2, "it must have re-driven after the wait");
+      assert.equal((await readState(dir)).status, "completed");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  it("returns aborted when the shutdown signal fires during the rate-limit wait", async () => {
+    const dir = await freshProject();
+    try {
+      const registry = singleSpawnRegistry();
+      const controller = new AbortController();
+      const alwaysRateLimited: Executor = {
+        execute: async () => {
+          throw new KernelError({ code: "EXECUTOR_RATE_LIMITED", message: "rate limited" });
+        },
+      };
+      // The shutdown lands during the wait: abort inside the sleep, mirroring
+      // the abort-aware clock's early return.
+      const abortingClock: Clock = {
+        now: () => FIXED_MS,
+        sleep: async () => {
+          controller.abort();
+        },
+      };
+
+      const result = await superviseToTerminal(dir, {
+        buildExecutor: () => alwaysRateLimited,
+        resolveRegistry: () => registry,
+        task: "rate-limited work",
+        clock: abortingClock,
+        rate_limit_wait_ms: 9_999,
+        signal: controller.signal,
+      });
+
+      assert.equal(result.kind, "aborted");
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe("supervisor — watch does not tight-loop on a persistent failure", () => {
+  it("cools down after each escalation, then parks the wedged slot (stops re-driving)", async () => {
+    const dir = await freshProject();
+    try {
+      const registry = spawnRegistry();
+      // Seed an in-progress task so every watch iteration takes the in_progress
+      // branch (no first-iteration seed leg to reason about).
+      await createAndStart(dir, {
+        registry,
+        task: "doomed work",
+        client_idempotency_uuid: "cidem-park",
+      });
+
+      const controller = new AbortController();
+      let builds = 0;
+      let sleeps = 0;
+      const STOP_AFTER_SLEEPS = 25;
+      // Records sleeps and stops the watch once it is clearly idle-polling.
+      const countingClock: Clock = {
+        now: () => FIXED_MS,
+        sleep: async () => {
+          sleeps += 1;
+          if (sleeps >= STOP_AFTER_SLEEPS) controller.abort();
+        },
+      };
+      const alwaysFails: Executor = {
+        execute: async () => {
+          throw new Error("backend down");
+        },
+      };
+
+      await superviseWatch(dir, {
+        buildExecutor: () => {
+          builds += 1;
+          return alwaysFails;
+        },
+        resolveRegistry: () => registry,
+        clock: countingClock,
+        retry_policy: FAST_RETRY, // max_attempts 2 → 3 drives (builds) per superviseToTerminal
+        watch_error_park_after: 2, // park after 2 escalations
+        signal: controller.signal,
+      });
+
+      // Two escalations before parking, 3 builds each = 6; then the slot is
+      // PARKED and never re-driven again (the loop idle-polls until abort).
+      // Without the fix this loops forever, re-driving on every iteration.
+      assert.equal(builds, 6, "the watch parked after 2 escalations and stopped re-driving");
+      assert.ok(sleeps >= STOP_AFTER_SLEEPS, "it kept idle-polling rather than tight-looping");
     } finally {
       cleanup(dir);
     }

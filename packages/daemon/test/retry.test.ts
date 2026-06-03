@@ -17,6 +17,15 @@ describe("retry — error classification (by code, not domain)", () => {
     assert.equal(defaultClassifier("EXECUTOR_NOT_FOUND"), "transient");
   });
 
+  it("treats a wedged-spawn timeout (session/idle) as transient — re-drive", () => {
+    assert.equal(defaultClassifier("EXECUTOR_TIMEOUT"), "transient");
+    assert.equal(defaultClassifier("EXECUTOR_IDLE_TIMEOUT"), "transient");
+  });
+
+  it("treats a recognised rate-limit as its own wait class, not transient", () => {
+    assert.equal(defaultClassifier("EXECUTOR_RATE_LIMITED"), "rate-limited");
+  });
+
   it("escalates structural / deliberate errors rather than spinning", () => {
     assert.equal(defaultClassifier("SPAWN_BUDGET_EXCEEDED"), "terminal");
     assert.equal(defaultClassifier("KERNEL_INVARIANT"), "terminal");

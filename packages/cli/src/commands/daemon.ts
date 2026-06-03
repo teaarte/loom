@@ -31,6 +31,7 @@ import type { Registry } from "@loomfsm/kernel";
 
 import { firstUnknownFlag, parseArgs } from "../lib/args.js";
 import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
+import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
 type CompleteOutcome = Extract<DriveOutcome, { kind: "complete" }>;
@@ -152,6 +153,7 @@ async function start(argv: string[], env: CliEnv, overrides: DaemonOverrides): P
     resolveRegistry: () => registry,
     ...(task.length > 0 ? { task } : {}),
     ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
+    ...resolveSupervisionKnobs(process.env),
     logger,
     handle,
     signal,
@@ -287,6 +289,7 @@ async function defaultDriveFactory(
     dockerAvailable: overrides.dockerAvailable ?? dockerAvailableDefault,
     onNotice: (message) => env.err(`loom daemon start: ${message}`),
   });
+  const timeouts = resolveSpawnTimeouts(process.env);
 
   if (plan.useDocker) {
     const { createContainerExecutor } = await import("@loomfsm/driver");
@@ -296,6 +299,7 @@ async function defaultDriveFactory(
         createContainerExecutor({
           project_dir: projectDir,
           ...plan.container,
+          ...timeouts,
           onNotice: ctx.onNotice,
           onUsage: ctx.onUsage,
           signal: ctx.signal,
@@ -321,6 +325,7 @@ async function defaultDriveFactory(
         ...(permissionMode !== undefined && permissionMode !== ""
           ? { permission_mode: permissionMode }
           : {}),
+        ...timeouts,
         onNotice: ctx.onNotice,
         onUsage: ctx.onUsage,
         signal: ctx.signal,

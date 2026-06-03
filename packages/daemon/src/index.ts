@@ -13,6 +13,8 @@ export {
   superviseToTerminal,
   superviseWatch,
   detectStaleness,
+  DEFAULT_RATE_LIMIT_WAIT_MS,
+  DEFAULT_WATCH_ERROR_PARK_AFTER,
   type SuperviseOptions,
   type SupervisionResult,
   type ExecutorBuildContext,

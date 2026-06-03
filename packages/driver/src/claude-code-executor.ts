@@ -28,6 +28,7 @@
 import { KernelError, type ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import type { Executor, SpawnUsage } from "./drive.js";
+import { defaultRateLimitDetector, type RateLimitDetector } from "./rate-limit.js";
 import { createSandboxedExecutor, type RunSpawn, type RunSpawnResult } from "./sandboxed-executor.js";
 import { spawnCapture } from "./spawn-cli.js";
 
@@ -42,6 +43,16 @@ export interface ClaudeCodeExecutorOptions {
   permission_mode?: string;
   // Cap on agentic turns (`claude --max-turns`). Omitted → CC's own default.
   max_turns?: number;
+  // Kill a `claude -p` whose whole run exceeds this wall-time → EXECUTOR_TIMEOUT
+  // (transient → re-drive). Omitted → no session cap.
+  session_timeout_ms?: number;
+  // Kill a `claude -p` that emits no output for this long → EXECUTOR_IDLE_TIMEOUT
+  // (transient → re-drive). Omitted → no idle cap.
+  idle_timeout_ms?: number;
+  // Recognise a sustained rate-limit in the finished run → EXECUTOR_RATE_LIMITED
+  // (the supervisor waits, never escalates). Injectable; default reads the
+  // envelope's `api_error_status` (429) with a text fallback.
+  detectRateLimit?: RateLimitDetector;
   // Aborts an in-flight `claude -p` when the drive is cancelled.
   signal?: AbortSignal;
   // Sink for the shell's degraded-mode notice.
@@ -88,7 +99,13 @@ export function buildClaudeArgs(
 // Parse `claude --output-format json` stdout → the final assistant text.
 // A non-success result, a malformed envelope, or a missing `result` is a
 // hard failure the loop surfaces (it never silently returns empty output).
-export function parseClaudeResult(stdout: string): string {
+//
+// `detectRateLimit` (when supplied) runs against the parsed envelope FIRST: a
+// rate-limit / quota condition becomes EXECUTOR_RATE_LIMITED (a wait) rather
+// than the generic EXECUTOR_FAILED. This is defence-in-depth — the backend
+// exits non-zero on `is_error`, so the capture seam usually catches the signal
+// before the parser runs, but a clean-exit error envelope is handled here too.
+export function parseClaudeResult(stdout: string, detectRateLimit?: RateLimitDetector): string {
   const trimmed = stdout.trim();
   let parsed: unknown;
   try {
@@ -101,6 +118,15 @@ export function parseClaudeResult(stdout: string): string {
     });
   }
   const obj = parsed as { is_error?: unknown; subtype?: unknown; result?: unknown };
+  if (detectRateLimit?.({ envelope: obj as Record<string, unknown> })) {
+    throw new KernelError({
+      code: "EXECUTOR_RATE_LIMITED",
+      message: "claude -p hit a rate limit / quota",
+      detail: {
+        result_head: typeof obj.result === "string" ? obj.result.slice(0, 500) : undefined,
+      },
+    });
+  }
   if (obj.is_error === true) {
     throw new KernelError({
       code: "EXECUTOR_FAILED",
@@ -165,11 +191,19 @@ export function parseClaudeUsage(stdout: string): SpawnUsage | undefined {
   return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
+// Per-spawn capture knobs the backend forwards to the shared capture seam.
+interface SpawnClaudeOptions {
+  session_timeout_ms?: number;
+  idle_timeout_ms?: number;
+  detectRateLimit: RateLimitDetector;
+}
+
 async function spawnClaude(
   bin: string,
   args: string[],
   cwd: string,
   signal: AbortSignal | undefined,
+  capture: SpawnClaudeOptions,
 ): Promise<RunSpawnResult> {
   const stdout = await spawnCapture({
     bin,
@@ -179,9 +213,12 @@ async function spawnClaude(
     notFoundMessage:
       `Claude Code CLI '${bin}' was not found; install Claude Code and ` +
       `sign in (run 'claude') to drive headless runs on your subscription`,
+    detectRateLimit: capture.detectRateLimit,
+    ...(capture.session_timeout_ms !== undefined ? { session_timeout_ms: capture.session_timeout_ms } : {}),
+    ...(capture.idle_timeout_ms !== undefined ? { idle_timeout_ms: capture.idle_timeout_ms } : {}),
     ...(signal !== undefined ? { signal } : {}),
   });
-  const output = parseClaudeResult(stdout);
+  const output = parseClaudeResult(stdout, capture.detectRateLimit);
   const usage = parseClaudeUsage(stdout);
   return usage !== undefined ? { output, usage } : { output };
 }
@@ -189,10 +226,15 @@ async function spawnClaude(
 export function createClaudeCodeExecutor(opts: ClaudeCodeExecutorOptions): Executor {
   const bin = opts.claude_bin ?? "claude";
   const permissionMode = opts.permission_mode ?? DEFAULT_PERMISSION_MODE;
+  const detectRateLimit = opts.detectRateLimit ?? defaultRateLimitDetector;
   const runSpawn: RunSpawn =
     opts.runSpawn ??
     ((intent, worktreeDir, signal) =>
-      spawnClaude(bin, buildClaudeArgs(intent, permissionMode, opts.max_turns), worktreeDir, signal));
+      spawnClaude(bin, buildClaudeArgs(intent, permissionMode, opts.max_turns), worktreeDir, signal, {
+        detectRateLimit,
+        ...(opts.session_timeout_ms !== undefined ? { session_timeout_ms: opts.session_timeout_ms } : {}),
+        ...(opts.idle_timeout_ms !== undefined ? { idle_timeout_ms: opts.idle_timeout_ms } : {}),
+      }));
 
   return createSandboxedExecutor({
     project_dir: opts.project_dir,

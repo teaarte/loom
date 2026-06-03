@@ -63,3 +63,8 @@ export type { ContainerExecutorOptions, DockerArgsOptions } from "./container-ex
 export { provisionWorktree, worktreePathFor } from "./worktree.js";
 export type { WorktreeProvision } from "./worktree.js";
 export { provisionClone, clonePathFor } from "./clone.js";
+
+// Backend-shaped, injectable rate-limit detection at the capture seam — the
+// signal the supervisor's wait disposition keys on.
+export { defaultRateLimitDetector } from "./rate-limit.js";
+export type { RateLimitDetector, RateLimitSignal } from "./rate-limit.js";

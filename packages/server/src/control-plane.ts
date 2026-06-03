@@ -51,6 +51,10 @@ export interface ControlPlaneOptions {
   clock?: Clock;
   // Idle-poll cadence each watcher uses between tasks (default 5s).
   watch_idle_ms?: number;
+  // Wait this long on a recognised rate-limit before re-driving (default 1h).
+  rate_limit_wait_ms?: number;
+  // Abort a single drive that runs past this wall-time (a hung spawn).
+  drive_deadline_ms?: number;
 
   // Shutdown trigger (the CLI wires SIGINT/SIGTERM; a test drives it directly).
   signal?: AbortSignal;
@@ -97,6 +101,8 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
     ...(opts.retry_policy !== undefined ? { retry_policy: opts.retry_policy } : {}),
     ...(opts.wake !== undefined ? { wake: opts.wake } : {}),
     ...(opts.watch_idle_ms !== undefined ? { watch_idle_ms: opts.watch_idle_ms } : {}),
+    ...(opts.rate_limit_wait_ms !== undefined ? { rate_limit_wait_ms: opts.rate_limit_wait_ms } : {}),
+    ...(opts.drive_deadline_ms !== undefined ? { drive_deadline_ms: opts.drive_deadline_ms } : {}),
     clock,
   });
 

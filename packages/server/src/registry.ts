@@ -79,6 +79,11 @@ export interface RegistryDeps {
   clock?: Clock;
   // Idle-poll cadence each watcher uses between tasks. Default = the daemon's 5s.
   watch_idle_ms?: number;
+  // Wait this long on a recognised rate-limit before re-driving. Default 1h.
+  rate_limit_wait_ms?: number;
+  // Abort a single drive that runs past this wall-time (a hung spawn) → treated
+  // transient and re-driven. Omitted → no per-drive deadline.
+  drive_deadline_ms?: number;
 }
 
 interface Entry {
@@ -167,6 +172,12 @@ export class SupervisorRegistry {
       ...(this.deps.retry_policy !== undefined ? { retry_policy: this.deps.retry_policy } : {}),
       ...(this.deps.wake !== undefined ? { wake: this.deps.wake } : {}),
       ...(this.deps.watch_idle_ms !== undefined ? { watch_idle_ms: this.deps.watch_idle_ms } : {}),
+      ...(this.deps.rate_limit_wait_ms !== undefined
+        ? { rate_limit_wait_ms: this.deps.rate_limit_wait_ms }
+        : {}),
+      ...(this.deps.drive_deadline_ms !== undefined
+        ? { drive_deadline_ms: this.deps.drive_deadline_ms }
+        : {}),
     };
 
     // Detached watcher loop. It runs until `controller` aborts (unregister or

@@ -36,6 +36,7 @@
 // recovery id is minted through `ids.ts` (the documented mint-time
 // exception) by the caller and threaded in here.
 
+import { resolveSpawnModel } from "../provider-router.js";
 import { KernelError } from "../state/db.js";
 import type { RecoveryChoice } from "../types/continue-task.js";
 import type { ProviderShuttleIntent } from "../types/provider.js";
@@ -165,6 +166,13 @@ export async function recoverTask(
 // double-execute, so the caller must `cancel-pending` first to surface a
 // fresh agent_run_id.
 //
+// `skip_idempotency_check` lifts that gate for the ONE caller that can prove
+// re-execution is safe regardless of the provider's declared idempotency: the
+// resume restart-head re-shuttling its OWN pending rows (same agent_run_id,
+// delivery de-duped by the ledger) under an executor that asserts idempotent
+// re-execution (a sandboxed worktree run just redoes the work). The explicit
+// retry-failed recovery never sets it — there the provider gate stands.
+//
 // Runs on the loaded post-recovery state (the recovery committed,
 // leaving the rows in place); no tx, no clock — a pure mapping from
 // pending rows + registry to a `KernelDirective`.
@@ -172,6 +180,7 @@ export function buildRetryFailedDirective(
   state: PipelineState,
   registry: Registry,
   agentRunIds: string[],
+  opts: { skip_idempotency_check?: boolean } = {},
 ): KernelDirective {
   const byId = new Map(state.pending_agents.map((r) => [r.agent_run_id, r]));
   const intents: ProviderShuttleIntent[] = [];
@@ -187,7 +196,7 @@ export function buildRetryFailedDirective(
       });
     }
     const provider = registry.providers.resolve(row.agent, state, row.phase);
-    if (!provider.capabilities.idempotent_spawn) {
+    if (opts.skip_idempotency_check !== true && !provider.capabilities.idempotent_spawn) {
       throw new KernelError({
         code: "PROVIDER_NOT_IDEMPOTENT",
         message:
@@ -201,7 +210,7 @@ export function buildRetryFailedDirective(
       agent: row.agent,
       agent_run_id: row.agent_run_id,
       phase: row.phase,
-      model: row.model ?? agentDef?.default_model ?? "default",
+      model: row.model ?? resolveSpawnModel(registry, row.agent, row.phase, state),
       prompt: reShuttlePromptStub(state.task_id, row.agent, row.phase, agentDef?.template_path ?? ""),
       extras: { provider: provider.name },
     };

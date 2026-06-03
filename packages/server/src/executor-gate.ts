@@ -16,8 +16,12 @@ import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 import type { Semaphore } from "./semaphore.js";
 
 // Decorate `inner` so every `execute` runs inside one permit of `gate`.
+// The decorator changes only WHEN a spawn runs, so it forwards `inner`'s
+// re-execution-safety verbatim — otherwise wrapping a sandboxed executor would
+// silently re-arm the provider idempotency gate and break resume/recovery.
 export function gatedExecutor(inner: Executor, gate: Semaphore): Executor {
   return {
+    ...(inner.idempotent !== undefined ? { idempotent: inner.idempotent } : {}),
     execute(spawn: ProviderShuttleIntent): Promise<ExecutorResult> {
       return gate.run(() => inner.execute(spawn));
     },

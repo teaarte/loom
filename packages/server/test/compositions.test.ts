@@ -4,6 +4,9 @@
 // reddens.
 
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { createAndStart, readState } from "@loomfsm/driver";
@@ -152,6 +155,24 @@ describe("readProjectStatus — the read-model", () => {
       assert.equal(view.status, null);
     } finally {
       cleanup(dir);
+    }
+  });
+
+  it("degrades a momentarily-unreadable store to idle instead of throwing", async () => {
+    // A store that exists but cannot be read — a corrupt file, or (the case
+    // that bit a real run) a never-checkpointed WAL seen under the control
+    // plane's concurrent connections — must not 500 the read endpoint. The
+    // read-model reports the project as idle; the next poll recovers once the
+    // store settles.
+    const dir = mkdtempSync(join(tmpdir(), "loom-server-corrupt-"));
+    try {
+      mkdirSync(join(dir, ".claude"));
+      writeFileSync(join(dir, ".claude", "state.db"), "not a sqlite database\n");
+      const view = await readProjectStatus(dir, NOW);
+      assert.equal(view.has_task, false);
+      assert.equal(view.status, null);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

@@ -22,10 +22,18 @@ import {
 export async function resumeDirective(
   state: PipelineState,
   registry: Registry,
+  opts: { reshuttle_safe?: boolean } = {},
 ): Promise<KernelDirective> {
   if (state.pending_agents.length > 0) {
     const agentRunIds = state.pending_agents.map((row) => row.agent_run_id);
-    return buildRetryFailedDirective(state, registry, agentRunIds);
+    // The restart-head re-shuttles its OWN pending rows (same agent_run_id,
+    // delivery de-duped by the ledger). When the driver's executor asserts
+    // idempotent re-execution, that is safe even under a provider declared
+    // non-idempotent — so lift the provider gate. Callers that cannot make
+    // that promise (the interactive `pipeline_resume`) leave it default-off.
+    return buildRetryFailedDirective(state, registry, agentRunIds, {
+      skip_idempotency_check: opts.reshuttle_safe === true,
+    });
   }
   if (state.driver.pending_user_answer !== null) {
     return reEmitAsk(state, registry);

@@ -56,10 +56,12 @@ export const DASHBOARD_HTML = `<!doctype html>
     <span><label for="subproj">project</label><select id="subproj"></select></span>
     <span><label for="subpolicy">policy</label>
       <select id="subpolicy">
-        <option value="">(default)</option>
-        <option value="human">human</option>
-        <option value="on-blockers">on-blockers</option>
-        <option value="auto">auto</option>
+        <option value="">(bundle default)</option>
+        <option value="full-autonomous">full-autonomous (all gates auto)</option>
+        <option value="gates-on-blockers">gates-on-blockers</option>
+        <option value="review-plan-only">review-plan-only (plan gate human)</option>
+        <option value="review-final-only">review-final-only (final gate human)</option>
+        <option value="full-supervised">full-supervised (all gates human)</option>
       </select>
     </span>
   </div>

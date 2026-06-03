@@ -79,10 +79,10 @@ function bundleManifest(name: string): DiscoveredManifest {
   };
 }
 
-function stubProvider(): LLMProvider {
+function stubProvider(idempotent = true): LLMProvider {
   return {
     name: "stub",
-    capabilities: { execution: "shuttle", idempotent_spawn: true, reports_usage: false },
+    capabilities: { execution: "shuttle", idempotent_spawn: idempotent, reports_usage: false },
     async spawn() {
       // The injected Executor runs spawns; the provider only supplies
       // routing metadata (name + idempotency) to the kernel.
@@ -91,8 +91,14 @@ function stubProvider(): LLMProvider {
   };
 }
 
-function assembleRegistry(bundle: Bundle, agents: Agent[], stages: Record<string, Stage>, flow: string[]): Registry {
-  const provider = stubProvider();
+function assembleRegistry(
+  bundle: Bundle,
+  agents: Agent[],
+  stages: Record<string, Stage>,
+  flow: string[],
+  idempotent = true,
+): Registry {
+  const provider = stubProvider(idempotent);
   const policyFactories = new Map<PolicyName, () => Policy>();
   policyFactories.set("human", () => () => ({ type: "human-required", reason: "test" }));
   return {
@@ -113,7 +119,12 @@ function assembleRegistry(bundle: Bundle, agents: Agent[], stages: Record<string
   };
 }
 
-function bundleOf(stages: Record<string, Stage>, agents: Agent[], flow: string[]): Bundle {
+function bundleOf(
+  stages: Record<string, Stage>,
+  agents: Agent[],
+  flow: string[],
+  extra: Partial<Bundle> = {},
+): Bundle {
   return {
     name: "code-fixture",
     version: "1.0.0",
@@ -127,11 +138,27 @@ function bundleOf(stages: Record<string, Stage>, agents: Agent[], flow: string[]
     flows: { standard: flow },
     hooks: [],
     invariants: [],
+    ...extra,
   };
 }
 
+// An agent declaring an abstract tier, plus a bundle that maps that tier to a
+// concrete model — the shape that bit the first real run (`--model fast` 404).
+function modelTierRegistry(): Registry {
+  const stages: Record<string, Stage> = {
+    "spawn-1": { kind: "spawn", name: "spawn-1", phase: "work", agent: "impl-1" },
+    "finalize-1": { kind: "finalize", name: "finalize-1" },
+  };
+  const agents: Agent[] = [
+    { name: "impl-1", template_path: "templates/impl-1.md", output_kind: "nonreview", default_model: "fast" },
+  ];
+  const flow = ["spawn-1", "finalize-1"];
+  const bundle = bundleOf(stages, agents, flow, { default_model_tiers: { fast: "haiku" } });
+  return assembleRegistry(bundle, agents, stages, flow);
+}
+
 // spawn-1 -> spawn-2 -> finalize : drives to a terminal complete.
-function spawnRegistry(): Registry {
+function spawnRegistry(idempotent = true): Registry {
   const stages: Record<string, Stage> = {
     "spawn-1": { kind: "spawn", name: "spawn-1", phase: "work", agent: "impl-1" },
     "spawn-2": { kind: "spawn", name: "spawn-2", phase: "work", agent: "impl-2" },
@@ -142,7 +169,7 @@ function spawnRegistry(): Registry {
     { name: "impl-2", template_path: "templates/impl-2.md", output_kind: "nonreview" },
   ];
   const flow = ["spawn-1", "spawn-2", "finalize-1"];
-  return assembleRegistry(bundleOf(stages, agents, flow), agents, stages, flow);
+  return assembleRegistry(bundleOf(stages, agents, flow), agents, stages, flow, idempotent);
 }
 
 // spawn-1 only — after the single spawn drains the FSM overflows the flow,
@@ -265,6 +292,97 @@ describe("drive — happy path", () => {
       assert.deepEqual(seen, ["impl-1", "impl-2"]);
       const state = await readState(dir);
       assert.equal(state.status, "completed");
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe("drive — resolves an agent's model tier through the bundle's default_model_tiers", () => {
+  it("the executor receives the mapped concrete model, not the raw tier", async () => {
+    const dir = await freshProject();
+    try {
+      const registry = modelTierRegistry(); // agent tier "fast", bundle maps fast→haiku
+      const seenModels: string[] = [];
+      const executor: Executor = {
+        execute: async (s: ProviderShuttleIntent) => {
+          seenModels.push(s.model);
+          return { agent_output: `done ${s.agent}` };
+        },
+      };
+      const outcome = await drive(dir, {
+        executor,
+        resolveRegistry: () => registry,
+        task: "x",
+        client_idempotency_uuid: "cidem-model",
+      });
+      assert.equal(outcome.kind, "complete");
+      // The abstract tier "fast" was resolved to the concrete model before the
+      // executor ran — the executor never sees "fast".
+      assert.deepEqual(seenModels, ["haiku"]);
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe("drive — resume re-shuttles a pending spawn under a non-idempotent provider", () => {
+  // The create→attach gap a daemon / control-plane always hits: `submit`
+  // dispatches the first spawn as PENDING and returns; a separate drive then
+  // attaches and must re-shuttle it. The default shuttle provider is declared
+  // non-idempotent, so the resume restart-head would refuse — UNLESS the
+  // executor asserts that re-running is safe (a sandboxed worktree run).
+  it("attaches to a pending spawn and completes when the executor is idempotent", async () => {
+    const dir = await freshProject();
+    try {
+      const registry = spawnRegistry(false); // provider.idempotent_spawn = false
+      // Create + dispatch the first spawn, WITHOUT executing it — exactly the
+      // state `submit` leaves for a watcher to attach to.
+      const created = await createAndStart(dir, {
+        registry,
+        task: "do the work",
+        client_idempotency_uuid: "cidem-attach",
+      });
+      assert.equal(created.response.status, "spawn-agent");
+
+      const seen: string[] = [];
+      const idempotentExecutor: Executor = {
+        idempotent: true,
+        execute: async (s: ProviderShuttleIntent) => {
+          seen.push(s.agent_run_id);
+          return { agent_output: `done ${s.agent}` };
+        },
+      };
+      // Attach (no task) → resume must re-shuttle the pending spawn, not refuse.
+      const outcome = await drive(dir, {
+        executor: idempotentExecutor,
+        resolveRegistry: () => registry,
+      });
+      assert.equal(outcome.kind, "complete");
+      // The pending spawn was re-shuttled REUSING its agent_run_id (no fresh spawn).
+      assert.equal(seen[0], created.response.status === "spawn-agent" ? created.response.agent_run_id : "");
+      assert.equal((await readState(dir)).status, "completed");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  it("keeps the provider gate when the executor does NOT assert idempotency", async () => {
+    const dir = await freshProject();
+    try {
+      const registry = spawnRegistry(false);
+      await createAndStart(dir, {
+        registry,
+        task: "do the work",
+        client_idempotency_uuid: "cidem-gated",
+      });
+      // No `idempotent` flag → the resume restart-head must still refuse to
+      // re-shuttle under the non-idempotent provider (the safety gate stands).
+      const plainExecutor: Executor = { execute: async () => ({ agent_output: "x" }) };
+      await assert.rejects(
+        drive(dir, { executor: plainExecutor, resolveRegistry: () => registry }),
+        /PROVIDER_NOT_IDEMPOTENT|non-idempotent/,
+      );
     } finally {
       cleanup(dir);
     }

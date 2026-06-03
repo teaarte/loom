@@ -29,6 +29,7 @@ import {
   KERNEL_BUDGET_CEILINGS,
   KernelError,
   peekArchiveSlot,
+  resolveSpawnModel,
   type FanoutStage,
   type GateRole,
   type PipelineState,
@@ -64,6 +65,13 @@ export interface ExecutorResult {
 // executor stays single-spawn.
 export interface Executor {
   execute(spawn: ProviderShuttleIntent): Promise<ExecutorResult>;
+  // True when re-running a spawn (same agent_run_id) is SAFE — e.g. a
+  // sandboxed worktree executor whose re-run just redoes the work in an
+  // isolated tree. It lets the resume restart-head re-shuttle a pending spawn
+  // even under a provider declared non-idempotent (the create→attach gap a
+  // daemon/control-plane always hits, and crash-recovery of a pending spawn).
+  // Omitted/false → the provider's idempotency gate stands.
+  idempotent?: boolean;
 }
 
 // The shape passed to a caller's recovery policy when the loop hits an
@@ -145,6 +153,10 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
   const registry = await opts.resolveRegistry(projectDir);
   const uuid = opts.client_idempotency_uuid ?? `cidem-${randomUUID()}`;
   const maxRetries = opts.max_executor_retries ?? 2;
+  // The executor's promise that re-running a spawn is safe — lets the resume
+  // restart-head re-shuttle a pending spawn under a non-idempotent provider
+  // (the create→attach gap, executor-retry, and crash-recovery all rely on it).
+  const reshuttleSafe = opts.executor.idempotent === true;
 
   // ----- entry: create-or-attach ----------------------------------------
   let response: TransportResponse;
@@ -181,7 +193,7 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
   } else {
     const loaded = await readState(projectDir);
     driverStateId = loaded.driver_state_id;
-    const directive = await resumeDirective(loaded, registry);
+    const directive = await resumeDirective(loaded, registry, { reshuttle_safe: reshuttleSafe });
     response = shape(directive, { driver_state_id: driverStateId });
   }
 
@@ -238,7 +250,7 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
           // REUSING each agent_run_id (no fresh begin_spawn → no
           // duplicate-window trip), then retry the batch.
           const reloaded = await readState(projectDir);
-          response = shape(await resumeDirective(reloaded, registry), {
+          response = shape(await resumeDirective(reloaded, registry, { reshuttle_safe: reshuttleSafe }), {
             driver_state_id: reloaded.driver_state_id,
           });
           continue;
@@ -340,7 +352,7 @@ function buildExecIntents(
       agent: row.agent,
       agent_run_id: row.agent_run_id,
       phase: row.phase,
-      model: row.model ?? agentDef.default_model ?? "default",
+      model: row.model ?? resolveSpawnModel(registry, row.agent, row.phase, state),
       prompt: buildPrompt(state, agentDef, registry),
     };
     if (agentDef.system_prompt !== undefined) intent.system_prompt = agentDef.system_prompt;

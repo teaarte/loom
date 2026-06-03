@@ -475,6 +475,15 @@ export default defineBundle({
   // elsewhere by registering another provider and overriding at run time.
   default_provider: "claude-code-shuttle",
 
+  // Tier → concrete model for the default Claude Code backend, so a
+  // zero-config install resolves each agent's declared tier to a real model.
+  // A project's `.claude/providers.json` overrides per agent.
+  default_model_tiers: {
+    fast: "haiku",
+    balanced: "sonnet",
+    premium: "opus",
+  },
+
   gate_roles: {
     "gate-classify": "classify",
     "gate-plan": "plan",

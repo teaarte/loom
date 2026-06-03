@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { createProviderRouter } from "../src/provider-router.js";
+import { createProviderRouter, resolveSpawnModel } from "../src/provider-router.js";
 import type { ProvidersConfig } from "../src/provider-router.js";
 import { KernelError } from "../src/state.js";
+import { buildVocabularies } from "../src/vocabularies.js";
 import type { Bundle } from "../src/types/bundle.js";
 import type { PolicyName } from "../src/types/policy.js";
+import type { Agent } from "../src/types/plugins.js";
 import type { LLMProvider } from "../src/types/provider.js";
+import type { Registry } from "../src/types/registry.js";
 import type { GateRole } from "../src/types/row-types.js";
 import type { PipelineState } from "../src/types/state.js";
 
@@ -84,6 +87,64 @@ function fixtureState(bundle_state: Record<string, unknown> | null = null): Pipe
     now: "2026-05-28T00:00:00.000Z" as PipelineState["now"],
   };
 }
+
+function fixtureRegistry(opts: {
+  agents: Agent[];
+  default_model_tiers?: Record<string, string>;
+  config?: ProvidersConfig;
+}): Registry {
+  const providers = [stubProvider("a"), stubProvider("b")];
+  const bundle = fixtureBundle();
+  bundle.agents = opts.agents;
+  if (opts.default_model_tiers !== undefined) bundle.default_model_tiers = opts.default_model_tiers;
+  return {
+    bundle,
+    agents: new Map(opts.agents.map((a) => [a.name, a])),
+    stages: new Map(),
+    flows: new Map(),
+    hooks: [],
+    invariants: [],
+    mcp_clients: new Map(),
+    providers: createProviderRouter({ providers, bundle, config: opts.config ?? {} }),
+    policyFactories: new Map(),
+    vocabularies: buildVocabularies(bundle),
+  };
+}
+
+describe("resolveSpawnModel — config override > bundle tier > passthrough", () => {
+  const agents: Agent[] = [
+    { name: "c", template_path: "t.md", output_kind: "nonreview", default_model: "fast" },
+    { name: "concrete", template_path: "t.md", output_kind: "nonreview", default_model: "opus" },
+    { name: "untiered", template_path: "t.md", output_kind: "nonreview" },
+  ];
+
+  it("maps an agent's bundle tier through default_model_tiers (zero config)", () => {
+    const reg = fixtureRegistry({ agents, default_model_tiers: { fast: "haiku" } });
+    assert.equal(resolveSpawnModel(reg, "c", "p1", fixtureState()), "haiku");
+  });
+
+  it("config routing overrides the bundle default", () => {
+    const reg = fixtureRegistry({
+      agents,
+      default_model_tiers: { fast: "haiku" },
+      config: {
+        agent_routing: { c: { provider: "a", tier: "big" } },
+        tier_aliases: { big: { model: "opus-cfg" } },
+      },
+    });
+    assert.equal(resolveSpawnModel(reg, "c", "p1", fixtureState()), "opus-cfg");
+  });
+
+  it("passes a concrete/unknown model through unchanged", () => {
+    const reg = fixtureRegistry({ agents, default_model_tiers: { fast: "haiku" } });
+    assert.equal(resolveSpawnModel(reg, "concrete", "p1", fixtureState()), "opus");
+  });
+
+  it("falls back to 'default' when the agent has no tier and no mapping", () => {
+    const reg = fixtureRegistry({ agents });
+    assert.equal(resolveSpawnModel(reg, "untiered", "p1", fixtureState()), "default");
+  });
+});
 
 describe("createProviderRouter — empty config falls back to MVP cascade", () => {
   it("returns bundle.default_provider when the config is empty", () => {

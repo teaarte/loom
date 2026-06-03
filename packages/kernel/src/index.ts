@@ -57,7 +57,7 @@ export type {
 export { loadBundle } from "./bundle-loader/index.js";
 export type { LoadBundleOptions } from "./bundle-loader/index.js";
 export { buildVocabularies } from "./vocabularies.js";
-export { createProviderRouter } from "./provider-router.js";
+export { createProviderRouter, resolveSpawnModel } from "./provider-router.js";
 export type {
   ProvidersConfig,
   ProviderRoute,

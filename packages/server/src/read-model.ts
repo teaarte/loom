@@ -63,7 +63,17 @@ export async function readProjectStatus(
   projectDir: string,
   nowMs: number,
 ): Promise<ProjectStatusView> {
-  const slot = await peekArchiveSlot(projectDir);
+  let slot: Awaited<ReturnType<typeof peekArchiveSlot>>;
+  try {
+    slot = await peekArchiveSlot(projectDir);
+  } catch {
+    // A store that is momentarily unreadable — mid-rotation, or a
+    // never-checkpointed WAL seen under the control plane's concurrent
+    // connections — must NOT crash the read endpoint. The store is the
+    // authority; a transient read failure degrades THIS project's snapshot to
+    // "unknown" rather than 500-ing the whole `GET /projects` / log stream.
+    return EMPTY(projectDir);
+  }
   if (slot === null) return EMPTY(projectDir);
 
   let state: Awaited<ReturnType<typeof readState>>;

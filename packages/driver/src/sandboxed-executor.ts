@@ -46,6 +46,12 @@ export interface SandboxedExecutorOptions {
   // Sink for non-fatal notices (e.g. the degraded "no worktree isolation"
   // warning). Omitted → notices are dropped.
   onNotice?: (message: string) => void;
+  // Whether re-running a spawn (same agent_run_id) is safe. Default true: the
+  // worktree is deterministic, a re-run just redoes the work in the isolated
+  // tree, and the resume restart-head de-dups delivery through the ledger. A
+  // deployment whose `runSpawn` has EXTERNAL side effects (a spawn that posts
+  // to a real API) sets this false to keep the provider idempotency gate.
+  idempotent?: boolean;
 }
 
 export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executor {
@@ -67,6 +73,13 @@ export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executo
   };
 
   return {
+    // Re-running a spawn just redoes the work in the SAME deterministic
+    // worktree (effects stay confined to the isolated tree), and the resume
+    // restart-head reuses the agent_run_id with ledger-de-duped delivery — so
+    // re-shuttle is safe even when the provider is declared non-idempotent.
+    // This is what lets a daemon / control-plane attach to a pending spawn
+    // (the create→drive gap) and recover one after a crash.
+    idempotent: opts.idempotent ?? true,
     async execute(intent: ProviderShuttleIntent): Promise<ExecutorResult> {
       const wt = provision();
       const agent_output = await opts.runSpawn(intent, wt.dir, opts.signal);

@@ -30,11 +30,13 @@ import {
   nullLogger,
   superviseWatch,
   systemClock,
+  withProjectId,
   type Clock,
   type DaemonHandle,
   type DaemonLogger,
   type ExecutorBuildContext,
   type MergeBackResult,
+  type Notifier,
   type RetryPolicy,
   type WakeOptions,
 } from "@loomfsm/daemon";
@@ -73,6 +75,9 @@ export interface RegistryDeps {
   max_concurrent_spawns?: number;
   // Per-project audit logger. Default a no-op.
   makeLogger?: (projectDir: string) => DaemonLogger;
+  // Per-project outbound notify sink. The registry stamps the project's id onto
+  // every event so a shared channel can tell the fleet apart. Default = none.
+  makeNotifier?: (projectDir: string) => Notifier;
   // Generic supervision knobs, passed through to every watcher.
   retry_policy?: RetryPolicy;
   wake?: WakeOptions;
@@ -168,6 +173,9 @@ export class SupervisorRegistry {
       handle,
       clock: this.clock,
       signal: controller.signal,
+      ...(this.deps.makeNotifier !== undefined
+        ? { notifier: withProjectId(this.deps.makeNotifier(projectDir), id) }
+        : {}),
       ...(this.deps.mergeBack !== undefined ? { mergeBack: this.deps.mergeBack } : {}),
       ...(this.deps.retry_policy !== undefined ? { retry_policy: this.deps.retry_policy } : {}),
       ...(this.deps.wake !== undefined ? { wake: this.deps.wake } : {}),

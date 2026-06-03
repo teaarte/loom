@@ -16,6 +16,7 @@ import {
   type Clock,
   type DaemonLogger,
   type ExecutorBuildContext,
+  type Notifier,
   type RetryPolicy,
   type WakeOptions,
 } from "@loomfsm/daemon";
@@ -45,6 +46,10 @@ export interface ControlPlaneOptions {
   // variant when serving in container mode.
   mergeBack?: FleetMergeBack;
   makeLogger?: (projectDir: string) => DaemonLogger;
+  // Build the per-project outbound notify sink (the CLI injects the env-resolved
+  // channels). The registry stamps each project's id onto its events, so a
+  // fleet-wide channel can tell projects apart. Omitted → notify off.
+  makeNotifier?: (projectDir: string) => Notifier;
   max_concurrent_spawns?: number;
   retry_policy?: RetryPolicy;
   wake?: WakeOptions;
@@ -95,6 +100,7 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
     stateDir: opts.stateDir,
     ...(opts.mergeBack !== undefined ? { mergeBack: opts.mergeBack } : {}),
     ...(opts.makeLogger !== undefined ? { makeLogger: opts.makeLogger } : {}),
+    ...(opts.makeNotifier !== undefined ? { makeNotifier: opts.makeNotifier } : {}),
     ...(opts.max_concurrent_spawns !== undefined
       ? { max_concurrent_spawns: opts.max_concurrent_spawns }
       : {}),

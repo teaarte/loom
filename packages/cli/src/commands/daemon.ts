@@ -31,6 +31,7 @@ import type { Registry } from "@loomfsm/kernel";
 
 import { firstUnknownFlag, parseArgs } from "../lib/args.js";
 import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
+import { resolveNotifier } from "../lib/notify.js";
 import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
@@ -148,6 +149,7 @@ async function start(argv: string[], env: CliEnv, overrides: DaemonOverrides): P
   }
 
   const logger = createFileLogger(target, { echo: (line) => env.err(line.replace(/\n$/, "")) });
+  const notifier = await resolveNotifier(process.env, (m) => logger.warn("notify", { message: m }));
   const opts = {
     buildExecutor: factory.buildExecutor,
     resolveRegistry: () => registry,
@@ -155,6 +157,7 @@ async function start(argv: string[], env: CliEnv, overrides: DaemonOverrides): P
     ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
     ...resolveSupervisionKnobs(process.env),
     logger,
+    notifier,
     handle,
     signal,
   };

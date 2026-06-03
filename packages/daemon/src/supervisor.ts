@@ -27,8 +27,9 @@ import {
 } from "@loomfsm/kernel";
 import { createHash } from "node:crypto";
 
-import { type Clock, systemClock } from "./clock.js";
+import { type Clock, isoFrom, systemClock } from "./clock.js";
 import { type DaemonLogger, nullLogger } from "./logger.js";
+import { type Notifier, type NotifyEvent, nullNotifier } from "./notify.js";
 import {
   backoffDelayMs,
   DEFAULT_RETRY_POLICY,
@@ -116,6 +117,10 @@ export interface SuperviseOptions {
   idempotencyUuidFor?: (task: string) => string;
 
   logger?: DaemonLogger;
+  // Outbound push sink, fired on the same lifecycle transitions the logger
+  // records. Default = a no-op (notify off). Best-effort: a throw/timeout is
+  // caught and never breaks the loop.
+  notifier?: Notifier;
   clock?: Clock;
   // Graceful-shutdown signal (SIGTERM/SIGINT, wired by the CLI).
   signal?: AbortSignal;
@@ -142,6 +147,7 @@ export async function superviseToTerminal(
 ): Promise<SupervisionResult> {
   const clock = opts.clock ?? systemClock;
   const logger = opts.logger ?? nullLogger;
+  const notifier = opts.notifier ?? nullNotifier;
   const policy = opts.retry_policy ?? DEFAULT_RETRY_POLICY;
   const classify = opts.classifyError ?? defaultClassifier;
   const rateLimitWaitMs = opts.rate_limit_wait_ms ?? DEFAULT_RATE_LIMIT_WAIT_MS;
@@ -197,6 +203,13 @@ export async function superviseToTerminal(
         ...(mb.files_changed !== undefined ? { files: mb.files_changed.length } : {}),
         ...(mb.reason !== undefined ? { reason: mb.reason } : {}),
       });
+      await safeNotify(notifier, logger, clock, {
+        event: "complete",
+        task_id: outcome.task_id,
+        verdict: outcome.verdict,
+        ...(mb.branch !== undefined ? { branch: mb.branch } : {}),
+        ...(outcome.summary.length > 0 ? { message: outcome.summary } : {}),
+      });
       opts.handle?.update("stopping", { task_id: outcome.task_id, detail: outcome.verdict });
       return {
         kind: "complete",
@@ -215,6 +228,12 @@ export async function superviseToTerminal(
         message: outcome.message,
       });
       opts.handle?.update("parked", { detail: outcome.gate });
+      await safeNotify(notifier, logger, clock, {
+        event: "parked",
+        task_id: slot?.task_id ?? null,
+        gate: outcome.gate,
+        ...(outcome.message !== undefined ? { message: outcome.message } : {}),
+      });
       const woke = await waitForWake(projectDir, outcome.gate_event_id, {
         ...(opts.wake ?? {}),
         clock,
@@ -242,6 +261,12 @@ export async function superviseToTerminal(
     if (disposition === "rate-limited") {
       logger.warn("rate-limit-wait", { code, message, wait_ms: rateLimitWaitMs });
       opts.handle?.update("backing-off", { detail: "rate-limited" });
+      await safeNotify(notifier, logger, clock, {
+        event: "rate-limit-wait",
+        task_id: slot?.task_id ?? null,
+        code,
+        message: `${message} — waiting ${rateLimitWaitMs}ms`,
+      });
       await clock.sleep(rateLimitWaitMs, opts.signal);
       if (opts.signal?.aborted) return { kind: "aborted", reason: "shutdown" };
       continue;
@@ -250,6 +275,12 @@ export async function superviseToTerminal(
     if (disposition === "terminal") {
       logger.error("escalate", { code, message });
       opts.handle?.update("stopping", { detail: code });
+      await safeNotify(notifier, logger, clock, {
+        event: "failed",
+        task_id: slot?.task_id ?? null,
+        code,
+        message,
+      });
       return { kind: "error", code, message, attempts: transientAttempts };
     }
 
@@ -257,11 +288,23 @@ export async function superviseToTerminal(
     if (transientAttempts > policy.max_attempts) {
       logger.error("escalate-ceiling", { code, message, attempts: transientAttempts });
       opts.handle?.update("stopping", { detail: code });
+      await safeNotify(notifier, logger, clock, {
+        event: "failed",
+        task_id: slot?.task_id ?? null,
+        code,
+        message,
+      });
       return { kind: "error", code, message, attempts: transientAttempts };
     }
     const delay = backoffDelayMs(policy, transientAttempts);
     logger.warn("retry", { code, message, attempt: transientAttempts, delay_ms: delay });
     opts.handle?.update("backing-off", { detail: code });
+    await safeNotify(notifier, logger, clock, {
+      event: "retry",
+      task_id: slot?.task_id ?? null,
+      code,
+      message,
+    });
     await clock.sleep(delay, opts.signal);
     if (opts.signal?.aborted) return { kind: "aborted", reason: "shutdown" };
   }
@@ -275,6 +318,7 @@ export async function superviseToTerminal(
 export async function superviseWatch(projectDir: string, opts: SuperviseOptions): Promise<void> {
   const clock = opts.clock ?? systemClock;
   const logger = opts.logger ?? nullLogger;
+  const notifier = opts.notifier ?? nullNotifier;
   const policy = opts.retry_policy ?? DEFAULT_RETRY_POLICY;
   const idlePoll = opts.watch_idle_ms ?? 5_000;
   const parkAfter = opts.watch_error_park_after ?? DEFAULT_WATCH_ERROR_PARK_AFTER;
@@ -330,6 +374,12 @@ export async function superviseWatch(projectDir: string, opts: SuperviseOptions)
             message: result.message,
             after: consecutiveErrors,
           });
+          await safeNotify(notifier, logger, clock, {
+            event: "watch-park",
+            task_id: taskId,
+            code: result.code,
+            message: result.message,
+          });
           opts.handle?.update("idle", { detail: "parked-on-error" });
           await clock.sleep(idlePoll, opts.signal);
           continue;
@@ -378,6 +428,27 @@ export function detectStaleness(
 }
 
 // ----- internals ---------------------------------------------------------
+
+// Fire an outbound notification, stamping the transport `ts` from the injected
+// clock. The load-bearing best-effort boundary: a throwing (or hanging) sink
+// must NEVER break the supervision loop, so a throw is caught and logged as a
+// `notify-failed` warning rather than propagated. The stock channels already
+// swallow their own failures; this guards a custom injected `Notifier`.
+async function safeNotify(
+  notifier: Notifier,
+  logger: DaemonLogger,
+  clock: Clock,
+  event: Omit<NotifyEvent, "ts">,
+): Promise<void> {
+  try {
+    await notifier.notify({ ...event, ts: isoFrom(clock) });
+  } catch (err) {
+    logger.warn("notify-failed", {
+      event: event.event,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 // Run one `drive()` with a per-attempt abort signal (shutdown ∪ optional
 // deadline) and a freshly built executor whose notices feed the logger.

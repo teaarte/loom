@@ -27,6 +27,7 @@ import type { DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
 import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
+import { resolveNotifier } from "../lib/notify.js";
 import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
@@ -128,7 +129,11 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
   }
 
   const { startControlPlane } = await import("@loomfsm/server");
-  const { createFileLogger } = await import("@loomfsm/daemon");
+  const { createFileLogger, nullNotifier } = await import("@loomfsm/daemon");
+
+  // One env-resolved notifier shared across the fleet; the registry stamps each
+  // project's id onto its events. Off (no channels) → skip the wiring entirely.
+  const baseNotifier = await resolveNotifier(process.env, (m) => env.err(`loom serve: notify: ${m}`));
 
   // Graceful shutdown: a test injects a signal; the real binary wires OS signals.
   const controller = new AbortController();
@@ -152,6 +157,7 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
       ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
       ...resolveSupervisionKnobs(process.env),
       makeLogger: (dir: string) => createFileLogger(dir, { echo: () => {} }),
+      ...(baseNotifier !== nullNotifier ? { makeNotifier: () => baseNotifier } : {}),
       signal,
       serverLog: (line: string) => env.err(line),
     });

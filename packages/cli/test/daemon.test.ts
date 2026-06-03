@@ -104,13 +104,15 @@ describe("loom daemon start — reporting", () => {
     });
   });
 
-  it("refuses cleanly when the Claude Code CLI is absent", async () => {
+  it("refuses cleanly when no agent has a usable backend (Claude Code absent, default auto)", async () => {
     await withTempCwd(async (cwd) => {
       const { env, err } = makeEnv(cwd);
-      // No buildExecutor override → the default factory probes for `claude`;
-      // an injected "not found" probe refuses before any supervision begins.
+      // No buildExecutor override → the dispatch preflight runs: with `auto`
+      // routing an unconfigured agent needs Claude Code, and an injected "not
+      // found" probe makes it unresolvable → refuse before any supervision.
       const code = await daemon(["start", "some work"], env, {
-        resolveRegistry: () => ({}) as unknown as Registry,
+        resolveRegistry: () =>
+          ({ bundle: { name: "code" }, agents: new Map([["a", {}]]) }) as unknown as Registry,
         claudeAvailable: () => false,
         signal: new AbortController().signal,
       });

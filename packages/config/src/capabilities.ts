@@ -52,13 +52,19 @@ export function parseModelRef(ref: string): ParsedModelRef {
 
 export type ValidatePairResult = { ok: true } | { ok: false; message: string };
 
-// Validate a `(backend, modelRef)` pair against the capability table:
-//   - a bare model ref (no family) → ACCEPTED (resolves within the backend);
+// Validate a `(backend, family)` pairing against the capability table — the one
+// source of pair compatibility, shared by `validatePair` (entry, at
+// `loom models set`) and `resolveBackend` (dispatch). Rules:
 //   - backend `auto` → ACCEPTED (auto picks a compatible backend at dispatch);
+//   - `family === undefined` (a bare tier / concrete model) → ACCEPTED (the
+//     family is unknown here; it resolves within the chosen backend);
 //   - an unknown backend name → REJECTED (typo guard);
-//   - a known backend whose families EXCLUDE the model's family → REJECTED with
-//     a helpful suggestion of backends that CAN run it.
-export function validatePair(backend: string, modelRef: string): ValidatePairResult {
+//   - a known backend whose families EXCLUDE the family → REJECTED with a
+//     helpful suggestion of backends that CAN run it.
+export function validateBackendFamily(
+  backend: string,
+  family: string | undefined,
+): ValidatePairResult {
   if (backend === AUTO_BACKEND) return { ok: true };
 
   const families = BACKEND_CAPABILITIES[backend];
@@ -69,7 +75,6 @@ export function validatePair(backend: string, modelRef: string): ValidatePairRes
     };
   }
 
-  const { family } = parseModelRef(modelRef);
   if (family === undefined) return { ok: true };
 
   if (!families.includes(family)) {
@@ -86,4 +91,10 @@ export function validatePair(backend: string, modelRef: string): ValidatePairRes
     };
   }
   return { ok: true };
+}
+
+// Validate a `(backend, modelRef)` pair: parse the ref's `provider:` family and
+// defer to `validateBackendFamily`. A bare ref (no family) is accepted.
+export function validatePair(backend: string, modelRef: string): ValidatePairResult {
+  return validateBackendFamily(backend, parseModelRef(modelRef).family);
 }

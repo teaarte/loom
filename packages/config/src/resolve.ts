@@ -18,6 +18,7 @@ import { resolveLoomHome } from "./paths.js";
 import { resolveMaybeRef } from "./secrets.js";
 import { readGlobalConfig, readProjectConfig } from "./stores.js";
 import type {
+  BackendCredentialConfig,
   BundleModelConfig,
   LoomConfig,
   NotifyConfig,
@@ -69,6 +70,25 @@ export function mergeConfig(lower: LoomConfig, higher: LoomConfig): LoomConfig {
   const resilience = mergeFields<ResilienceConfig>(lower.resilience, higher.resilience);
   if (resilience !== undefined) out.resilience = resilience;
 
+  const credentials = mergeCredentials(lower.credentials, higher.credentials);
+  if (credentials !== undefined) out.credentials = credentials;
+
+  return out;
+}
+
+// Merge per-backend credential overrides: the higher layer wins per FIELD within
+// a backend (so a project can override the key_ref while inheriting a global
+// base_url_ref).
+function mergeCredentials(
+  lower: Record<string, BackendCredentialConfig> | undefined,
+  higher: Record<string, BackendCredentialConfig> | undefined,
+): Record<string, BackendCredentialConfig> | undefined {
+  if (lower === undefined && higher === undefined) return undefined;
+  const names = new Set<string>([...Object.keys(lower ?? {}), ...Object.keys(higher ?? {})]);
+  const out: Record<string, BackendCredentialConfig> = {};
+  for (const name of names) {
+    out[name] = { ...(lower?.[name] ?? {}), ...(higher?.[name] ?? {}) };
+  }
   return out;
 }
 

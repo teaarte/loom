@@ -44,16 +44,30 @@ export interface ResilienceConfig {
   spawn_idle_timeout_ms?: number;
 }
 
+// Optional per-backend credential OVERRIDE. The DEFAULT is a documented
+// convention (a backend resolves its key from a conventionally-named secret —
+// see credentials.ts); this lets a deployment point a backend at a differently-
+// named secret or a base-URL ref instead. Both are secret references
+// (`secret:<name>`) or literals, resolved at the point the executor is built —
+// never stored as a literal value here. Keyed by backend name.
+export interface BackendCredentialConfig {
+  key_ref?: string;
+  base_url_ref?: string;
+}
+
 // The global / project config document (config.json and <repo>/.claude/loom.json
 // share this shape). All fields optional — an absent file is the empty config.
 export interface LoomConfig {
   // `auto` (default) | a backend name. Stored here and validated against the
-  // capability table; per-spawn dispatch on it is not wired yet.
+  // capability table; resolved to a concrete backend per spawn at dispatch.
   backend?: string;
   // Bundle-namespaced per-agent model map: bundles[<bundle>].agents[<agent>].
   bundles?: Record<string, BundleModelConfig>;
   notify?: NotifyConfig;
   resilience?: ResilienceConfig;
+  // Per-backend credential overrides (optional — the convention covers the
+  // common case). Keyed by backend name.
+  credentials?: Record<string, BackendCredentialConfig>;
 }
 
 // secrets.json: a flat name → value map, machine-local, chmod 600. Never in a

@@ -122,10 +122,31 @@ function buildProvider(getClient: () => OpenRouterClientLike): LLMProvider {
   };
 }
 
+// Build a provider from EITHER an injected client (tests / custom wiring) or an
+// API key (the headless dispatch path, which resolves the key from loom's
+// secrets and constructs the client here so the CLI never imports the SDK). The
+// client is constructed lazily on first spawn so import stays network-free.
 export function createOpenRouterProvider(opts: {
-  client: OpenRouterClientLike;
+  client?: OpenRouterClientLike;
+  apiKey?: string;
+  baseURL?: string;
 }): LLMProvider {
-  return buildProvider(() => opts.client);
+  if (opts.client !== undefined) {
+    const client = opts.client;
+    return buildProvider(() => client);
+  }
+  const apiKey = opts.apiKey;
+  if (apiKey === undefined || apiKey === "") {
+    throw new Error("createOpenRouterProvider requires an apiKey or a client");
+  }
+  const baseURL = opts.baseURL ?? OPENROUTER_BASE_URL;
+  let cached: OpenRouterClientLike | undefined;
+  return buildProvider(() => {
+    if (cached === undefined) {
+      cached = new OpenAI({ apiKey, baseURL }) as unknown as OpenRouterClientLike;
+    }
+    return cached;
+  });
 }
 
 let lazyDefaultClient: OpenRouterClientLike | undefined;

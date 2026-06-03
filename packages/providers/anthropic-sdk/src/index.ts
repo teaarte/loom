@@ -121,10 +121,29 @@ function buildProvider(getClient: () => AnthropicSdkClientLike): LLMProvider {
   };
 }
 
+// Build a provider from EITHER an injected client (tests / custom wiring) or an
+// API key (the headless dispatch path, which resolves the key from loom's
+// secrets and constructs the client here so the CLI never imports the SDK). The
+// client is constructed lazily on first spawn so import stays network-free.
 export function createAnthropicSdkProvider(opts: {
-  client: AnthropicSdkClientLike;
+  client?: AnthropicSdkClientLike;
+  apiKey?: string;
 }): LLMProvider {
-  return buildProvider(() => opts.client);
+  if (opts.client !== undefined) {
+    const client = opts.client;
+    return buildProvider(() => client);
+  }
+  const apiKey = opts.apiKey;
+  if (apiKey === undefined || apiKey === "") {
+    throw new Error("createAnthropicSdkProvider requires an apiKey or a client");
+  }
+  let cached: AnthropicSdkClientLike | undefined;
+  return buildProvider(() => {
+    if (cached === undefined) {
+      cached = new Anthropic({ apiKey }) as unknown as AnthropicSdkClientLike;
+    }
+    return cached;
+  });
 }
 
 let lazyDefaultClient: AnthropicSdkClientLike | undefined;

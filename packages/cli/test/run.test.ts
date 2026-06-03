@@ -106,13 +106,15 @@ describe("loom run", () => {
     assert.ok(err.some((l) => /task is required/.test(l)));
   });
 
-  it("refuses cleanly when the Claude Code CLI is absent", async () => {
+  it("refuses cleanly when no agent has a usable backend (Claude Code absent, default auto)", async () => {
     const { env, err } = makeEnv();
-    // No buildExecutor override → the default executor builder runs and
-    // probes for `claude`; an injected "not found" probe refuses before any
-    // drive begins (the headless backend is `claude -p`).
+    // No buildExecutor override → the dispatch preflight runs: with `auto`
+    // routing, an agent that has no configured provider needs Claude Code, and
+    // an injected "not found" probe makes that unresolvable → refuse before any
+    // drive begins, with a message that names Claude Code.
     const code = await runTask(["some work"], env, {
-      resolveRegistry: () => ({}) as unknown as Registry,
+      resolveRegistry: () =>
+        ({ bundle: { name: "code" }, agents: new Map([["a", {}]]) }) as unknown as Registry,
       claudeAvailable: () => false,
       driveImpl: async () => ({ kind: "complete", task_id: null, verdict: "accepted", summary: "" }),
     });

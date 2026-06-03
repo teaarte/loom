@@ -28,6 +28,7 @@ import type { Registry } from "@loomfsm/kernel";
 
 import { effectiveEnv } from "../lib/config.js";
 import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
+import { buildDispatchExecutor } from "../lib/dispatch.js";
 import { resolveNotifier } from "../lib/notify.js";
 import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
@@ -129,7 +130,7 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
   try {
     factory = overrides.buildExecutor
       ? { buildExecutor: overrides.buildExecutor }
-      : await defaultServeFactory(env, modeResult.mode, overrides, cfgEnv);
+      : await defaultServeFactory(env, modeResult.mode, overrides, cfgEnv, resolveRegistry);
   } catch (err) {
     env.err(`loom serve: ${(err as Error).message}`);
     return 1;
@@ -274,64 +275,52 @@ function envPort(): number | undefined {
 }
 
 // The per-project drive factory: resolve the container toggle ONCE (the toggle
-// + env are server-wide), probe the chosen requirement (Docker for container,
-// the Claude Code CLI for worktree) up front and refuse cleanly when absent,
-// then build a fresh executor per project per drive attempt so the attempt's
-// abort signal reaches the child. Container mode also brings the matching clone
-// merge-back, applied fleet-wide.
+// + env are server-wide), then build a fresh per-spawn dispatching executor per
+// project per drive attempt so the attempt's abort signal reaches each backend's
+// child. Each spawn is routed to the backend resolved for its agent's model
+// family (`claude -p` worktree/container for Claude Code, a plain raw call
+// otherwise); the bundle name is resolved per project via `resolveRegistry`.
+// Container mode shapes only the Claude Code backend and brings the matching
+// clone merge-back, applied fleet-wide.
 async function defaultServeFactory(
   env: CliEnv,
   mode: ContainerMode,
   overrides: ServeOverrides,
   cfgEnv: NodeJS.ProcessEnv,
+  resolveRegistry: (projectDir: string) => Promise<Registry> | Registry,
 ): Promise<ServeFactory> {
+  const home = env.home.length > 0 ? env.home : homedir();
   const plan = resolveContainerPlan({
     mode,
     env: cfgEnv,
-    home: env.home.length > 0 ? env.home : homedir(),
+    home,
     dockerAvailable: overrides.dockerAvailable ?? dockerAvailableDefault,
     onNotice: (message) => env.err(`loom serve: ${message}`),
   });
   const timeouts = resolveSpawnTimeouts(cfgEnv);
-
-  if (plan.useDocker) {
-    const { createContainerExecutor } = await import("@loomfsm/driver");
-    const { commitToBranchMergeBackFromClone } = await import("@loomfsm/daemon");
-    return {
-      buildExecutor: (projectDir, ctx) =>
-        createContainerExecutor({
-          project_dir: projectDir,
-          ...plan.container,
-          ...timeouts,
-          onNotice: ctx.onNotice,
-          onUsage: ctx.onUsage,
-          signal: ctx.signal,
-        }),
-      mergeBack: (dir, outcome) => commitToBranchMergeBackFromClone(dir, outcome.task_id),
-    };
-  }
-
   const bin = cfgEnv["LOOM_CLAUDE_BIN"] ?? "claude";
   const available = overrides.claudeAvailable ?? claudeAvailable;
-  if (!available(bin)) {
-    throw new Error(
-      `Claude Code CLI '${bin}' was not found on PATH; install Claude Code and ` +
-        `sign in (run 'claude') to drive headless runs on your subscription`,
-    );
-  }
-  const permissionMode = cfgEnv["LOOM_CLAUDE_PERMISSION_MODE"];
-  const { createClaudeCodeExecutor } = await import("@loomfsm/driver");
-  return {
+
+  const factory: ServeFactory = {
     buildExecutor: (projectDir, ctx) =>
-      createClaudeCodeExecutor({
-        project_dir: projectDir,
-        ...(permissionMode !== undefined && permissionMode !== "" ? { permission_mode: permissionMode } : {}),
-        ...timeouts,
+      buildDispatchExecutor({
+        projectDir,
+        resolveBundleName: () => Promise.resolve(resolveRegistry(projectDir)).then((r) => r.bundle.name),
+        env: cfgEnv,
+        home,
+        plan,
+        timeouts,
+        claudeAvailable: () => available(bin),
         onNotice: ctx.onNotice,
         onUsage: ctx.onUsage,
         signal: ctx.signal,
       }),
   };
+  if (plan.useDocker) {
+    const { commitToBranchMergeBackFromClone } = await import("@loomfsm/daemon");
+    factory.mergeBack = (dir, outcome) => commitToBranchMergeBackFromClone(dir, outcome.task_id);
+  }
+  return factory;
 }
 
 function claudeAvailable(bin: string): boolean {

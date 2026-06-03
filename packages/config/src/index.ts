@@ -7,6 +7,7 @@ export type {
   BundleModelConfig,
   NotifyConfig,
   ResilienceConfig,
+  BackendCredentialConfig,
   LoomConfig,
   SecretsFile,
   WorkspaceEntry,
@@ -57,9 +58,23 @@ export {
   knownBackends,
   parseModelRef,
   validatePair,
+  validateBackendFamily,
   type ParsedModelRef,
   type ValidatePairResult,
 } from "./capabilities.js";
+
+export {
+  resolveBackend,
+  type ResolveBackendInput,
+  type ResolveBackendResult,
+} from "./backend.js";
+
+export {
+  BACKEND_CREDENTIAL,
+  resolveBackendCredential,
+  type ResolvedCredential,
+  type ResolveCredentialOptions,
+} from "./credentials.js";
 
 export {
   resolveConfig,

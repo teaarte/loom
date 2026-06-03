@@ -122,16 +122,26 @@ function buildProvider(getClient: () => OllamaClientLike): LLMProvider {
   };
 }
 
+// Build a provider from EITHER an injected client (tests / custom wiring) or a
+// base URL / host (the headless dispatch path). With neither, the host defaults
+// to OLLAMA_HOST or localhost. The client is constructed lazily on first spawn
+// so import stays network-free and the CLI never imports the SDK.
 export function createOllamaProvider(opts: {
-  client: OllamaClientLike;
+  client?: OllamaClientLike;
   baseURL?: string;
 }): LLMProvider {
-  // baseURL is accepted on the DI factory for symmetry with the lazy
-  // singleton's construction path — operators who build their own
-  // client typically configure host on the underlying client itself,
-  // so the field is informational here.
-  void opts.baseURL;
-  return buildProvider(() => opts.client);
+  if (opts.client !== undefined) {
+    const client = opts.client;
+    return buildProvider(() => client);
+  }
+  const host = opts.baseURL ?? process.env["OLLAMA_HOST"] ?? DEFAULT_OLLAMA_HOST;
+  let cached: OllamaClientLike | undefined;
+  return buildProvider(() => {
+    if (cached === undefined) {
+      cached = new Ollama({ host }) as unknown as OllamaClientLike;
+    }
+    return cached;
+  });
 }
 
 let lazyDefaultClient: OllamaClientLike | undefined;

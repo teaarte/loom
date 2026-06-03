@@ -44,6 +44,15 @@ export type {
 } from "./drive.js";
 
 export { createProviderExecutor } from "./provider-executor.js";
+export type {
+  ProviderExecutorOptions,
+  ProviderErrorRateLimitDetector,
+} from "./provider-executor.js";
+
+// Per-spawn executor dispatch — route each spawn to the backend resolved for it
+// (the transport builds the resolver; this shell stays backend-blind).
+export { createDispatchExecutor } from "./dispatch-executor.js";
+export type { DispatchExecutorOptions, ResolveExecutor } from "./dispatch-executor.js";
 
 // The sandboxed-executor shell (per-task isolation + self-diff) and its
 // chosen headless backends — `claude -p` on the user's subscription login,

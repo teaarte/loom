@@ -5,6 +5,12 @@
 // provider hands the spawn back to a host to execute, which has no meaning
 // when there is no host in the loop, so it is refused. The provider's
 // `agent_run_id` is the kernel's REUSED id, threaded straight through.
+//
+// This is the PLAIN backend: it makes one model call and returns the text.
+// Unlike the sandboxed `claude -p` executor it provisions NO worktree and
+// reports NO file delta — a raw model call is a decision-agent's single-shot
+// answer, not a file-editing run. The agentic tool-loop a work-agent needs is
+// a separate, later seam; this executor stays single-shot by design.
 
 import { KernelError } from "@loomfsm/kernel";
 import type {
@@ -13,9 +19,44 @@ import type {
   ProviderSpawnRequest,
 } from "@loomfsm/kernel";
 
-import type { Executor, ExecutorResult } from "./drive.js";
+import type { Executor, ExecutorResult, SpawnUsage } from "./drive.js";
 
-export function createProviderExecutor(provider: LLMProvider): Executor {
+// Classify a provider-thrown spawn error as a sustained rate-limit / quota
+// condition — the signal the supervisor's wait disposition keys on (wait, do
+// NOT retry-and-escalate). Each async backend throws its OWN error shape (an
+// OpenAI/Anthropic SDK error carries a numeric `status`; the `ollama` client
+// throws a `ResponseError` carrying `status_code` + an `error` message), so the
+// matcher is INJECTABLE per backend — exactly like the `claude -p` capture
+// seam's `RateLimitDetector`, never a single vendor assumption baked in here.
+// Default (no detector) → no thrown error is treated as a rate-limit.
+export type ProviderErrorRateLimitDetector = (err: unknown) => boolean;
+
+export interface ProviderExecutorOptions {
+  // Recognise a sustained rate-limit in a thrown spawn error → the loop
+  // surfaces EXECUTOR_RATE_LIMITED (the supervisor waits) instead of the
+  // generic EXECUTOR_FAILED. Injectable per backend; omitted → no error is a
+  // rate-limit.
+  detectRateLimit?: ProviderErrorRateLimitDetector;
+  // Sink for per-spawn usage (the tokens a `reports_usage` provider returns).
+  // Surfaced for audit/observability — the loop does not persist it. Omitted →
+  // usage is dropped.
+  onUsage?: (usage: SpawnUsage) => void;
+}
+
+export function createProviderExecutor(
+  provider: LLMProvider,
+  opts: ProviderExecutorOptions = {},
+): Executor {
+  const finish = (output: string, tokens?: { in: number; out: number; cached?: number }): ExecutorResult => {
+    const result: ExecutorResult = { agent_output: output };
+    if (tokens !== undefined) {
+      const usage: SpawnUsage = { tokens };
+      result.usage = usage;
+      opts.onUsage?.(usage);
+    }
+    return result;
+  };
+
   return {
     async execute(spawn: ProviderShuttleIntent): Promise<ExecutorResult> {
       const request: ProviderSpawnRequest = {
@@ -30,13 +71,28 @@ export function createProviderExecutor(provider: LLMProvider): Executor {
           : {}),
         ...(spawn.extras !== undefined ? { extras: spawn.extras } : {}),
       };
-      const result = await provider.spawn(request);
+      let result;
+      try {
+        result = await provider.spawn(request);
+      } catch (err) {
+        // A recognised rate-limit becomes the surfaceable EXECUTOR_RATE_LIMITED
+        // (a wait); every other throw bubbles up as-is and the loop wraps it as
+        // the generic EXECUTOR_FAILED (a fast retry).
+        if (opts.detectRateLimit?.(err) === true) {
+          throw new KernelError({
+            code: "EXECUTOR_RATE_LIMITED",
+            message: `provider '${provider.name}' hit a rate limit / quota`,
+            detail: { provider: provider.name },
+          });
+        }
+        throw err;
+      }
       switch (result.type) {
         case "result":
-          return { agent_output: result.output };
+          return finish(result.output, result.tokens);
         case "stream": {
           const final = await result.finalize();
-          return { agent_output: final.output };
+          return finish(final.output, final.tokens);
         }
         case "shuttle":
           throw new KernelError({

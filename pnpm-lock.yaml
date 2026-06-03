@@ -47,6 +47,16 @@ importers:
       '@loomfsm/server':
         specifier: workspace:*
         version: link:../server
+    optionalDependencies:
+      '@loomfsm/provider-anthropic-sdk':
+        specifier: workspace:*
+        version: link:../providers/anthropic-sdk
+      '@loomfsm/provider-ollama':
+        specifier: workspace:*
+        version: link:../providers/ollama
+      '@loomfsm/provider-openrouter':
+        specifier: workspace:*
+        version: link:../providers/openrouter
 
   packages/config:
     dependencies:

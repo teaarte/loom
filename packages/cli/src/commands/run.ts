@@ -32,7 +32,8 @@ import type { DriveOptions, DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
 import { effectiveEnv } from "../lib/config.js";
-import { containerModeFrom, formatUsage, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
+import { containerModeFrom, formatUsage, resolveContainerPlan } from "../lib/container.js";
+import { buildDispatchExecutor, preflightDispatch } from "../lib/dispatch.js";
 import { resolveSpawnTimeouts } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
@@ -96,9 +97,56 @@ export async function runTask(
 
   let executor: Executor;
   try {
-    executor = overrides.buildExecutor
-      ? overrides.buildExecutor(registry)
-      : await defaultExecutor(target, env, modeResult.mode, overrides, cfgEnv);
+    if (overrides.buildExecutor) {
+      executor = overrides.buildExecutor(registry);
+    } else {
+      const home = env.home.length > 0 ? env.home : homedir();
+      // Resolve the container toggle FIRST so an explicit `--docker` that cannot
+      // be honored (Docker absent) refuses with its own message, before the
+      // backend preflight runs. The plan shapes only the Claude Code backend;
+      // raw backends touch no files and never run in a container.
+      const plan = resolveContainerPlan({
+        mode: modeResult.mode,
+        env: cfgEnv,
+        home,
+        dockerAvailable: overrides.dockerAvailable ?? (() => dockerAvailableDefault()),
+        onNotice: (message) => env.err(`loom run: ${message}`),
+      });
+      const bin = cfgEnv["LOOM_CLAUDE_BIN"] ?? "claude";
+      const available = overrides.claudeAvailable ?? claudeAvailable;
+      // Refuse cleanly up front when no agent has a usable backend (e.g. the
+      // default `auto` routing needs Claude Code and the CLI is absent with no
+      // provider configured) — before any drive begins.
+      const pre = preflightDispatch({
+        projectDir: target,
+        env: cfgEnv,
+        home,
+        bundleName: registry.bundle.name,
+        agents: [...registry.agents.keys()],
+        claudeAvailable: () => available(bin),
+      });
+      if (!pre.ok) {
+        env.err(`loom run: ${pre.error}`);
+        return 1;
+      }
+      // Each spawn is routed to the backend resolved for its agent's model
+      // family: the sandboxed `claude -p` run (worktree, or container per the
+      // toggle) for Claude Code, or a plain raw model call for a non-Claude
+      // decision-agent. `auto` is CC-first and falls back loudly. The worktree
+      // posture defaults to the safe `acceptEdits`, raised only by an explicit
+      // `LOOM_CLAUDE_PERMISSION_MODE` opt-in.
+      executor = buildDispatchExecutor({
+        projectDir: target,
+        resolveBundleName: () => registry.bundle.name,
+        env: cfgEnv,
+        home,
+        plan,
+        timeouts: resolveSpawnTimeouts(cfgEnv),
+        claudeAvailable: () => available(bin),
+        onNotice: (message) => env.err(`loom run: ${message}`),
+        onUsage: (usage) => env.err(`loom run: ${formatUsage(usage)}`),
+      });
+    }
   } catch (err) {
     env.err(`loom run: ${(err as Error).message}`);
     return 1;
@@ -113,62 +161,6 @@ export async function runTask(
   });
 
   return report(outcome, env);
-}
-
-// Build the headless executor for the resolved container mode. In container
-// mode each spawn runs `claude -p` inside a container (the fence that makes
-// bypassPermissions safe), authenticated on the subscription via an OAuth
-// token; otherwise it runs in an isolated git worktree. Each path probes its
-// own hard requirement up front (Docker for container, the Claude Code CLI for
-// worktree) so a missing tool refuses cleanly here rather than failing
-// spawn-by-spawn. The worktree posture defaults to the safe `acceptEdits`,
-// raised only by an explicit `LOOM_CLAUDE_PERMISSION_MODE` opt-in.
-async function defaultExecutor(
-  projectDir: string,
-  env: CliEnv,
-  mode: ContainerMode,
-  overrides: RunOverrides,
-  cfgEnv: NodeJS.ProcessEnv,
-): Promise<Executor> {
-  const plan = resolveContainerPlan({
-    mode,
-    env: cfgEnv,
-    home: env.home.length > 0 ? env.home : homedir(),
-    dockerAvailable: overrides.dockerAvailable ?? (() => dockerAvailableDefault()),
-    onNotice: (message) => env.err(`loom run: ${message}`),
-  });
-  const timeouts = resolveSpawnTimeouts(cfgEnv);
-
-  if (plan.useDocker) {
-    const { createContainerExecutor } = await import("@loomfsm/driver");
-    return createContainerExecutor({
-      project_dir: projectDir,
-      ...plan.container,
-      ...timeouts,
-      onNotice: (message) => env.err(`loom run: ${message}`),
-      onUsage: (usage) => env.err(`loom run: ${formatUsage(usage)}`),
-    });
-  }
-
-  const bin = cfgEnv["LOOM_CLAUDE_BIN"] ?? "claude";
-  const available = overrides.claudeAvailable ?? claudeAvailable;
-  if (!available(bin)) {
-    throw new Error(
-      `Claude Code CLI '${bin}' was not found on PATH; install Claude Code and ` +
-        `sign in (run 'claude') to drive headless runs on your subscription`,
-    );
-  }
-  const permissionMode = cfgEnv["LOOM_CLAUDE_PERMISSION_MODE"];
-  const { createClaudeCodeExecutor } = await import("@loomfsm/driver");
-  return createClaudeCodeExecutor({
-    project_dir: projectDir,
-    ...(permissionMode !== undefined && permissionMode !== ""
-      ? { permission_mode: permissionMode }
-      : {}),
-    ...timeouts,
-    onNotice: (message) => env.err(`loom run: ${message}`),
-    onUsage: (usage) => env.err(`loom run: ${formatUsage(usage)}`),
-  });
 }
 
 // Probe for the Claude Code CLI by spawning `<bin> --version`. A missing

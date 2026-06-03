@@ -44,11 +44,17 @@ const ResilienceConfigSchema = z.object({
   spawn_idle_timeout_ms: z.number().int().nonnegative().optional(),
 });
 
+const BackendCredentialConfigSchema = z.object({
+  key_ref: z.string().optional(),
+  base_url_ref: z.string().optional(),
+});
+
 export const LoomConfigSchema = z.object({
   backend: z.string().min(1).optional(),
   bundles: z.record(z.string(), BundleModelConfigSchema).optional(),
   notify: NotifyConfigSchema.optional(),
   resilience: ResilienceConfigSchema.optional(),
+  credentials: z.record(z.string(), BackendCredentialConfigSchema).optional(),
 });
 
 export const SecretsFileSchema = z.record(z.string(), z.string());

@@ -30,7 +30,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 
-import codeBundle, { codeManifest } from "@loomfsm/bundle-code";
+import codeBundle, { codeManifest, CODE_BUNDLE_AGENT_EXECUTION, type AgentExecution } from "@loomfsm/bundle-code";
 import {
   resolveBundleModels,
   resolveConfig,
@@ -124,6 +124,21 @@ const defaultResolver = makeResolver([claudeCodeShuttleProvider], defaultResolve
 // via `createAssembleRegistry([...])`.
 export function assembleRegistry(projectDir: string): Promise<Registry> {
   return defaultResolver(projectDir);
+}
+
+// Per-agent EXECUTION shape (single-shot vs agentic) for a loaded bundle, keyed
+// by bundle NAME. Surfaced HERE — where the bundle package is already imported —
+// so the generic CLI never imports a bundle to learn which agents need a tool
+// harness; it reads this through `resolveBundleName()` it already has. A bundle
+// declares the map as a package sidecar (zero kernel); an unlisted bundle yields
+// the empty map, so every agent defaults to single-shot. Single-bundle today;
+// this generalizes to a lookup when a bundle registry lands.
+const AGENT_EXECUTION_BY_BUNDLE: Readonly<Record<string, Readonly<Record<string, AgentExecution>>>> = {
+  [codeBundle.name]: CODE_BUNDLE_AGENT_EXECUTION,
+};
+
+export function agentExecutionFor(bundleName: string): Readonly<Record<string, AgentExecution>> {
+  return AGENT_EXECUTION_BY_BUNDLE[bundleName] ?? {};
 }
 
 // Ensure the project store exists (migrations apply on first open) and

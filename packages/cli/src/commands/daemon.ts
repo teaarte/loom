@@ -326,6 +326,11 @@ async function defaultDriveFactory(
   const timeouts = resolveSpawnTimeouts(cfgEnv);
   const bin = cfgEnv["LOOM_CLAUDE_BIN"] ?? "claude";
   const available = overrides.claudeAvailable ?? claudeAvailable;
+  // The bundle's per-agent execution map (single-shot vs agentic) — resolved
+  // once (the daemon's registry is fixed) so a work-agent on a non-Claude
+  // backend gets the Aider worktree harness.
+  const { agentExecutionFor } = await import("@loomfsm/mcp-server/bootstrap");
+  const execMap = agentExecutionFor(registry.bundle.name);
 
   const factory: DriveFactory = {
     buildExecutor: (ctx) =>
@@ -337,6 +342,7 @@ async function defaultDriveFactory(
         plan,
         timeouts,
         claudeAvailable: () => available(bin),
+        resolveAgentExecution: (agent) => execMap[agent] ?? "single-shot",
         onNotice: ctx.onNotice,
         onUsage: ctx.onUsage,
         signal: ctx.signal,

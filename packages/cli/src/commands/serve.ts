@@ -300,21 +300,28 @@ async function defaultServeFactory(
   const timeouts = resolveSpawnTimeouts(cfgEnv);
   const bin = cfgEnv["LOOM_CLAUDE_BIN"] ?? "claude";
   const available = overrides.claudeAvailable ?? claudeAvailable;
+  // The per-agent execution map (single-shot vs agentic) is per-PROJECT here
+  // (the bundle is resolved per project), so a work-agent on a non-Claude
+  // backend gets the Aider worktree harness.
+  const { agentExecutionFor } = await import("@loomfsm/mcp-server/bootstrap");
 
   const factory: ServeFactory = {
-    buildExecutor: (projectDir, ctx) =>
-      buildDispatchExecutor({
+    buildExecutor: (projectDir, ctx) => {
+      const bundleNameP = Promise.resolve(resolveRegistry(projectDir)).then((r) => r.bundle.name);
+      return buildDispatchExecutor({
         projectDir,
-        resolveBundleName: () => Promise.resolve(resolveRegistry(projectDir)).then((r) => r.bundle.name),
+        resolveBundleName: () => bundleNameP,
         env: cfgEnv,
         home,
         plan,
         timeouts,
         claudeAvailable: () => available(bin),
+        resolveAgentExecution: async (agent) => agentExecutionFor(await bundleNameP)[agent] ?? "single-shot",
         onNotice: ctx.onNotice,
         onUsage: ctx.onUsage,
         signal: ctx.signal,
-      }),
+      });
+    },
   };
   if (plan.useDocker) {
     const { commitToBranchMergeBackFromClone } = await import("@loomfsm/daemon");

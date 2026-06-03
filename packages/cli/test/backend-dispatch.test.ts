@@ -180,3 +180,171 @@ describe("credential store feeds the raw backend (secret by reference, not liter
     assert.equal((await exec.execute(intent("oracle"))).agent_output, "openrouter");
   });
 });
+
+// Build a dispatcher whose stub reveals the resolved HARNESS (not just the
+// backend), and whose agent execution-shape is injected per agent name — the
+// Phase-C selector. Fabricated NON-code roster + injected map → zero hardcoded
+// agent/bundle/tier names anywhere in the dispatch path.
+function harnessDispatcher(opts: {
+  config: LoomConfig;
+  ccAvailable: boolean;
+  agentic: string[];
+  built?: string[];
+}): Executor {
+  writeGlobalConfig(home, opts.config);
+  return buildDispatchExecutor({
+    projectDir: join(home, "proj"),
+    resolveBundleName: () => BUNDLE,
+    env: { LOOM_HOME: home },
+    home,
+    plan: { useDocker: false },
+    timeouts: {},
+    claudeAvailable: () => opts.ccAvailable,
+    // The generic, bundle-DECLARED capability: which agents edit files. Read by
+    // NAME from a fabricated map — the dispatcher hardcodes none of these.
+    resolveAgentExecution: (agent) => (opts.agentic.includes(agent) ? "agentic" : "single-shot"),
+    onNotice: () => {},
+    onUsage: () => {},
+    // Tag which (backend, harness) each spawn routed to without a real CLI/SDK.
+    buildBackendExecutor: (backend, _sinks, harness) => {
+      opts.built?.push(`${backend}:${harness}`);
+      return { execute: async () => ({ agent_output: harness }) };
+    },
+  });
+}
+
+describe("buildDispatchExecutor — harness selection by a bundle-declared generic capability", () => {
+  it("routes a work-agent to the aider harness and a decision-agent to a plain raw call on the SAME non-Claude backend", async () => {
+    const built: string[] = [];
+    const exec = harnessDispatcher({
+      config: {
+        backend: "auto",
+        bundles: {
+          [BUNDLE]: {
+            agents: {
+              builder: "openrouter:deepseek-coder", // agentic — edits files → harness
+              oracle: "openrouter:deepseek-chat", // single-shot — a decision
+            },
+          },
+        },
+      },
+      ccAvailable: false,
+      agentic: ["builder"],
+      built,
+    });
+    assert.equal((await exec.execute(intent("builder"))).agent_output, "aider");
+    assert.equal((await exec.execute(intent("oracle"))).agent_output, "plain");
+    // Two distinct harness shapes built over the one backend, each cached once.
+    assert.deepEqual([...built].sort(), ["openrouter:aider", "openrouter:plain"]);
+  });
+
+  it("an agentic agent whose anthropic model routes to Claude Code uses CC's own loop, not aider", async () => {
+    const exec = harnessDispatcher({
+      config: { backend: "auto", bundles: { [BUNDLE]: { agents: { builder: "anthropic:claude-sonnet" } } } },
+      ccAvailable: true,
+      agentic: ["builder"],
+    });
+    assert.equal((await exec.execute(intent("builder"))).agent_output, "claude-code");
+  });
+
+  it("an explicit aider pin forces the aider harness even for a non-agentic agent", async () => {
+    const exec = harnessDispatcher({
+      config: { backend: "aider", bundles: { [BUNDLE]: { agents: { oracle: "openrouter:deepseek-chat" } } } },
+      ccAvailable: false,
+      agentic: [], // NOT declared agentic — the pin still forces the harness
+    });
+    assert.equal((await exec.execute(intent("oracle"))).agent_output, "aider");
+  });
+
+  it("defaults every agent to single-shot when no execution hook is injected (B-era behavior unchanged)", async () => {
+    writeGlobalConfig(home, {
+      backend: "auto",
+      bundles: { [BUNDLE]: { agents: { oracle: "openrouter:deepseek-chat" } } },
+    });
+    const exec = buildDispatchExecutor({
+      projectDir: join(home, "proj"),
+      resolveBundleName: () => BUNDLE,
+      env: { LOOM_HOME: home },
+      home,
+      plan: { useDocker: false },
+      timeouts: {},
+      claudeAvailable: () => false,
+      onNotice: () => {},
+      onUsage: () => {},
+      buildBackendExecutor: (_backend, _sinks, harness) => ({
+        execute: async () => ({ agent_output: harness }),
+      }),
+    });
+    assert.equal((await exec.execute(intent("oracle"))).agent_output, "plain");
+  });
+});
+
+describe("buildDispatchExecutor — harness knob selects the agentic CLI (aider | opencode)", () => {
+  it("the config harness routes a work-agent to opencode (decision-agent stays plain) on the SAME backend", async () => {
+    const built: string[] = [];
+    const exec = harnessDispatcher({
+      config: {
+        backend: "auto",
+        harness: "opencode",
+        bundles: {
+          [BUNDLE]: {
+            agents: {
+              builder: "openrouter:deepseek-coder", // agentic → opencode harness
+              oracle: "openrouter:deepseek-chat", // single-shot → plain
+            },
+          },
+        },
+      },
+      ccAvailable: false,
+      agentic: ["builder"],
+      built,
+    });
+    assert.equal((await exec.execute(intent("builder"))).agent_output, "opencode");
+    assert.equal((await exec.execute(intent("oracle"))).agent_output, "plain");
+    assert.deepEqual([...built].sort(), ["openrouter:opencode", "openrouter:plain"]);
+  });
+
+  it("an explicit opencode pin forces the opencode harness for all agents", async () => {
+    const exec = harnessDispatcher({
+      config: { backend: "opencode", bundles: { [BUNDLE]: { agents: { oracle: "openrouter:deepseek-chat" } } } },
+      ccAvailable: false,
+      agentic: [],
+    });
+    assert.equal((await exec.execute(intent("oracle"))).agent_output, "opencode");
+  });
+
+  it("LOOM_HARNESS env overrides the configured/default harness", async () => {
+    writeGlobalConfig(home, {
+      backend: "auto",
+      harness: "aider", // config says aider…
+      bundles: { [BUNDLE]: { agents: { builder: "openrouter:deepseek-coder" } } },
+    });
+    const exec = buildDispatchExecutor({
+      projectDir: join(home, "proj"),
+      resolveBundleName: () => BUNDLE,
+      env: { LOOM_HOME: home, LOOM_HARNESS: "opencode" }, // …env wins
+      home,
+      plan: { useDocker: false },
+      timeouts: {},
+      claudeAvailable: () => false,
+      resolveAgentExecution: () => "agentic",
+      onNotice: () => {},
+      onUsage: () => {},
+      buildBackendExecutor: (_backend, _sinks, harness) => ({ execute: async () => ({ agent_output: harness }) }),
+    });
+    assert.equal((await exec.execute(intent("builder"))).agent_output, "opencode");
+  });
+
+  it("rejects an unknown harness with a clean error (only when an agentic spawn needs it)", async () => {
+    const exec = harnessDispatcher({
+      config: {
+        backend: "auto",
+        harness: "bogus",
+        bundles: { [BUNDLE]: { agents: { builder: "openrouter:deepseek-coder" } } },
+      },
+      ccAvailable: false,
+      agentic: ["builder"],
+    });
+    await assert.rejects(() => exec.execute(intent("builder")), /unknown harness 'bogus'/);
+  });
+});

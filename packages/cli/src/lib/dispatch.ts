@@ -24,12 +24,41 @@ import {
 // LAZILY in `execute` so loading this module does not pull SQLite into the
 // flag-free commands (`loom --version` / `setup`); types are erased.
 import type { Executor, ResolveExecutor, SpawnUsage } from "@loomfsm/driver";
+import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
-import { buildClaudeCodeBackend, buildRawBackend, type BackendSinks } from "./backends.js";
+import {
+  aiderModelString,
+  buildAiderBackend,
+  buildClaudeCodeBackend,
+  buildOpencodeBackend,
+  buildRawBackend,
+  familyCredBackend,
+  harnessChildEnv,
+  opencodeModelString,
+  type BackendSinks,
+} from "./backends.js";
 import type { ContainerPlan } from "./container.js";
 import type { SpawnTimeouts } from "./resilience.js";
 
 const CLAUDE_CODE_BACKEND = "claude-code";
+const AIDER_BACKEND = "aider";
+const OPENCODE_BACKEND = "opencode";
+const DEFAULT_HARNESS = AIDER_BACKEND;
+
+// The agentic-CLI harness backends. A spawn whose resolved backend is one of
+// these runs through that CLI harness (worktree + tool loop); it is also the set
+// a raw family backend's work-agent falls back to via the configured default.
+const HARNESS_BACKENDS = new Set<string>([AIDER_BACKEND, OPENCODE_BACKEND]);
+
+// Generic, bundle-DECLARED per-agent execution shape — "agentic" means the spawn
+// edits files and needs a tool harness; "single-shot" is one model call. The
+// dispatcher reads it by agent NAME (via an injected hook) and hardcodes none.
+export type AgentExecution = "single-shot" | "agentic";
+
+// Which concrete harness a spawn runs under, after backend + execution-shape are
+// resolved. CC carries its own loop; aider/opencode are the non-CC work-agent
+// harnesses; plain is a single raw model call.
+export type Harness = "claude-code" | "aider" | "opencode" | "plain";
 
 export interface DispatchExecutorArgs {
   projectDir: string;
@@ -51,10 +80,21 @@ export interface DispatchExecutorArgs {
   onNotice: (message: string) => void;
   onUsage: (usage: SpawnUsage) => void;
   signal?: AbortSignal;
+  // Per-agent execution shape (generic, bundle-DECLARED, surfaced by the
+  // transport from the bundle's sidecar). "agentic" → on a non-Claude backend
+  // the spawn runs through the Aider worktree harness; "single-shot" → a plain
+  // raw model call. Omitted → every agent single-shot, so B-era decision-agent
+  // routing is unchanged. Read by agent NAME; the dispatcher hardcodes none.
+  resolveAgentExecution?: (agent: string) => AgentExecution | Promise<AgentExecution>;
   // Test seam: replace backend executor construction with a stub keyed by
-  // backend name, so a suite exercises the resolution/routing without real SDKs
-  // or the Claude Code CLI.
-  buildBackendExecutor?: (backend: string, sinks: BackendSinks) => Executor | Promise<Executor>;
+  // backend name + the resolved harness, so a suite exercises the
+  // resolution/routing (incl. single-shot vs agentic harness selection) without
+  // real SDKs, the Aider CLI, or the Claude Code CLI.
+  buildBackendExecutor?: (
+    backend: string,
+    sinks: BackendSinks,
+    harness: Harness,
+  ) => Executor | Promise<Executor>;
 }
 
 export interface PreflightArgs {
@@ -98,6 +138,10 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
   const configBackend = resolved.merged.backend ?? AUTO_BACKEND;
   const ccAvailable = args.claudeAvailable();
   const permissionMode = args.env["LOOM_CLAUDE_PERMISSION_MODE"];
+  // Default agentic harness for a work-agent on a raw family backend: env wins,
+  // then config, then the first shipped adapter. Validated lazily (only when an
+  // agentic spawn actually needs it) so an unused bad value never breaks a drive.
+  const defaultHarness = args.env["LOOM_HARNESS"] ?? resolved.merged.harness ?? DEFAULT_HARNESS;
 
   const sinks: BackendSinks = {
     onNotice: args.onNotice,
@@ -117,14 +161,33 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
     return agentRefsP;
   };
 
-  // One executor per backend for the whole drive (the deterministic worktree is
-  // shared across CC spawns; a raw client is reused).
+  // One executor per (backend, harness[, family]) for the whole drive (the
+  // deterministic worktree is shared across CC/aider spawns; a raw client is
+  // reused). A backend that serves BOTH a work-agent and a decision-agent builds
+  // the two harness shapes separately.
   const cache = new Map<string, Promise<Executor>>();
   const noticed = new Set<string>();
 
-  const make = (backend: string): Promise<Executor> => {
+  // Map a spawn → the harness CLI's `--model` string from the agent's configured
+  // ref (so a mixed-model backend works); a bare/absent ref falls back to the
+  // resolved model verbatim. `modelFn` is the per-CLI family→prefix mapper.
+  const harnessResolveModel =
+    (refs: Record<string, string>, modelFn: (family: string | undefined, model: string) => string) =>
+    (intent: ProviderShuttleIntent): string => {
+      const r = refs[intent.agent];
+      if (r === undefined) return intent.model;
+      const p = parseModelRef(r);
+      return modelFn(p.family, p.model);
+    };
+
+  const make = (
+    backend: string,
+    harness: Harness,
+    family: string | undefined,
+    refs: Record<string, string>,
+  ): Promise<Executor> => {
     if (args.buildBackendExecutor !== undefined) {
-      return Promise.resolve(args.buildBackendExecutor(backend, sinks));
+      return Promise.resolve(args.buildBackendExecutor(backend, sinks, harness));
     }
     if (backend === CLAUDE_CODE_BACKEND) {
       return buildClaudeCodeBackend(
@@ -139,12 +202,38 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
         sinks,
       );
     }
-    const override = resolved.merged.credentials?.[backend];
-    const creds = resolveBackendCredential(backend, {
+    // A raw / non-CC backend. For an explicit harness pin (`aider`/`opencode`)
+    // the credential family comes from the agent's model ref; otherwise the
+    // backend IS the family's raw backend.
+    const credBackend = HARNESS_BACKENDS.has(backend) ? familyCredBackend(family) : backend;
+    const override = resolved.merged.credentials?.[credBackend];
+    const creds = resolveBackendCredential(credBackend, {
       loomHome: resolved.home,
       env: args.env,
       ...(override !== undefined ? { override } : {}),
     });
+    if (harness === "aider") {
+      return buildAiderBackend(
+        {
+          project_dir: args.projectDir,
+          resolveModel: harnessResolveModel(refs, aiderModelString),
+          env: harnessChildEnv(args.env, family, creds),
+          timeouts: args.timeouts,
+        },
+        sinks,
+      );
+    }
+    if (harness === "opencode") {
+      return buildOpencodeBackend(
+        {
+          project_dir: args.projectDir,
+          resolveModel: harnessResolveModel(refs, opencodeModelString),
+          env: harnessChildEnv(args.env, family, creds),
+          timeouts: args.timeouts,
+        },
+        sinks,
+      );
+    }
     return buildRawBackend(backend, creds, sinks);
   };
 
@@ -158,10 +247,38 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
       noticed.add(res.backend);
       args.onNotice(res.notice);
     }
-    let exec = cache.get(res.backend);
+    // Harness shape: Claude Code carries its own loop. A backend that IS a
+    // harness CLI (an explicit `aider`/`opencode` pin) uses that harness for all
+    // its spawns. Otherwise, on a raw family backend, a work-agent (agentic) gets
+    // the configured default harness and a decision-agent a single model call.
+    const execution = await Promise.resolve(
+      (args.resolveAgentExecution ?? (() => "single-shot" as const))(intent.agent),
+    );
+    let harness: Harness;
+    if (res.backend === CLAUDE_CODE_BACKEND) {
+      harness = "claude-code";
+    } else if (HARNESS_BACKENDS.has(res.backend)) {
+      harness = res.backend as Harness; // explicit pin to a harness CLI
+    } else if (execution === "agentic") {
+      if (!HARNESS_BACKENDS.has(defaultHarness)) {
+        throw new Error(
+          `unknown harness '${defaultHarness}' — set LOOM_HARNESS or config.harness to one of: ` +
+            [...HARNESS_BACKENDS].join(", "),
+        );
+      }
+      harness = defaultHarness as Harness;
+    } else {
+      harness = "plain";
+    }
+    // Key by (harness, backend, family) for a CLI harness so a backend serving
+    // both a work-agent and a decision-agent — or a mixed-family pin — builds the
+    // distinct shapes separately; plain/CC key by (backend, harness).
+    const isHarnessCli = harness === "aider" || harness === "opencode";
+    const key = isHarnessCli ? `${harness}:${res.backend}:${family ?? ""}` : `${res.backend}:${harness}`;
+    let exec = cache.get(key);
     if (exec === undefined) {
-      exec = make(res.backend);
-      cache.set(res.backend, exec);
+      exec = make(res.backend, harness, family, refs);
+      cache.set(key, exec);
     }
     return exec;
   };

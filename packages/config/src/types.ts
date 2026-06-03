@@ -61,6 +61,11 @@ export interface LoomConfig {
   // `auto` (default) | a backend name. Stored here and validated against the
   // capability table; resolved to a concrete backend per spawn at dispatch.
   backend?: string;
+  // Which agentic CLI HARNESS drives a work-agent (one that edits files) on a
+  // non-Claude backend — the adapter to shell out to. Absent → the first shipped
+  // adapter. Claude Code carries its own loop and ignores this. An infra name
+  // (the adapter), never a bundle's domain. Overridable per run via LOOM_HARNESS.
+  harness?: string;
   // Bundle-namespaced per-agent model map: bundles[<bundle>].agents[<agent>].
   bundles?: Record<string, BundleModelConfig>;
   notify?: NotifyConfig;

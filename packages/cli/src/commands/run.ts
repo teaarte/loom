@@ -131,10 +131,13 @@ export async function runTask(
       }
       // Each spawn is routed to the backend resolved for its agent's model
       // family: the sandboxed `claude -p` run (worktree, or container per the
-      // toggle) for Claude Code, or a plain raw model call for a non-Claude
-      // decision-agent. `auto` is CC-first and falls back loudly. The worktree
+      // toggle) for Claude Code, or — for a non-Claude agent — the Aider
+      // worktree harness when the agent EDITS FILES (agentic) else a plain raw
+      // model call. `auto` is CC-first and falls back loudly. The worktree
       // posture defaults to the safe `acceptEdits`, raised only by an explicit
       // `LOOM_CLAUDE_PERMISSION_MODE` opt-in.
+      const { agentExecutionFor } = await import("@loomfsm/mcp-server/bootstrap");
+      const execMap = agentExecutionFor(registry.bundle.name);
       executor = buildDispatchExecutor({
         projectDir: target,
         resolveBundleName: () => registry.bundle.name,
@@ -143,6 +146,7 @@ export async function runTask(
         plan,
         timeouts: resolveSpawnTimeouts(cfgEnv),
         claudeAvailable: () => available(bin),
+        resolveAgentExecution: (agent) => execMap[agent] ?? "single-shot",
         onNotice: (message) => env.err(`loom run: ${message}`),
         onUsage: (usage) => env.err(`loom run: ${formatUsage(usage)}`),
       });

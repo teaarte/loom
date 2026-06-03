@@ -69,6 +69,18 @@ export {
 export type { ClaudeCodeExecutorOptions } from "./claude-code-executor.js";
 export { createContainerExecutor, buildDockerArgs, dockerAvailable } from "./container-executor.js";
 export type { ContainerExecutorOptions, DockerArgsOptions } from "./container-executor.js";
+
+// The Aider work-agent backend — an agentic CLI (model-agnostic) behind the
+// same sandboxed shell, giving a non-Claude work-agent the file/shell tool loop
+// `claude -p` has for free. Aider IS the loop; loom only shells out + self-diffs.
+export { createAiderExecutor, buildAiderArgs, parseAiderUsage } from "./aider-executor.js";
+export type { AiderExecutorOptions } from "./aider-executor.js";
+
+// The opencode work-agent backend — a sibling agentic CLI (model-agnostic)
+// behind the same sandboxed shell. opencode IS the loop; loom shells out, parses
+// its JSON event stream, and self-diffs the worktree.
+export { createOpencodeExecutor, buildOpencodeArgs, parseOpencodeResult } from "./opencode-executor.js";
+export type { OpencodeExecutorOptions } from "./opencode-executor.js";
 export { provisionWorktree, worktreePathFor } from "./worktree.js";
 export type { WorktreeProvision } from "./worktree.js";
 export { provisionClone, clonePathFor } from "./clone.js";

@@ -16,6 +16,7 @@
 
 import type { ResolvedCredential } from "@loomfsm/config";
 import type { Executor, SpawnUsage } from "@loomfsm/driver";
+import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import type { ContainerPlan } from "./container.js";
 import type { SpawnTimeouts } from "./resilience.js";
@@ -153,6 +154,147 @@ export async function buildRawBackend(
         `backend '${backend}' has no wired executor in this build (a CLI adapter for it is a later step)`,
       );
   }
+}
+
+// ---- Agentic CLI harness adapters (the non-CC file/shell tool loop) -------
+//
+// A harness adapter runs an AGENTIC agent (one that edits files) through an
+// external agentic CLI, behind the same sandboxed worktree shell `claude -p`
+// uses. It is selected by the per-spawn dispatch when a work-agent routes to a
+// non-Claude backend; Claude Code already brings its own loop. The
+// family→model-prefix + family→env-var maps below are backend/provider INFRA
+// (cross-bundle), never a bundle's domain. Aider and opencode are both
+// model-agnostic multiplexers; they differ only in their model-string prefixes.
+
+// Provider family → Aider's litellm model prefix. `ollama_chat/` is litellm's
+// chat-completions Ollama route (better than the legacy `ollama/`); `gemini/`
+// is Google AI Studio. A family with no row passes through unprefixed.
+const AIDER_MODEL_PREFIX: Readonly<Record<string, string>> = {
+  anthropic: "anthropic",
+  openai: "openai",
+  google: "gemini",
+  openrouter: "openrouter",
+  ollama: "ollama_chat",
+};
+
+// Provider family → opencode's provider id (`-m provider/model`). opencode names
+// providers by the models.dev id; a local Ollama is a custom provider the user
+// declares in `opencode.json` (conventionally id `ollama`).
+const OPENCODE_MODEL_PREFIX: Readonly<Record<string, string>> = {
+  anthropic: "anthropic",
+  openai: "openai",
+  google: "google",
+  openrouter: "openrouter",
+  ollama: "ollama",
+};
+
+// Provider family → the env var the harness CLI reads its credential / base-URL
+// from. loom resolves the secret by its own convention and re-exports it here
+// under the name the CLI expects (Ollama wants OLLAMA_API_BASE, not loom's
+// OLLAMA_HOST convention name). Both adapters read the same provider key vars.
+const HARNESS_FAMILY_ENV: Readonly<Record<string, { key?: string; baseUrl?: string }>> = {
+  anthropic: { key: "ANTHROPIC_API_KEY" },
+  openai: { key: "OPENAI_API_KEY" },
+  openrouter: { key: "OPENROUTER_API_KEY" },
+  google: { key: "GEMINI_API_KEY" },
+  ollama: { baseUrl: "OLLAMA_API_BASE" },
+};
+
+// Provider family → the loom raw-backend name whose credential convention
+// applies. Used on an explicit harness pin (`backend: aider|opencode`, then the
+// family comes from the agent's model ref); on the `auto` path the resolved
+// backend already IS the family's raw backend.
+const FAMILY_CRED_BACKEND: Readonly<Record<string, string>> = {
+  anthropic: "anthropic-sdk",
+  openai: "openai",
+  openrouter: "openrouter",
+  ollama: "ollama",
+};
+
+export function familyCredBackend(family: string | undefined): string {
+  if (family === undefined) return "";
+  return FAMILY_CRED_BACKEND[family] ?? family;
+}
+
+// Map a `provider:model` ref's (family, model) → Aider's `--model` string. A
+// bare ref (no family) passes the model through unprefixed (the operator
+// configured a full litellm model name).
+export function aiderModelString(family: string | undefined, model: string): string {
+  if (family === undefined) return model;
+  const prefix = AIDER_MODEL_PREFIX[family] ?? family;
+  return `${prefix}/${model}`;
+}
+
+// Map a `provider:model` ref's (family, model) → opencode's `-m provider/model`
+// string. A bare ref passes through unprefixed (the operator configured a full
+// `provider/model` already).
+export function opencodeModelString(family: string | undefined, model: string): string {
+  if (family === undefined) return model;
+  const prefix = OPENCODE_MODEL_PREFIX[family] ?? family;
+  return `${prefix}/${model}`;
+}
+
+// Overlay the resolved credential onto the child env under the var name the
+// harness CLI expects for the family. Inherits the base env first, so a
+// pre-exported key / base-URL still reaches the CLI when loom resolved none.
+export function harnessChildEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  family: string | undefined,
+  creds: ResolvedCredential,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  const conv = family !== undefined ? HARNESS_FAMILY_ENV[family] : undefined;
+  if (conv?.key !== undefined && creds.apiKey !== undefined) env[conv.key] = creds.apiKey;
+  if (conv?.baseUrl !== undefined && creds.baseUrl !== undefined) env[conv.baseUrl] = creds.baseUrl;
+  return env;
+}
+
+export interface HarnessBackendOptions {
+  project_dir: string;
+  // Per-spawn map intent → the CLI's `--model` string (built by the dispatcher
+  // from the agent's configured ref, so a mixed-model backend works).
+  resolveModel: (intent: ProviderShuttleIntent) => string;
+  // Child env carrying the resolved provider credential (see `harnessChildEnv`).
+  env: NodeJS.ProcessEnv;
+  timeouts: SpawnTimeouts;
+}
+
+// Build the Aider work-agent executor (always a worktree — no container; the CLI
+// edits files in the isolated tree the sandboxed shell provisions and the
+// self-diff measures). The driver package is loaded lazily, same posture as the
+// other backend builders.
+export async function buildAiderBackend(
+  opts: HarnessBackendOptions,
+  sinks: BackendSinks,
+): Promise<Executor> {
+  const driver = await import("@loomfsm/driver");
+  return driver.createAiderExecutor({
+    project_dir: opts.project_dir,
+    resolveModel: opts.resolveModel,
+    env: opts.env,
+    ...opts.timeouts,
+    onNotice: sinks.onNotice,
+    onUsage: sinks.onUsage,
+    ...(sinks.signal !== undefined ? { signal: sinks.signal } : {}),
+  });
+}
+
+// Build the opencode work-agent executor — sibling of `buildAiderBackend` over
+// the same worktree shell, a different agentic CLI.
+export async function buildOpencodeBackend(
+  opts: HarnessBackendOptions,
+  sinks: BackendSinks,
+): Promise<Executor> {
+  const driver = await import("@loomfsm/driver");
+  return driver.createOpencodeExecutor({
+    project_dir: opts.project_dir,
+    resolveModel: opts.resolveModel,
+    env: opts.env,
+    ...opts.timeouts,
+    onNotice: sinks.onNotice,
+    onUsage: sinks.onUsage,
+    ...(sinks.signal !== undefined ? { signal: sinks.signal } : {}),
+  });
 }
 
 function missingKey(backend: string, envName: string): Error {

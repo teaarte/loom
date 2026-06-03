@@ -51,6 +51,7 @@ const BackendCredentialConfigSchema = z.object({
 
 export const LoomConfigSchema = z.object({
   backend: z.string().min(1).optional(),
+  harness: z.string().min(1).optional(),
   bundles: z.record(z.string(), BundleModelConfigSchema).optional(),
   notify: NotifyConfigSchema.optional(),
   resilience: ResilienceConfigSchema.optional(),

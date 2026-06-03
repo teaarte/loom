@@ -23,8 +23,9 @@ export const BACKEND_CAPABILITIES: Readonly<Record<string, readonly string[]>> =
   gemini: ["google"],
   openrouter: ["openrouter"],
   ollama: ["ollama"],
-  // Model-agnostic multiplexer — one adapter fronts several families.
+  // Model-agnostic multiplexers — one adapter fronts several families.
   aider: ["anthropic", "openai", "google", "openrouter", "ollama"],
+  opencode: ["anthropic", "openai", "google", "openrouter", "ollama"],
 };
 
 export function knownBackends(): string[] {

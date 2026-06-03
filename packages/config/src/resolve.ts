@@ -61,6 +61,9 @@ export function mergeConfig(lower: LoomConfig, higher: LoomConfig): LoomConfig {
   const backend = higher.backend ?? lower.backend;
   if (backend !== undefined) out.backend = backend;
 
+  const harness = higher.harness ?? lower.harness;
+  if (harness !== undefined) out.harness = harness;
+
   const bundles = mergeBundles(lower.bundles, higher.bundles);
   if (bundles !== undefined) out.bundles = bundles;
 

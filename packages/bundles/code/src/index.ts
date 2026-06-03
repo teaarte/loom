@@ -10,6 +10,9 @@ export { default } from "./bundle.js";
 // a bundle whose manifest row is absent).
 export { default as codeManifest } from "../manifest.js";
 export { CODE_BUNDLE_SENSITIVE_PATH_RULES } from "./sandbox-rules.js";
+// Per-agent execution shape (single-shot vs agentic) — read by the per-spawn
+// dispatch to pick a tool harness for a work-agent on a non-Claude backend.
+export { CODE_BUNDLE_AGENT_EXECUTION, type AgentExecution } from "./agent-execution.js";
 export { codePolicyResolver } from "./policy-resolver.js";
 // The bundle-owned build-stack descriptor. Held here, not in the kernel, so
 // the substrate names no code-domain field; downstream consumers (and the

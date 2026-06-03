@@ -21,6 +21,12 @@ importers:
         specifier: workspace:*
         version: link:../../kernel
 
+  packages/bundles/spec:
+    dependencies:
+      '@loomfsm/kernel':
+        specifier: workspace:*
+        version: link:../../kernel
+
   packages/cli:
     dependencies:
       '@loomfsm/daemon':

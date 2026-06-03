@@ -18,7 +18,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { runInvariants } from "../invariants.js";
 import type { NowToken } from "../types/now.js";
 import type { Transaction } from "../types/transaction.js";
-import { captureNow, getPool, KernelError } from "./db.js";
+import { captureNow, getPool, KernelError, mapMissingSchemaError } from "./db.js";
 
 // ============================================================================
 // Transaction runtime
@@ -156,7 +156,10 @@ export async function withStateTransaction<T>(
     try { db.exec("ROLLBACK"); } catch { poisoned = true; }
     if (poisoned) pool.discard(db);
     else pool.release(db);
-    throw err;
+    // A "no such table" here means the schema is not visible on this
+    // connection (un-checkpointed WAL / a store opened while empty). Surface
+    // it as a typed, recoverable error instead of a raw backend fault.
+    throw mapMissingSchemaError(err) ?? err;
   }
 }
 
@@ -203,6 +206,8 @@ export async function withReadTransaction<T>(
     try { db.exec("ROLLBACK"); } catch { poisoned = true; }
     if (poisoned) pool.discard(db);
     else pool.release(db);
-    throw err;
+    // Same schema-missing mapping as the write path: a read that hits "no
+    // such table" gets the typed, recoverable error, never a raw fault.
+    throw mapMissingSchemaError(err) ?? err;
   }
 }

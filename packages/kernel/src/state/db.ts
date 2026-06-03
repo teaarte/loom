@@ -31,6 +31,8 @@ import type { NowToken } from "../types/now.js";
 //   STATE_BUSY              writer-lock contention exceeded busy_timeout
 //   STATE_CORRUPT           a JSON column failed to parse on read
 //   STATE_NOT_INITIALIZED   loadState called before the task-create tx
+//   STORE_SCHEMA_MISSING    a query hit "no such table" — the schema is not
+//                           visible on this connection (recoverable)
 //   SCHEMA_MIGRATION_FAILED a pending migration file errored mid-apply
 //   MIGRATIONS_DIR_NOT_FOUND  packaging layout drifted from expectation
 //   INVARIANT_VIOLATION     pre-commit invariants reported violations
@@ -84,6 +86,44 @@ const WAL_SWITCH_BACKOFF_MS = 10;
 // WAL-switch race below.
 function sleepMs(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Flush the write-ahead log into the main database file and truncate it.
+// Best-effort: a checkpoint contended by an active reader on another
+// connection returns BUSY, which is not a failure of the operation that
+// triggered it — the WAL stays valid and a later checkpoint (on close, or
+// the autocheckpoint trigger) flushes it. Used at store-creation and on
+// teardown so the main `state.db` is never left an empty header while the
+// schema + committed rows sit un-checkpointed in the WAL — the degenerate
+// state a fresh / cross-process connection reads as "no such table".
+function checkpointTruncate(db: DatabaseSync): void {
+  try {
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch {
+    // contended / no WAL — safe to ignore; the WAL remains a valid journal
+  }
+}
+
+// Recognise the raw backend "no such table" error — the store's schema is
+// not visible on this connection. This is the surfaceable face of the
+// un-checkpointed-WAL / cached-empty-connection family: the data is intact,
+// but a connection that read the main file before the WAL merged sees no
+// tables. Mapping it to a typed, recoverable KernelError keeps a raw
+// server-fault (which reads like "the database needs migrating", a
+// misdiagnosis trap) from ever reaching the caller. Returns null when the
+// error is something else, so the caller rethrows it unchanged.
+export function mapMissingSchemaError(err: unknown): KernelError | null {
+  const msg = (err as Error | undefined)?.message ?? "";
+  if (!/no such table/i.test(msg)) return null;
+  return new KernelError({
+    code: "STORE_SCHEMA_MISSING",
+    message:
+      "store schema is not visible on this connection — the write-ahead log " +
+      "may be un-checkpointed or a connection opened the store while it was " +
+      "empty; stop the process holding the store and run " +
+      "PRAGMA wal_checkpoint(TRUNCATE) to flush the WAL into the main file",
+    detail: { recoverable: true, raw: msg },
+  });
 }
 
 function migrationsDir(): string {
@@ -155,6 +195,14 @@ class ConnectionPool {
     // migrated connection is a perfectly good borrowable one.
     const first = this.openConnection();
     runMigrations(first, this.resolvedDir);
+    // Flush the freshly-created schema from the WAL into the main `state.db`
+    // at creation time. The migration COMMIT lands in the WAL (WAL mode), and
+    // wal_autocheckpoint is high, so without this the main file stays an empty
+    // header until a checkpoint fires — and a separate process / a connection
+    // that opened the store while it was empty then reads "no such table".
+    // Checkpointing here makes the schema durable in the main file the moment
+    // the store exists.
+    checkpointTruncate(first);
     this.free.push(first);
   }
 
@@ -262,6 +310,15 @@ class ConnectionPool {
   // Close every connection this pool owns. A teardown hook — callers must
   // not have borrows in flight.
   closeAll(): void {
+    // Checkpoint the WAL into the main file before tearing the pool down so
+    // the on-disk `state.db` is a complete snapshot once every connection is
+    // gone — the archival byte-copy (which runs right after closeAll) and any
+    // next-process open depend on the schema + rows being in the main file,
+    // not stranded in a WAL that closing the last connection may or may not
+    // merge across processes. Best-effort on whichever live connection is at
+    // hand; with no borrows in flight a free / dedicated connection serves.
+    const live = this.free[0] ?? this.dedicated;
+    if (live !== null && live !== undefined) checkpointTruncate(live);
     for (const c of this.free) {
       try { c.close(); } catch { /* may already be closed */ }
     }

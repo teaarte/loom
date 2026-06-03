@@ -275,6 +275,22 @@ async function mergeClassifierDecisions(
     "UPDATE pipeline_state SET decisions = ? WHERE id = 1",
     [JSON.stringify(merged)],
   );
+
+  // Promote a classifier-derived `task_short` to the first-class column.
+  // The label is unknown at task-create (the classifier derives it later), so
+  // the column was seeded NULL and nothing else fills it — leaving the prompt
+  // renderer's "Task (short)" section, the `{{task_short}}` substitution, and
+  // the archival index empty. Promote here, guarded `task_short IS NULL`, so a
+  // label the operator set explicitly at create time still wins. Deterministic
+  // over the parsed header → replay-safe. The value also stays in `decisions`
+  // (the merge above), so no existing decisions reader regresses.
+  const shortLabel = header["task_short"];
+  if (typeof shortLabel === "string" && shortLabel.length > 0) {
+    await tx.exec(
+      "UPDATE pipeline_state SET task_short = ? WHERE id = 1 AND task_short IS NULL",
+      [shortLabel],
+    );
+  }
 }
 
 function nullIfEmpty(v: string): string | null {

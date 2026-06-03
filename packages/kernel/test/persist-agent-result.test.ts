@@ -331,6 +331,71 @@ describe("persistAgentResult — four output_kind paths", () => {
     assert.equal(state.decisions["findings"], undefined);
   });
 
+  it("classifier: promotes a derived task_short to the first-class column", async () => {
+    await seedBaseline(projectDir);
+    await seedPending(projectDir, "ar-cls-short", "cls-agent");
+
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      await persistAgentResult(tx, {
+        result: {
+          agent: "cls-agent",
+          agent_run_id: "ar-cls-short",
+          output: "{...}",
+          parsed_header: {
+            complexity: "medium",
+            task_short: "shared-link-folder-open-regression-fix",
+          },
+          schema_validation: { ok: true },
+        },
+        output_kind: "classifier",
+        phase: "p1",
+        model: "default",
+      });
+    });
+
+    const state = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    // The column is now populated (the prompt renderer + archive index read it)...
+    assert.equal(state.task_short, "shared-link-folder-open-regression-fix");
+    // ...and the value also stays in decisions (additive — no reader regresses).
+    assert.equal(state.decisions["task_short"], "shared-link-folder-open-regression-fix");
+  });
+
+  it("classifier: an explicit create-time task_short label is not overwritten", async () => {
+    // Seed with an explicit operator-supplied label in the column.
+    const now = captureNow();
+    await withStateTransaction(projectDir, now, async (tx) => {
+      await tx.exec(
+        "INSERT INTO pipeline_state (id, schema_version, project_dir, bundle, " +
+          "task, task_short, task_id, driver_state_id, status, started_at, decisions) " +
+          "VALUES (1, '3.0.0', ?, 'stub-bundle', 'persist fixture', " +
+          "'operator-chosen-label', 't-2026-06-03-x', 'd-x', 'in_progress', ?, '{}')",
+        [projectDir, now],
+      );
+      await tx.exec("INSERT INTO driver_state (id, flow_name, step_index, complete) VALUES (1, 'default', 0, 0)");
+      await tx.exec("INSERT INTO pipeline_counters (id) VALUES (1)");
+      await tx.exec("INSERT INTO phases (name, status, updated_at) VALUES ('p1', 'in_progress', ?)", [now]);
+    });
+    await seedPending(projectDir, "ar-cls-keep", "cls-agent");
+
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      await persistAgentResult(tx, {
+        result: {
+          agent: "cls-agent",
+          agent_run_id: "ar-cls-keep",
+          output: "{...}",
+          parsed_header: { task_short: "classifier-derived-label" },
+          schema_validation: { ok: true },
+        },
+        output_kind: "classifier",
+        phase: "p1",
+        model: "default",
+      });
+    });
+
+    const state = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(state.task_short, "operator-chosen-label");
+  });
+
   it("classifier: throws STATE_CORRUPT and rolls back on an unparseable decisions blob", async () => {
     await seedBaseline(projectDir);
     await seedPending(projectDir, "ar-cls-bad", "cls-agent");

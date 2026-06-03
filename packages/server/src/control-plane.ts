@@ -67,6 +67,21 @@ export interface ControlPlaneOptions {
   pid?: number;
   // Operational logging for the server lifecycle (NOT per-project audit).
   serverLog?: (line: string) => void;
+
+  // ----- control-layer (config / secrets / workspace) API -----
+  // When set, the HTTP server exposes the config/workspace routes over the SAME
+  // `@loomfsm/config` stores the CLI writes. The CLI injects the resolved global
+  // home; omitted → the config API is off (the existing routes are unaffected).
+  loomHome?: string;
+  // A LIVE env cell (config overlay under the real env) the config routes read
+  // for secret resolution + backend availability — re-resolved per call so an
+  // edit is seen on the next read.
+  configEnv?: () => NodeJS.ProcessEnv;
+  // Bust the per-project registry-routing cache after a config write so a
+  // changed model lands on the next spawn (the CLI wires the bootstrap resolver).
+  invalidateRegistry?: (projectDir?: string) => void;
+  // Whether the Claude Code CLI is available (surfaced by `GET /providers`).
+  claudeAvailable?: () => boolean;
 }
 
 export interface ControlPlaneHandle {
@@ -128,6 +143,10 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
     registry,
     resolveRegistry: opts.resolveRegistry,
     ...(opts.token !== undefined && opts.token.length > 0 ? { token: opts.token } : {}),
+    ...(opts.loomHome !== undefined ? { loomHome: opts.loomHome } : {}),
+    ...(opts.configEnv !== undefined ? { configEnv: opts.configEnv } : {}),
+    ...(opts.invalidateRegistry !== undefined ? { invalidateRegistry: opts.invalidateRegistry } : {}),
+    ...(opts.claudeAvailable !== undefined ? { claudeAvailable: opts.claudeAvailable } : {}),
     onError: (err) => log(`loom serve: internal error: ${err instanceof Error ? err.message : String(err)}`),
   });
 

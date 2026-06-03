@@ -94,6 +94,16 @@ export function parseWorkspaceFile(raw: unknown, label: string): WorkspaceEntry[
   return result.data.projects;
 }
 
+// The JSON Schema of the global/project config document, derived from the ONE
+// Zod schema so a `GET /config/schema` and schema-driven forms never drift from
+// the validator. Open-keyed (`bundles`/`agents`) records emit as
+// `additionalProperties`, so no bundle/agent name is baked in — the schema stays
+// generic across rosters. The conversion lives HERE (the leaf owns zod); a face
+// consumes the plain object and never imports zod itself.
+export function configJsonSchema(): Record<string, unknown> {
+  return z.toJSONSchema(LoomConfigSchema) as unknown as Record<string, unknown>;
+}
+
 function schemaError(label: string, error: z.ZodError): Error {
   const first = error.issues[0];
   const where =

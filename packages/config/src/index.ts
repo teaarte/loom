@@ -42,6 +42,7 @@ export {
   parseLoomConfig,
   parseSecretsFile,
   parseWorkspaceFile,
+  configJsonSchema,
 } from "./schema.js";
 
 export {
@@ -51,6 +52,8 @@ export {
   resolveMaybeRef,
   maskSecret,
 } from "./secrets.js";
+
+export { maskConfig, reconcileMaskedConfig } from "./redact.js";
 
 export {
   AUTO_BACKEND,

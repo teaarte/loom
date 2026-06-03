@@ -1,6 +1,6 @@
 // The HTTP transport — one more adapter over `drive()` + the supervisor
 // registry, exactly as stdio sits behind MCP. It binds loopback, speaks JSON,
-// and maps ~6 routes onto the same compositions every transport shares:
+// and maps these routes onto the same compositions every transport shares:
 //
 //   GET  /                       → the dashboard (static HTML; no auth)
 //   GET  /health                 → liveness (no auth)
@@ -11,9 +11,23 @@
 //   POST /projects/:id/answer    → answerGate  (deliver a human answer)
 //   DELETE /projects/:id         → unregister
 //   GET  /projects/:id/log       → SSE: status + log-tail snapshots
+//   GET  /projects/:id/config    → the project's override config (masked)
+//   PUT  /projects/:id/config    → write the project override config
+//   GET  /projects/:id/agents    → the bundle roster + current model bindings
+//
+// Control-layer routes (the network face of the config stores the CLI writes,
+// live only when a `loomHome` is injected; secrets masked on GET, write-only on PUT):
+//   GET/PUT /config              → the global config (masked)
+//   GET  /config/schema          → the config JSON Schema
+//   GET  /secrets                → the secret names, masked
+//   PUT  /secrets/:name          → store a secret (write-only)
+//   GET  /workspace              → the project catalog + status
+//   POST /workspace/projects     → add a project to the catalog
+//   DELETE /workspace/projects/:id → remove a catalog entry
+//   GET  /providers              → backends + provider families + availability
 //
 // No HTTP- or kernel-specific kernel API: every body delegates to submit /
-// answer / the read-model. Auth (MVP) is localhost-bind + an optional bearer
+// answer / the read-model / the config leaf. Auth (MVP) is localhost-bind + an optional bearer
 // token (header `Authorization: Bearer …`, or `?token=` for the SSE stream
 // which cannot set headers). Errors are one typed envelope `{ error: { code,
 // message } }`; a thrown `ServerError` carries the status, anything else is a
@@ -29,6 +43,20 @@ import { resolve as resolvePath } from "node:path";
 import type { Registry } from "@loomfsm/kernel";
 
 import { answerGate, parseAnswer } from "./answer.js";
+import {
+  addWorkspaceProject,
+  getConfigSchema,
+  getGlobalConfig,
+  getProjectAgents,
+  getProjectConfig,
+  getProviders,
+  getWorkspace,
+  listSecrets,
+  putGlobalConfig,
+  putProjectConfig,
+  putSecret,
+  removeWorkspaceProject,
+} from "./config-routes.js";
 import { DASHBOARD_HTML } from "./dashboard/page.js";
 import { ServerError } from "./errors.js";
 import { readLogTail } from "./log-tail.js";
@@ -36,7 +64,30 @@ import { readProjectStatus } from "./read-model.js";
 import type { SupervisorRegistry } from "./registry.js";
 import { submitTask } from "./submit.js";
 
-export interface ControlServerDeps {
+// The control-layer (config / secrets / workspace) slice of the server deps —
+// the SAME `@loomfsm/config` stores the CLI writes, reached over HTTP. Optional:
+// a server built without a `loomHome` simply does not expose the config API.
+export interface ConfigDeps {
+  // The resolved global config home ($LOOM_HOME). When set, the config /
+  // secrets / workspace / providers / agents routes are live.
+  loomHome?: string;
+  // A LIVE environment cell (config overlay under the real env). Read for secret
+  // resolution + backend availability so an edit is seen on the next read; a
+  // thunk (not a value) so it re-resolves rather than freezing at startup.
+  // Default `() => process.env`.
+  configEnv?: () => NodeJS.ProcessEnv;
+  // Invalidate the deployment's per-project registry-routing cache after a config
+  // write, so a long-running watcher rebuilds with the new model on the next
+  // spawn. The server stays bundle-blind — it calls this thunk; the CLI wires it
+  // to the bootstrap resolver. Omitted → no cache to bust (model still applies
+  // on the dispatch path, which re-reads config per spawn).
+  invalidateRegistry?: (projectDir?: string) => void;
+  // Whether the Claude Code CLI is available (a PATH/login probe the CLI injects),
+  // surfaced by `GET /providers`. Omitted → reported as "not probed".
+  claudeAvailable?: () => boolean;
+}
+
+export interface ControlServerDeps extends ConfigDeps {
   registry: SupervisorRegistry;
   // Resolve a project's FSM registry — the deployment's bundle/provider choice
   // (the CLI injects `assembleRegistry`).
@@ -94,6 +145,53 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
       return;
     }
 
+    // ----- control-layer (config / schema / secrets / workspace / providers) -----
+    // The network face of the `@loomfsm/config` stores the CLI also writes. Every
+    // body delegates to the leaf; secrets are masked on GET, write-only on PUT.
+    if (parts[0] === "config" && parts.length === 1) {
+      if (method === "GET") {
+        getGlobalConfig(res, deps);
+        return;
+      }
+      if (method === "PUT") {
+        const body = await readJsonBody(req);
+        putGlobalConfig(res, body, deps);
+        return;
+      }
+    }
+    if (parts[0] === "config" && parts[1] === "schema" && parts.length === 2 && method === "GET") {
+      getConfigSchema(res, deps);
+      return;
+    }
+    if (parts[0] === "providers" && parts.length === 1 && method === "GET") {
+      getProviders(res, deps);
+      return;
+    }
+    // /secrets collection (masked list) + /secrets/:name (write-only).
+    if (parts[0] === "secrets" && parts.length === 1 && method === "GET") {
+      listSecrets(res, deps);
+      return;
+    }
+    if (parts[0] === "secrets" && parts.length === 2 && method === "PUT") {
+      const body = await readJsonBody(req);
+      putSecret(res, parts[1] as string, body, deps);
+      return;
+    }
+    // /workspace (catalog + status) + /workspace/projects (add/remove).
+    if (parts[0] === "workspace" && parts.length === 1 && method === "GET") {
+      await getWorkspace(res, deps);
+      return;
+    }
+    if (parts[0] === "workspace" && parts[1] === "projects" && parts.length === 2 && method === "POST") {
+      const body = await readJsonBody(req);
+      addWorkspaceProject(res, body, deps);
+      return;
+    }
+    if (parts[0] === "workspace" && parts[1] === "projects" && parts.length === 3 && method === "DELETE") {
+      removeWorkspaceProject(res, parts[2] as string, deps);
+      return;
+    }
+
     // /projects collection
     if (parts[0] === "projects" && parts.length === 1) {
       if (method === "GET") {
@@ -127,6 +225,21 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
       }
       if (sub === "log" && method === "GET") {
         streamLog(req, res, id, deps);
+        return;
+      }
+      // Per-project control-layer routes: the override config + the bundle's
+      // agent roster with its current model bindings (domain-blind).
+      if (sub === "config" && method === "GET") {
+        getProjectConfig(res, id, deps);
+        return;
+      }
+      if (sub === "config" && method === "PUT") {
+        const body = await readJsonBody(req);
+        putProjectConfig(res, id, body, deps);
+        return;
+      }
+      if (sub === "agents" && method === "GET") {
+        await getProjectAgents(res, id, deps);
         return;
       }
     }

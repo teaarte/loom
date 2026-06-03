@@ -285,6 +285,17 @@ function isEmptyProvidersConfig(pc: ProvidersConfig): boolean {
   return Object.keys(pc).length === 0;
 }
 
+// Drop the default resolver's cached registry for one project (or all), so the
+// NEXT `assembleRegistry` rebuilds with current config — the model-map routing
+// is composed at build, so a config edit only reaches a long-running `serve`
+// watcher's spawns once its registry is rebuilt. The server calls this (bundle-
+// blind) after a config write; `serve` wires it. A dir not in the cache is a
+// no-op.
+export function invalidateRegistry(projectDir?: string): void {
+  if (projectDir === undefined) defaultResolverCache.clear();
+  else defaultResolverCache.delete(resolve(projectDir));
+}
+
 // Test seam: drop the default resolver's per-project cache so a suite can
 // rebuild a registry for a reused project path. Resolvers built via
 // `createAssembleRegistry` own their own caches (fresh per construction).

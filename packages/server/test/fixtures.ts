@@ -147,6 +147,31 @@ export function gateRegistry(): Registry {
   return assembleFixtureRegistry(bundleOf(stages, [], flow), [], stages, flow);
 }
 
+// A registry over a FABRICATED roster — a distinct bundle name + agent names +
+// tier map. The genericity vehicle: the config / providers / agents routes must
+// resolve against ANY roster with zero code-bundle hardcode. The flow shape is
+// irrelevant to the config routes, so a trivial finalize-only flow suffices.
+export function rosterRegistry(
+  bundleName: string,
+  roster: { name: string; default_model?: string }[],
+  tiers?: Record<string, string>,
+): Registry {
+  const agents: Agent[] = roster.map((a) => ({
+    name: a.name,
+    template_path: `templates/${a.name}.md`,
+    output_kind: "nonreview",
+    ...(a.default_model !== undefined ? { default_model: a.default_model } : {}),
+  }));
+  const stages: Record<string, Stage> = { "finalize-1": { kind: "finalize", name: "finalize-1" } };
+  const flow = ["finalize-1"];
+  const bundle: Bundle = {
+    ...bundleOf(stages, agents, flow),
+    name: bundleName,
+    ...(tiers !== undefined ? { default_model_tiers: tiers } : {}),
+  };
+  return assembleFixtureRegistry(bundle, agents, stages, flow);
+}
+
 export async function freshProject(prefix = "loom-server-"): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   openDb(dir);

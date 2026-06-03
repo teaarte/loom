@@ -24,6 +24,7 @@
     "test": "tsc && pnpm lint:no-domain-leak && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
+    "@loomfsm/config": "workspace:*",
     "@loomfsm/daemon": "workspace:*",
     "@loomfsm/driver": "workspace:*",
     "@loomfsm/kernel": "workspace:*"

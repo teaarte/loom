@@ -22,14 +22,15 @@ import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
-import type { ExecutorBuildContext, MergeBackResult } from "@loomfsm/daemon";
+import { resolveLoomHome } from "@loomfsm/config";
+import type { ExecutorBuildContext, MergeBackResult, Notifier } from "@loomfsm/daemon";
 import type { DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
 
 import { effectiveEnv } from "../lib/config.js";
 import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
 import { buildDispatchExecutor } from "../lib/dispatch.js";
-import { resolveNotifier } from "../lib/notify.js";
+import { reloadableNotifier, resolveNotifier } from "../lib/notify.js";
 import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
@@ -54,6 +55,9 @@ export interface ServeOverrides {
   startImpl?: (opts: unknown) => Promise<{ host: string; port: number; closed: Promise<void>; stop: () => Promise<void> }>;
   stateDir?: string;
   signal?: AbortSignal;
+  // Bust the registry-routing cache after a config write (test seam; production
+  // wires the bootstrap resolver).
+  invalidateRegistry?: (projectDir?: string) => void;
 }
 
 interface ServeFlags {
@@ -118,7 +122,14 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
   // environment still wins). The control plane has no single project, so the
   // project layer is the operator's cwd; the global notify + resilience are what
   // a fleet reads.
-  const cfgEnv = effectiveEnv(env.cwd, env, process.env);
+  //
+  // `cfgEnvCell` re-resolves the overlay (re-reading config.json) on each call —
+  // the reloadable config cell. The notifier + the config-API routes read it LIVE
+  // so a `loom config`/`secrets` edit applies without a restart. The watcher-
+  // scoped knobs below (container plan + supervision + timeouts) take a one-time
+  // SNAPSHOT — they are read once at attach and documented as not hot-reloaded.
+  const cfgEnvCell = (): NodeJS.ProcessEnv => effectiveEnv(env.cwd, env, process.env);
+  const cfgEnv = cfgEnvCell();
 
   // Resolve the production registry resolver + the per-project executor factory
   // (container or `claude -p` worktree, per the toggle), mirroring `loom run` /
@@ -137,11 +148,23 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
   }
 
   const { startControlPlane } = await import("@loomfsm/server");
-  const { createFileLogger, nullNotifier } = await import("@loomfsm/daemon");
+  const { createFileLogger } = await import("@loomfsm/daemon");
 
-  // One env-resolved notifier shared across the fleet; the registry stamps each
-  // project's id onto its events. Off (no channels) → skip the wiring entirely.
-  const baseNotifier = await resolveNotifier(cfgEnv, (m) => env.err(`loom serve: notify: ${m}`));
+  // The reloadable fleet notifier: built once per project but re-resolves its
+  // channels from the LIVE config overlay, so a notify edit applies on the next
+  // event. Always wired (even with no channel configured today) so configuring one
+  // mid-run takes effect without a restart. The registry stamps each project's id.
+  const makeNotifier = (): Notifier =>
+    reloadableNotifier(cfgEnvCell, (e) => resolveNotifier(e, (m) => env.err(`loom serve: notify: ${m}`)));
+
+  // The config-API surface: the resolved global home + the live env cell so the
+  // routes read/write the SAME stores the CLI does, plus a CC probe for
+  // `GET /providers` and a registry-cache bust so a model edit lands next spawn.
+  const loomHome = resolveLoomHome(process.env, env.home);
+  const ccBin = cfgEnv["LOOM_CLAUDE_BIN"] ?? "claude";
+  const claudeProbe = (): boolean => (overrides.claudeAvailable ?? claudeAvailable)(ccBin);
+  const invalidateRegistry =
+    overrides.invalidateRegistry ?? (await import("@loomfsm/mcp-server/bootstrap")).invalidateRegistry;
 
   // Graceful shutdown: a test injects a signal; the real binary wires OS signals.
   const controller = new AbortController();
@@ -165,7 +188,11 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
       ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
       ...resolveSupervisionKnobs(cfgEnv),
       makeLogger: (dir: string) => createFileLogger(dir, { echo: () => {} }),
-      ...(baseNotifier !== nullNotifier ? { makeNotifier: () => baseNotifier } : {}),
+      makeNotifier,
+      loomHome,
+      configEnv: cfgEnvCell,
+      invalidateRegistry,
+      claudeAvailable: claudeProbe,
       signal,
       serverLog: (line: string) => env.err(line),
     });

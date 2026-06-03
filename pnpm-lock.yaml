@@ -177,6 +177,9 @@ importers:
 
   packages/server:
     dependencies:
+      '@loomfsm/config':
+        specifier: workspace:*
+        version: link:../config
       '@loomfsm/daemon':
         specifier: workspace:*
         version: link:../daemon

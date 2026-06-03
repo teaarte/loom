@@ -33,6 +33,7 @@ import { dispatchEventSteps } from "./lib/dispatch-event-steps.js";
 import { advancePhaseProgress } from "./lib/phase-progress.js";
 import { readPhaseIter } from "./lib/supersede-findings.js";
 import { narrowStateForBundle } from "./narrow.js";
+import { resolveSpawnModel } from "./provider-router.js";
 import { interpretFanout } from "./stages/fanout.js";
 import { interpretFinalize } from "./stages/finalize.js";
 import { interpretGate } from "./stages/gate.js";
@@ -476,7 +477,13 @@ export async function buildStageContext(
       model?: ModelName,
     ): Promise<string> {
       const agent_run_id = makeAgentRunId();
-      const resolvedModel = model ?? null;
+      // Default to the model the router would resolve for this (agent, phase),
+      // not null. The bundle never passes an explicit model, so the column was
+      // always dead — leaving the store unable to say which model ran which
+      // agent (an audit / cost gap). The resolution is pure + deterministic
+      // (same authority the driver uses), so the stored value matches what the
+      // spawn actually dispatches and a replay reproduces it.
+      const resolvedModel = model ?? resolveSpawnModel(registry, agent, phase, state);
       await tx.exec(
         "INSERT INTO pending_agents (agent_run_id, agent, phase, model, started_at) " +
           "VALUES (?, ?, ?, ?, ?)",

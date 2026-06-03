@@ -634,6 +634,35 @@ describe("runFSM — spawn / fanout directives", () => {
     }
   });
 
+  it("SpawnStage persists the resolved model on the pending_agents row", async () => {
+    const stages: Record<string, Stage> = {
+      "spawn-1": { kind: "spawn", name: "spawn-1", phase: "p1", agent: "m-agent" },
+    };
+    const agent: Agent = {
+      name: "m-agent",
+      template_path: "templates/m-agent.md",
+      output_kind: "nonreview",
+      default_model: "fast",
+    };
+    const registry = buildRegistry({ stages, flow: ["spawn-1"], agents: [agent] });
+    // The bundle maps the agent's declared tier to a concrete model — what the
+    // driver dispatches and what the store must record (previously dead: the
+    // column defaulted to null because the bundle passes no explicit model).
+    registry.bundle.default_model_tiers = { fast: "claude-haiku-4-5" };
+
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    const out = await runFSM(state, registry);
+    assert.equal(out.directive.kind, "shuttle");
+
+    const db = openDb(projectDir);
+    const row = db
+      .prepare("SELECT model FROM pending_agents WHERE agent = ?")
+      .get("m-agent") as { model?: unknown } | undefined;
+    assert.equal(row?.model, "claude-haiku-4-5");
+  });
+
   it("FanoutStage emits a shuttle-batch directive with one spawn per surviving sibling", async () => {
     const stages: Record<string, Stage> = {
       f1: {

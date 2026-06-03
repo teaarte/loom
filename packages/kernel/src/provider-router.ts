@@ -237,10 +237,14 @@ export function resolveSpawnModel(
   phase: string | undefined,
   state: PipelineState,
 ): string {
-  const routed = registry.providers.resolveModel?.(agent, state, phase) ?? null;
+  // Optional chaining across the three registry surfaces so the resolver is
+  // safe to call from any spawn path (including a `begin_spawn` default) even
+  // when a hand-built registry omits one of them — a full production registry
+  // always carries all three, so this only hardens the edges.
+  const routed = registry.providers?.resolveModel?.(agent, state, phase) ?? null;
   if (routed !== null && routed !== "") return routed;
-  const tier = registry.agents.get(agent)?.default_model ?? "default";
-  return registry.bundle.default_model_tiers?.[tier] ?? tier;
+  const tier = registry.agents?.get(agent)?.default_model ?? "default";
+  return registry.bundle?.default_model_tiers?.[tier] ?? tier;
 }
 
 // ----- Config schema validation -------------------------------------------

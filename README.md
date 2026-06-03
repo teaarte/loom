@@ -148,10 +148,12 @@ loom history [path]                                   list this project's archiv
 loom --help | --version
 ```
 
-> `loom run` and `loom daemon` need the Claude Code CLI installed and signed in (they run
-> on your subscription). The interactive `/task` path does not — it uses your host
-> directly. The permission posture defaults to safe (`acceptEdits` — file edits proceed,
-> shell stays gated); raise it deliberately with `LOOM_CLAUDE_PERMISSION_MODE`.
+> `loom run` and `loom daemon` default to the Claude Code CLI installed and signed in (they
+> run on your subscription, no API key). The interactive `/task` path doesn't even need that
+> — it uses your host directly. Running on *other* backends (any provider/model, fully
+> without Claude) is in development — see [Status & roadmap](#status--roadmap). The permission
+> posture defaults to safe (`acceptEdits` — file edits proceed, shell stays gated); raise it
+> deliberately with `LOOM_CLAUDE_PERMISSION_MODE`.
 
 #### Container isolation — a real fence for unattended runs (`--docker`)
 
@@ -287,8 +289,8 @@ Full design rationale in [WHITEPAPER.md](WHITEPAPER.md).
 | Autonomy | `Policy = (state, role, ctx) → Decision` — three stock factories |
 | Default policy | `on-blockers` — asks a human only when a blocking finding exists |
 | Concurrency | One task in flight per project; finished tasks archive to `.claude/history/` |
-| Providers | `claude-code-shuttle` (zero-config, published); `anthropic-sdk` + `openrouter` ship in the repo |
-| Transports | `mcp-server` (stdio), `cli`, and the local-process `daemon`; HTTP transport planned |
+| Providers | `claude-code-shuttle` (zero-config, published); `anthropic-sdk`, `openrouter`, `ollama` in-repo; non-Claude work-agents via `aider` / `opencode` harness adapters (in development) |
+| Transports | `mcp-server` (stdio), `cli`, the local-process `daemon`, and an HTTP control plane (`loom serve`) |
 | License | Apache 2.0 |
 
 ## Repository layout
@@ -296,23 +298,26 @@ Full design rationale in [WHITEPAPER.md](WHITEPAPER.md).
 ```
 packages/
   kernel/                  FSM, invariants, ledger, gate-policy, types — no vendor names
-  driver/                  transport-neutral orchestration runtime — the headless drive() loop + Executor seam
+  config/                  configure-once control layer — keys, per-agent model map, project catalog (in-repo)
+  driver/                  orchestration runtime — drive() loop, Executor seam, and the backend executors (claude -p, container, aider / opencode harnesses)
   daemon/                  long-lived supervisor over drive() — park/wake, retry, recovery, worktree merge-back
+  server/                  HTTP control plane — submit / read-model / answer / SSE, multi-project (published)
   mcp-server/              MCP transport (stdio); the /task, /done, /resume commands
-  cli/                     the `loom` binary (setup / allowlist / init / status / reset / run / daemon)
+  cli/                     the `loom` binary (setup / allowlist / init / status / reset / run / daemon / serve / config / secrets / models / projects)
   pipeline/                @loomfsm/pipeline — the one-step `npm i -g` meta-package
   providers/
     claude-code-shuttle/   default provider, no API key needed (published)
     anthropic-sdk/         direct Anthropic with prompt-caching + idempotent spawn (in-repo)
     openrouter/            multi-model routing (in-repo)
+    ollama/                local models (in-repo)
   bundles/
     code/                  the code-review / implementation bundle
 ```
 
 Published under the `@loomfsm/*` scope: install **`@loomfsm/pipeline`**, which pulls
-`@loomfsm/{kernel, driver, daemon, mcp-server, cli, bundle-code, provider-claude-code-shuttle}`
-(plus `transport-types`). The `anthropic-sdk` and `openrouter` providers live in the repo
-and build from source.
+`@loomfsm/{kernel, driver, daemon, server, mcp-server, cli, bundle-code, provider-claude-code-shuttle}`
+(plus `transport-types`). The control layer (`config`), the `anthropic-sdk` / `openrouter` /
+`ollama` providers, and the work-agent harness adapters live in the repo and build from source.
 
 ## What it isn't
 
@@ -322,6 +327,21 @@ and build from source.
 - Not "AGI plumbing" — a finite-state machine that survives crashes and tells you what happened.
 
 ## Status & roadmap
+
+**In development — configure once, any model, and run fully without Claude.** A control
+layer (`@loomfsm/config`) lets you set API keys and a per-agent model map *once*, globally,
+and keep a browsable project catalog — all from the CLI (`loom config / secrets / models /
+projects`). Backend is then resolved **per spawn**: `auto` prefers the Claude Code CLI when
+it's present (your subscription, no key) and falls back to configured providers (OpenRouter
+/ Ollama / Anthropic) otherwise. Decision-agents (classify, review) run as a single model
+call; a **file-editing work-agent** runs through an agentic-CLI harness — **Aider** or
+**opencode** — behind the same isolated-worktree seam as `claude -p`, so an implementer can
+run on, say, DeepSeek via OpenRouter or a local Ollama model and actually edit files. The
+harness is chosen by a generic, bundle-declared agent capability (does this agent edit
+files?), never by name. All of it is additive over the same `drive()` loop with **zero
+kernel change**; it has landed in the repo and the individual executor + dispatch paths are
+validated against real non-Claude models, with full-pipeline hardening ongoing. The
+published `0.2.x` line is Claude-Code-backed.
 
 `v0.2.1` (current): the network control plane and unattended hardening. `loom serve` runs
 an HTTP control plane that supervises a fleet of projects over loopback — submit a task,

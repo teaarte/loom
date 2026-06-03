@@ -66,7 +66,7 @@ flowchart TB
     KERNEL ==> Providers
 ```
 
-The three plug axes — **Bundles**, **Providers**, **Transports** — are orthogonal. Any (transport × provider × bundle) combination is valid at the kernel boundary. Today loom ships one bundle (code review), the zero-config `claude-code-shuttle` provider (with `anthropic-sdk` and `openrouter` in-repo), and three transports — `mcp-server` (stdio), the `cli`, and the local-process **daemon**. Between the transports and the kernel sits one shared runtime, **`@loomfsm/driver`**, which holds the transport-neutral orchestration loop that the headless `loom run` and the daemon both wrap (see *One contract, three ways to run it*, below).
+The three plug axes — **Bundles**, **Providers**, **Transports** — are orthogonal. Any (transport × provider × bundle) combination is valid at the kernel boundary. Today loom ships one bundle (code review), the zero-config `claude-code-shuttle` provider (with `anthropic-sdk`, `openrouter`, and `ollama` in-repo), and four transports — `mcp-server` (stdio), the `cli`, the local-process **daemon**, and an HTTP **control plane** (`loom serve`). Between the transports and the kernel sits one shared runtime, **`@loomfsm/driver`**, which holds the transport-neutral orchestration loop that the headless `loom run` and the daemon both wrap (see *One contract, three ways to run it*, below). Provider selection is **per spawn** and by *capability*, not name — the basis for running each agent on a different backend (below).
 
 ### A run, end to end
 
@@ -180,7 +180,8 @@ Pure functions over state, called inside `runInvariants(tx)` at exactly three si
 
 Scope honesty matters more than feature counting. The following are intentionally out of the current release — additive, planned for later:
 
-- **Networked / multi-tenant transport.** The local-process daemon ships (`loom daemon` — supervise, park/wake, retry, recover, branch merge-back). What's still additive: an HTTP transport (remote control, a web dashboard, task intake from an issue tracker or a chat) and multi-project supervision in one control-plane — the same `drive()` behind an adapter, as stdio sits behind MCP. No kernel change.
+- **Networked transport.** The local-process daemon (`loom daemon`) and an HTTP **control plane** (`loom serve` — submit / read-model / answer / SSE, multi-project supervision over loopback, with a reference chat-intake adapter on the same `/submit`) both ship. What's still additive: a web dashboard and richer task intake over the same routes — the same `drive()` behind an adapter, as stdio sits behind MCP. No kernel change.
+- **Configure-once, any-model execution (in development).** A control layer for global API keys + a per-agent model map + a browsable project catalog; per-spawn backend resolution (`auto` is Claude-Code-first when present, else a configured provider — OpenRouter / Ollama / Anthropic); and non-Claude **work-agent harnesses** — an agentic CLI (Aider, opencode) behind the same isolated-worktree `Executor` seam — so a *file-editing* agent runs fully off Claude while decision-agents stay a single model call. The harness is chosen by a generic, bundle-declared agent capability, never by name. Landed in the repo over the same `drive()` seam with **zero kernel change**; the executor + dispatch paths are validated against real non-Claude models, with full-pipeline hardening the remaining work.
 - **Multi-bundle / multi-task in one project.** loom runs one bundle and one in-flight task per project, by design — a finished task archives so the next starts clean. Running several *projects* in parallel already works (one daemon per project, isolated stores); several bundles or tasks *in the same project* is the part the substrate doesn't orchestrate yet.
 - **Bundle runtime isolation (worker-thread fence).** loom runs bundles in-process under curated trust. Manifest declares capabilities; the bundle-loader checks them at load. The *runtime* fence (separate worker, RPC marshalling of `BundleOp[]`) lands when the third-party marketplace lands. The current threat model has zero third-party bundles.
 - **Memory subsystem.** Cross-task and cross-project memory is a deferred plugin. Substrate reserves the capability vocabulary and the `memory_query` MCP tool slot.
@@ -202,4 +203,4 @@ Solo-authored. Licensed under Apache 2.0 (see [LICENSE](LICENSE)) — permissive
 
 ---
 
-*Whitepaper version 1.1 · status: `v0.2.1`, published to npm under `@loomfsm/*` (network control plane + unattended hardening).*
+*Whitepaper version 1.2 · status: `v0.2.x` published to npm under `@loomfsm/*` (interactive · headless · daemon · HTTP control plane); configure-once multi-backend execution and non-Claude work-agent harnesses are in development in the repo.*

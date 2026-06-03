@@ -64,6 +64,13 @@ export interface SpawnCaptureOptions {
 export function spawnCapture(opts: SpawnCaptureOptions): Promise<string> {
   return new Promise<string>((resolveRun, reject) => {
     const child = spawn(opts.bin, opts.args, {
+      // No stdin: this is a non-interactive capture seam — the backend's input
+      // rides in argv, never on stdin. `ignore` gives the child immediate EOF on
+      // fd 0 (stdout/stderr stay piped for capture). Leaving stdin an open,
+      // never-written pipe (node's default) hangs any backend that READS stdin
+      // before acting — opencode's `run` does exactly that and wedged at startup;
+      // claude -p / aider / docker never read it, so this is a no-op for them.
+      stdio: ["ignore", "pipe", "pipe"],
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),

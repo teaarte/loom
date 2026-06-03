@@ -323,13 +323,21 @@ and build from source.
 
 ## Status & roadmap
 
-`v0.2.0` (current): headless, non-interactive execution. `loom run` drives a task to the
-end without a live host; `loom daemon` wraps it in a long-lived supervisor that parks on
-human gates and wakes on your answer, retries, recovers on restart, and commits finished
-work to a `loom/<task>` branch. The code-domain toolchain moved out of the kernel, so the
-substrate stays domain-blind. On the near horizon: **task intake** (pull work from an
-issue tracker or a chat, submit from anywhere), **multi-project supervision**, and an
-**HTTP transport** — all *additive* over the same driver; none reshapes the kernel.
+`v0.2.1` (current): the network control plane and unattended hardening. `loom serve` runs
+an HTTP control plane that supervises a fleet of projects over loopback — submit a task,
+read status, answer a gate, all as JSON routes (a reference Telegram intake adapter rides
+the same `/submit`). Each spawn can be fenced in a container for a safe permission bypass.
+The supervisor now waits out subscription rate-limit windows, kills a wedged spawn on a
+timeout, and parks a persistently-failing slot instead of hammering it. Opt-in **outbound
+notifications** push the events you care about — task complete, parked on a gate, failed —
+to a webhook, Slack, Telegram, or a custom script while you're away. All *additive* over
+the same driver; none reshapes the kernel.
+
+`v0.2.0`: headless, non-interactive execution. `loom run` drives a task to the end without
+a live host; `loom daemon` wraps it in a long-lived supervisor that parks on human gates and
+wakes on your answer, retries, recovers on restart, and commits finished work to a
+`loom/<task>` branch. The code-domain toolchain moved out of the kernel, so the substrate
+stays domain-blind.
 
 `v0.1.x`: the interactive foundation — kernel + the `code` bundle + mcp-server & cli;
 one task in flight per project, archived to `.claude/history/` on finish; safe resume of

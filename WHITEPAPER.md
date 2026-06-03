@@ -192,7 +192,7 @@ The substrate is *additive* to all of these. None requires re-shaping the kernel
 
 - **Kernel size**: ~12-15k LOC, before the bundle. The headless `@loomfsm/driver` runtime and the `@loomfsm/daemon` supervisor are separate, lean packages — additive over the kernel, not part of it.
 - **Bundle authoring**: a new bundle is a focused, self-contained effort given the substrate — agents, flows, and invariants as data, no kernel changes.
-- **Validation**: the `code` bundle has driven real `/task` runs end to end through an MCP host to `complete:accepted`, with the audit log recording every spawn, finding, verdict, and gate. As of `0.2.0` the same flow also runs **headless** (`loom run`) and under the **daemon**, executing each spawn through `claude -p` in an isolated worktree; the deterministic paths are covered by the test suite, with an opt-in real-`claude` end-to-end.
+- **Validation**: the `code` bundle has driven real `/task` runs end to end through an MCP host to `complete:accepted`, with the audit log recording every spawn, finding, verdict, and gate. As of `0.2.0` the same flow also runs **headless** (`loom run`) and under the **daemon**, executing each spawn through `claude -p` in an isolated worktree; `0.2.1` adds a multi-project **HTTP control plane** (`loom serve`), optional **container-isolated** spawns, rate-limit-aware and timeout-bounded supervision, and opt-in **outbound notifications**. The deterministic paths are covered by the test suite, with an opt-in real-`claude` end-to-end.
 
 The kernel is not "production-ready" because of architectural elegance; it is production-ready because it is exercised on real work and the audit log lets an operator see what happened. Architectural elegance is the precondition, not the proof.
 
@@ -202,4 +202,4 @@ Solo-authored. Licensed under Apache 2.0 (see [LICENSE](LICENSE)) — permissive
 
 ---
 
-*Whitepaper version 1.1 · status: `v0.2.0`, published to npm under `@loomfsm/*` (headless run + daemon).*
+*Whitepaper version 1.1 · status: `v0.2.1`, published to npm under `@loomfsm/*` (network control plane + unattended hardening).*

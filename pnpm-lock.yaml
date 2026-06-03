@@ -107,6 +107,9 @@ importers:
       '@loomfsm/provider-claude-code-shuttle':
         specifier: workspace:*
         version: link:../providers/claude-code-shuttle
+      '@loomfsm/server':
+        specifier: workspace:*
+        version: link:../server
 
   packages/providers/anthropic-sdk:
     dependencies:

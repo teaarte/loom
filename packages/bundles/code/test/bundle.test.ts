@@ -454,6 +454,60 @@ describe("@loomfsm/bundle-code — stack-to-bundle-state relocation", () => {
 });
 
 // ============================================================================
+// conditional review panel — a doc-only outcome skips the code reviewers
+// ============================================================================
+
+describe("@loomfsm/bundle-code — review panel gates on source presence", () => {
+  // Run the pre-review step over a file accounting and read back the
+  // source_changed decision it derives.
+  async function runPreReview(
+    files_modified: string[],
+    files_created: string[] = [],
+  ): Promise<unknown> {
+    const captured: Record<string, unknown> = {};
+    const state = { files_modified, files_created, decisions: {} } as unknown as BundleStateView;
+    const ctx = {
+      tx: { set_decision: (k: string, v: unknown) => { captured[k] = v; } },
+    } as unknown as StageContext;
+    const stage = codeBundle.stages["pre-review"];
+    assert.ok(stage !== undefined && stage.kind === "step" && stage.run !== undefined);
+    await stage.run(state, ctx);
+    return captured["source_changed"];
+  }
+
+  function reviewerApplies(name: string, decisions: Record<string, unknown>): boolean {
+    const agent = codeBundle.agents.find((a) => a.name === name);
+    assert.ok(agent?.applies_to !== undefined, `${name} must declare applies_to`);
+    const state = { decisions } as unknown as BundleStateView;
+    return agent.applies_to(state);
+  }
+
+  const ALWAYS_ON = ["logic-reviewer", "challenger-reviewer", "style-reviewer", "performance"];
+
+  it("pre-review sets source_changed=false only for a doc-only diff", async () => {
+    assert.equal(await runPreReview(["docs/HANDOFF.md"], []), false);
+    assert.equal(await runPreReview([], ["NOTES.md"]), false);
+    assert.equal(await runPreReview(["README.md", "docs/x.rst"]), false);
+    // Any source file present → true.
+    assert.equal(await runPreReview(["src/app.ts", "README.md"]), true);
+    assert.equal(await runPreReview(["src/app.ts"]), true);
+    // No files reported → unknown → true (never suppress without evidence).
+    assert.equal(await runPreReview([], []), true);
+  });
+
+  it("the code reviewers skip a doc-only outcome but run otherwise", () => {
+    for (const name of ALWAYS_ON) {
+      // doc-only: explicitly false → skip.
+      assert.equal(reviewerApplies(name, { source_changed: false }), false, `${name} should skip doc-only`);
+      // source changed → run.
+      assert.equal(reviewerApplies(name, { source_changed: true }), true, `${name} should run on source`);
+      // unset (plan-review / no files) → run (guard is `!== false`).
+      assert.equal(reviewerApplies(name, {}), true, `${name} should run when unset`);
+    }
+  });
+});
+
+// ============================================================================
 // tests_mode is one union — every value the classify step emits is handled
 // ============================================================================
 

@@ -124,7 +124,23 @@ async function derivePreReview(
   ctx.tx.set_decision?.("ui_touched", ui_touched);
   ctx.tx.set_decision?.("api_touched", api_touched);
   ctx.tx.set_decision?.("security_needed", security_needed);
+
+  // `source_changed`: false ONLY when there is positive evidence that the
+  // outcome touched no source — every modified/created path is a doc. A
+  // doc-only outcome (e.g. a verdict whose only artifact is a hand-off `.md`)
+  // does not warrant the full adversarial code panel; the always-on reviewers
+  // self-gate on this flag below. Left true when files are absent (unknown —
+  // never suppress review without evidence) so the only behavior change is the
+  // doc-only case. The conditional reviewers (ui/api/security/playwright)
+  // already drop out on a doc-only diff via their own flags.
+  const allFiles = [...state.files_modified, ...state.files_created];
+  const docOnly = allFiles.length > 0 && allFiles.every((f) => DOC_FILE.test(f));
+  ctx.tx.set_decision?.("source_changed", !docOnly);
 }
+
+// Documentation file extensions — a change confined to these is a doc-only
+// outcome with no source to run the code review panel against.
+const DOC_FILE = /\.(md|mdx|markdown|txt|rst|adoc|rdoc)$/i;
 
 // Snapshot the substrate's file accounting for the reviewer fanout to read.
 // This is a snapshot of what the run has touched, not a raw VCS diff — the
@@ -524,13 +540,32 @@ export default defineBundle({
       default_model: "premium",
       applies_to: (s) => decisionEquals(s, "complexity", "complex"),
     },
-    { name: "logic-reviewer", template_path: "agents/logic-reviewer.md", output_kind: "reviewer", default_model: "premium" },
-    { name: "challenger-reviewer", template_path: "agents/challenger-reviewer.md", output_kind: "reviewer", default_model: "premium" },
+    // The always-relevant reviewers self-gate on `source_changed`: a doc-only
+    // outcome (every changed file a doc) sets it false in `pre-review`, so the
+    // panel does not burn a full adversarial review on a hand-off `.md`. The
+    // `!== false` guard keeps them running everywhere the flag is unset —
+    // `plan-review` (planning, before any diff) and any host that reports no
+    // files — so the only suppression is the evidenced doc-only case.
+    {
+      name: "logic-reviewer",
+      template_path: "agents/logic-reviewer.md",
+      output_kind: "reviewer",
+      default_model: "premium",
+      applies_to: (s) => s.decisions["source_changed"] !== false,
+    },
+    {
+      name: "challenger-reviewer",
+      template_path: "agents/challenger-reviewer.md",
+      output_kind: "reviewer",
+      default_model: "premium",
+      applies_to: (s) => s.decisions["source_changed"] !== false,
+    },
     {
       name: "style-reviewer",
       template_path: "agents/style-reviewer.md",
       output_kind: "reviewer",
       default_model: "fast",
+      applies_to: (s) => s.decisions["source_changed"] !== false,
       relevant_for_change_kinds: ["logic", "ui", "perf-sensitive", "security-sensitive"],
     },
     {
@@ -546,6 +581,7 @@ export default defineBundle({
       template_path: "agents/performance.md",
       output_kind: "reviewer",
       default_model: "balanced",
+      applies_to: (s) => s.decisions["source_changed"] !== false,
       relevant_for_change_kinds: ["logic", "ui", "perf-sensitive", "security-sensitive"],
     },
     { name: "plan-grounding-check", template_path: "agents/plan-grounding-check.md", output_kind: "validator", default_model: "fast" },
@@ -663,6 +699,7 @@ export default defineBundle({
         { kind: "decisions.set", key: "security_needed" },
         { kind: "decisions.set", key: "ui_touched" },
         { kind: "decisions.set", key: "api_touched" },
+        { kind: "decisions.set", key: "source_changed" },
       ],
       run: derivePreReview,
     },

@@ -18,6 +18,11 @@ export type ContinueTaskInput =
       // real surface instead of an empty list. Absent → no file update.
       files_modified?: string[];
       files_created?: string[];
+      // Per-spawn token usage the host's executor captured (e.g. from a
+      // backend that reports `usage`). Persisted to agent_records.tokens_*
+      // and rolled into the counters, so the store can report per-task spend.
+      // Absent → the row's token columns stay null (no spend recorded).
+      tokens?: { in: number; out: number; cached?: number };
     }
   | {
       type: "agents-results";
@@ -26,6 +31,9 @@ export type ContinueTaskInput =
         agent_output: string;
         files_modified?: string[];
         files_created?: string[];
+        // Per-sibling token usage — same persistence as the single-result
+        // variant above.
+        tokens?: { in: number; out: number; cached?: number };
       }[];
       // True when host delivers some fanout siblings while others still
       // run — kernel accepts what arrived without advancing step_index.

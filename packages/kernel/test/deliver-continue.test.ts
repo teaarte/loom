@@ -124,6 +124,43 @@ describe("deliverContinue", () => {
       assert.ok(ledger !== null);
     }));
 
+  it("agent-result persists host-reported tokens to the record and counters", async () =>
+    withFreshDir(async (dir) => {
+      const arid = "ar-00000000-0000-0000-0000-0000000000a1";
+      await seedTask(dir, {
+        pending: [{ agent_run_id: arid, agent: "impl", phase: "work" }],
+      });
+
+      await withStateTransaction(dir, FIXED_NOW, (tx) =>
+        deliverContinue(tx, {
+          input: {
+            type: "agent-result",
+            agent_run_id: arid,
+            agent_output: "done",
+            tokens: { in: 1200, out: 340, cached: 800 },
+          },
+          driver_state_id: DRIVER,
+        }),
+      );
+
+      // Counters carry the rollup...
+      const state = await read(dir, (tx) => loadState(tx));
+      assert.equal(state.total_tokens_in, 1200);
+      assert.equal(state.total_tokens_out, 340);
+      assert.equal(state.total_tokens_cached, 800);
+
+      // ...and the per-spawn record carries the same figures (previously null).
+      const rec = await read(dir, (tx) =>
+        tx.queryRow<{ tokens_in: number; tokens_out: number; tokens_cached: number }>(
+          "SELECT tokens_in, tokens_out, tokens_cached FROM agent_records WHERE agent_run_id = ?",
+          [arid],
+        ),
+      );
+      assert.equal(Number(rec?.tokens_in), 1200);
+      assert.equal(Number(rec?.tokens_out), 340);
+      assert.equal(Number(rec?.tokens_cached), 800);
+    }));
+
   it("agent-result replay does not re-persist or double-bump counters", async () =>
     withFreshDir(async (dir) => {
       const arid = "ar-00000000-0000-0000-0000-000000000002";

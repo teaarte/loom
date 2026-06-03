@@ -76,6 +76,7 @@ export async function deliverContinue(
         args,
         input.agent_run_id,
         input.agent_output,
+        input.tokens,
       );
       // File accounting unions in only on a real (non-replay) delivery —
       // a retried delivery must not re-merge, though the union is itself
@@ -103,6 +104,7 @@ export async function deliverContinue(
           args,
           result.agent_run_id,
           result.agent_output,
+          result.tokens,
         );
         if (delivered) {
           await mergeDeliveredFiles(tx, result.files_modified, result.files_created);
@@ -136,6 +138,7 @@ async function deliverAgentResult(
   args: DeliverContinueArgs,
   agentRunId: string,
   agentOutput: string,
+  tokens?: { in: number; out: number; cached?: number },
 ): Promise<boolean> {
   const key = `agent-result:${agentRunId}`;
   const existing = await readLedgerRow(tx, key);
@@ -163,6 +166,10 @@ async function deliverAgentResult(
     agent_run_id: agentRunId,
     output_kind: outputKind,
     raw_output: agentOutput,
+    // Carry the host-reported usage onto the result so the persistor writes
+    // agent_records.tokens_* and rolls the counters. Without this the columns
+    // stay null even when the backend reported token counts.
+    ...(tokens !== undefined ? { tokens } : {}),
   });
   // Stamp the finding/verdict rows with the phase's CURRENT round, read
   // from the kernel-owned per-phase counter rather than the agent's

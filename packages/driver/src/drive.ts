@@ -500,6 +500,9 @@ function toContinueInput(
       agent_output: r.agent_output,
       ...(r.files_modified !== undefined ? { files_modified: r.files_modified } : {}),
       ...(r.files_created !== undefined ? { files_created: r.files_created } : {}),
+      // Forward the executor's captured per-spawn usage so the store persists
+      // tokens (previously dropped — usage was observed only via the audit log).
+      ...(r.usage?.tokens !== undefined ? { tokens: r.usage.tokens } : {}),
     };
   }
   return {
@@ -511,6 +514,7 @@ function toContinueInput(
         agent_output: r.agent_output,
         ...(r.files_modified !== undefined ? { files_modified: r.files_modified } : {}),
         ...(r.files_created !== undefined ? { files_created: r.files_created } : {}),
+        ...(r.usage?.tokens !== undefined ? { tokens: r.usage.tokens } : {}),
       };
     }),
   };

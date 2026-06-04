@@ -26,6 +26,7 @@
   "dependencies": {
     "@loomfsm/config": "workspace:*",
     "@loomfsm/daemon": "workspace:*",
+    "@loomfsm/dashboard": "workspace:*",
     "@loomfsm/driver": "workspace:*",
     "@loomfsm/kernel": "workspace:*"
   },

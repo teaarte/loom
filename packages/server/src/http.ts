@@ -2,7 +2,8 @@
 // registry, exactly as stdio sits behind MCP. It binds loopback, speaks JSON,
 // and maps these routes onto the same compositions every transport shares:
 //
-//   GET  /                       → the dashboard (static HTML; no auth)
+//   GET  /                       → the dashboard SPA (prebuilt static assets; no auth)
+//   GET  /assets/*               → the dashboard's hashed JS/CSS (no auth)
 //   GET  /health                 → liveness (no auth)
 //   POST /submit                 → submitTask  (create-task path)
 //   GET  /projects               → registry + read-model for each
@@ -57,7 +58,7 @@ import {
   putSecret,
   removeWorkspaceProject,
 } from "./config-routes.js";
-import { DASHBOARD_HTML } from "./dashboard/page.js";
+import { serveDashboard } from "./dashboard/assets.js";
 import { ServerError } from "./errors.js";
 import { readLogTail } from "./log-tail.js";
 import { readProjectStatus } from "./read-model.js";
@@ -85,6 +86,10 @@ export interface ConfigDeps {
   // Whether the Claude Code CLI is available (a PATH/login probe the CLI injects),
   // surfaced by `GET /providers`. Omitted → reported as "not probed".
   claudeAvailable?: () => boolean;
+  // Override the dashboard's built-asset directory. Omitted → resolved from the
+  // `@loomfsm/dashboard` workspace dependency. A test injects a fixture dir so it
+  // can assert serving without running the front-end build.
+  dashboardDir?: string;
 }
 
 export interface ControlServerDeps extends ConfigDeps {
@@ -121,9 +126,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
   const now = (): number => (deps.now ?? Date.now)();
 
   // ----- unauthenticated routes -----
-  if (method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end(DASHBOARD_HTML);
+  // The dashboard shell + its hashed assets load without a token (the page then
+  // prompts for one); the API behind them stays gated. Non-asset GETs fall
+  // through to API routing.
+  if (method === "GET" && serveDashboard(res, url.pathname, deps.dashboardDir)) {
     return;
   }
   if (method === "GET" && url.pathname === "/health") {

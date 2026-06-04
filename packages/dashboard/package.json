@@ -1,0 +1,27 @@
+{
+  "name": "@loomfsm/dashboard",
+  "version": "0.2.1",
+  "type": "module",
+  "description": "loom's web control plane — a React SPA over the @loomfsm/server HTTP API. A PEER client of the same resolver the CLI drives: edit config/secrets/models, browse projects, submit tasks, answer gates. Ships as PREBUILT static assets the server serves at / — it adds no runtime dependency to the server.",
+  "license": "Apache-2.0",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "prepack": "pnpm run build",
+    "test": "tsc --noEmit && vite build"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.16",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "vite": "^8.0.16"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

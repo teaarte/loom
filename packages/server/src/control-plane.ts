@@ -82,6 +82,9 @@ export interface ControlPlaneOptions {
   invalidateRegistry?: (projectDir?: string) => void;
   // Whether the Claude Code CLI is available (surfaced by `GET /providers`).
   claudeAvailable?: () => boolean;
+  // Override the dashboard's built-asset directory (default: resolved from the
+  // `@loomfsm/dashboard` workspace dependency). A test injects a fixture dir.
+  dashboardDir?: string;
 }
 
 export interface ControlPlaneHandle {
@@ -147,6 +150,7 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
     ...(opts.configEnv !== undefined ? { configEnv: opts.configEnv } : {}),
     ...(opts.invalidateRegistry !== undefined ? { invalidateRegistry: opts.invalidateRegistry } : {}),
     ...(opts.claudeAvailable !== undefined ? { claudeAvailable: opts.claudeAvailable } : {}),
+    ...(opts.dashboardDir !== undefined ? { dashboardDir: opts.dashboardDir } : {}),
     onError: (err) => log(`loom serve: internal error: ${err instanceof Error ? err.message : String(err)}`),
   });
 

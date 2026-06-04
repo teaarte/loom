@@ -13,6 +13,7 @@ import {
   cleanup,
   freshProject,
   gateRegistry,
+  makeDashboardFixture,
   recordingExecutor,
   spawnRegistry,
   tempStateDir,
@@ -42,6 +43,7 @@ before(async () => {
     token: TOKEN,
     resolveRegistry,
     buildExecutor: () => recordingExecutor([]),
+    dashboardDir: makeDashboardFixture(),
     signal: controller.signal,
     ...FAST,
   });
@@ -109,11 +111,20 @@ describe("http — health + auth", () => {
     assert.equal(res.json.error.code, "UNAUTHORIZED");
   });
 
-  it("serves the dashboard HTML at / without a token", async () => {
+  it("serves the dashboard SPA shell at / without a token", async () => {
     const res = await fetch(base + "/");
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") ?? "", /text\/html/);
-    assert.match(await res.text(), /loom control plane/);
+    const html = await res.text();
+    assert.match(html, /loom control plane/);
+    assert.match(html, /<div id="root">/);
+  });
+
+  it("serves a hashed asset (immutable) without a token", async () => {
+    const res = await fetch(base + "/assets/app.js");
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") ?? "", /javascript/);
+    assert.match(res.headers.get("cache-control") ?? "", /immutable/);
   });
 });
 

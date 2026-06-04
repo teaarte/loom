@@ -1,0 +1,104 @@
+.app {
+  display: grid;
+  grid-template-columns: 14rem 1fr;
+  min-height: 100vh;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1rem 0.75rem;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  padding: 0.25rem 0.5rem 0.75rem;
+  letter-spacing: 0.02em;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.navItem {
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.navItem:hover {
+  background: var(--hover);
+}
+.navItemActive {
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.conn {
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.connLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  opacity: 0.8;
+}
+.connInput {
+  font: inherit;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+.connBtn {
+  font: inherit;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+}
+
+.main {
+  padding: 1.4rem 1.6rem;
+  overflow: auto;
+}
+
+.dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--muted);
+}
+.dotOk {
+  background: var(--ok);
+}
+.dotWarn {
+  background: var(--warn);
+}
+.dotBad {
+  background: var(--bad);
+}

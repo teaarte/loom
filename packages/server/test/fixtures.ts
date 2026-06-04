@@ -5,7 +5,7 @@
 // `claude -p`, no mocked DB).
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -216,6 +216,21 @@ export function cleanup(dir: string): void {
 
 export function tempStateDir(): string {
   return mkdtempSync(join(tmpdir(), "loom-server-state-"));
+}
+
+// A minimal stand-in for the dashboard's built `dist/` — an index.html shell +
+// one hashed asset — so the asset-serving path is exercised over REAL files on
+// disk without running the front-end (Vite) build in the server suite.
+export function makeDashboardFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "loom-dashboard-dist-"));
+  writeFileSync(
+    join(dir, "index.html"),
+    '<!doctype html><html><head><title>loom control plane</title></head>' +
+      '<body><div id="root"></div><script type="module" src="/assets/app.js"></script></body></html>',
+  );
+  mkdirSync(join(dir, "assets"));
+  writeFileSync(join(dir, "assets", "app.js"), 'console.log("loom dashboard");\n');
+  return dir;
 }
 
 // An executor that echoes a fixed output and records the agent_run_ids it saw.

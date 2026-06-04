@@ -49,4 +49,4 @@ export {
 } from "./process-control.js";
 export type { ServerStatus, ServerPhase, ServerHandle, StopResult } from "./process-control.js";
 
-export { DASHBOARD_HTML } from "./dashboard/page.js";
+export { serveDashboard } from "./dashboard/assets.js";

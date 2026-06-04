@@ -75,6 +75,9 @@ importers:
 
   packages/dashboard:
     devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.19.19
       '@types/react':
         specifier: ^19.2.16
         version: 19.2.16

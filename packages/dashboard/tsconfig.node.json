@@ -1,0 +1,23 @@
+{
+  "//": "Compiles the PURE (no-DOM, no-JSX) dashboard helpers + their node:test specs to dist-test/, so the framework-free logic (status, schema→form-model, validatePair mirror, mask) is unit-tested under node without a browser. The front-end (DOM/JSX) is typechecked by tsconfig.json and built by vite; it is never run through node.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "outDir": "dist-test",
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["test"]
+}

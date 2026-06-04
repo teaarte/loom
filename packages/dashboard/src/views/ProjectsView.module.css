@@ -98,3 +98,22 @@
 .bad {
   background: var(--bad);
 }
+
+/* Pulse the dot only while a task is actively in_progress. */
+@keyframes loomPulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--ok);
+    opacity: 1;
+  }
+  70% {
+    box-shadow: 0 0 0 0.35rem transparent;
+    opacity: 0.7;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    opacity: 1;
+  }
+}
+.pulse {
+  animation: loomPulse 1.4s ease-out infinite;
+}

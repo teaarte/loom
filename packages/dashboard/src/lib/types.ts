@@ -10,6 +10,8 @@ export interface ProjectStatus {
   has_task: boolean;
   task_id: string | null;
   task_label: string | null;
+  // The full task text (untruncated). Optional so an older server is tolerated.
+  task?: string;
   status: "in_progress" | "completed" | "abandoned" | null;
   verdict: "accepted" | "rejected" | "failed_force_closed" | null;
   flow: { name: string; step_index: number } | null;
@@ -17,6 +19,10 @@ export interface ProjectStatus {
   parked_gate: { gate: string; message: string; gate_event_id: string } | null;
   pending_agents: { agent: string; phase: string; age_ms: number }[];
   stalled: boolean;
+  // Wall-clock bookends for total-elapsed display (ISO-8601). `ended_at` is null
+  // until terminal. Optional so an older server (no field) is tolerated.
+  started_at?: string | null;
+  ended_at?: string | null;
 }
 
 // A row of `GET /projects` (the live supervised set).
@@ -100,6 +106,19 @@ export interface ProviderInfo {
 export interface ProvidersResponse {
   backend_mode: string;
   providers: ProviderInfo[];
+  // Whether per-task Docker isolation can be honoured (an image + credential are
+  // configured and the Docker CLI is reachable). Absent on an older server.
+  docker?: { available: boolean; reason?: string };
+}
+
+// A backend's live model list (`GET /providers/:backend/models`). `models` is
+// the catalog the UI offers in a dropdown; empty when the server cannot list
+// them (unknown/unreachable backend) — the UI then falls back to free-text.
+export interface BackendModelsResponse {
+  backend: string;
+  models: string[];
+  // When the list is empty, why (so the UI can annotate the free-text fallback).
+  reason?: string;
 }
 
 // The masked secret store (`GET /secrets`) — name → masked value (`****1234`).

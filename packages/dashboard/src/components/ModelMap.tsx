@@ -1,10 +1,13 @@
 // The model-map editor — bind a bundle's agents to models, the UI face of
 // `loom models set`. The roster + each agent's CURRENT binding comes from
 // `GET /projects/:id/agents` (names are DATA off the loaded bundle); the
-// allowable provider families come from `GET /providers`. Before a write it runs
-// the CLIENT-side `validateModelRef` mirror so an incompatible `(backend, model)`
-// pair is flagged inline — the server re-checks on `PUT /config` and is the
-// authority.
+// allowable provider families come from `GET /providers`. Each row offers a
+// provider dropdown + a model dropdown (the live list from
+// `GET /providers/:backend/models`) that FILLS a free-text ref — the free text
+// is always the source of truth, so a backend with no live list still works.
+// Before a write it runs the CLIENT-side `validateModelRef` mirror so an
+// incompatible `(backend, model)` pair is flagged inline — the server re-checks
+// on `PUT /config` and is the authority.
 //
 // It writes the GLOBAL config (the same store `loom models set` writes):
 // `bundles[<bundle>].agents[<agent>]`. The masked config is round-tripped whole
@@ -14,7 +17,12 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api, ApiError } from "../lib/api.js";
 import { validateModelRef } from "../lib/validatePair.js";
-import type { AgentsResponse, LoomConfigShape, ProvidersResponse } from "../lib/types.js";
+import type {
+  AgentsResponse,
+  BackendModelsResponse,
+  LoomConfigShape,
+  ProvidersResponse,
+} from "../lib/types.js";
 import styles from "./ModelMap.module.css";
 
 export function ModelMap({ projectId }: { projectId: string }) {
@@ -23,6 +31,9 @@ export function ModelMap({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
+  // The per-agent provider dropdown selection + a per-backend model-list cache.
+  const [providerSel, setProviderSel] = useState<Record<string, string>>({});
+  const [modelsByBackend, setModelsByBackend] = useState<Record<string, BackendModelsResponse>>({});
 
   const reload = useCallback(async () => {
     try {
@@ -41,6 +52,21 @@ export function ModelMap({ projectId }: { projectId: string }) {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Lazily fetch (and cache) a backend's model list when its dropdown is first
+  // chosen. A failed/empty list is cached too — the row falls back to free-text.
+  const loadModels = useCallback(
+    async (backend: string): Promise<void> => {
+      if (backend.length === 0 || modelsByBackend[backend] !== undefined) return;
+      try {
+        const r = await api<BackendModelsResponse>("GET", `/providers/${encodeURIComponent(backend)}/models`);
+        setModelsByBackend((m) => ({ ...m, [backend]: r }));
+      } catch {
+        setModelsByBackend((m) => ({ ...m, [backend]: { backend, models: [], reason: "could not list models" } }));
+      }
+    },
+    [modelsByBackend],
+  );
 
   const save = async (agent: string, ref: string): Promise<void> => {
     if (agents === null) return;
@@ -71,6 +97,7 @@ export function ModelMap({ projectId }: { projectId: string }) {
 
   if (error !== null) return <div className={styles.error}>{error}</div>;
   if (agents === null || providers === null) return <div className={styles.loading}>loading models…</div>;
+  const backends = providers.providers.map((p) => p.backend);
 
   return (
     <div>
@@ -82,7 +109,7 @@ export function ModelMap({ projectId }: { projectId: string }) {
           <tr>
             <th>agent</th>
             <th>current</th>
-            <th>set model (provider:model | tier)</th>
+            <th>set model (pick or type provider:model | tier)</th>
             <th />
           </tr>
         </thead>
@@ -91,7 +118,12 @@ export function ModelMap({ projectId }: { projectId: string }) {
             const draft = drafts[a.agent];
             const editing = draft !== undefined;
             const value = editing ? draft : (a.ref ?? "");
-            const hint = value.trim().length > 0 ? validateModelRef(providers.backend_mode, providers.providers, value) : { ok: true as const };
+            const hint =
+              value.trim().length > 0
+                ? validateModelRef(providers.backend_mode, providers.providers, value)
+                : { ok: true as const };
+            const selBackend = providerSel[a.agent] ?? "";
+            const modelList = selBackend.length > 0 ? modelsByBackend[selBackend] : undefined;
             return (
               <tr key={a.agent}>
                 <td className={styles.agent}>{a.agent}</td>
@@ -106,6 +138,45 @@ export function ModelMap({ projectId }: { projectId: string }) {
                   )}
                 </td>
                 <td>
+                  <div className={styles.pickers}>
+                    <select
+                      className={styles.select}
+                      value={selBackend}
+                      onChange={(e) => {
+                        const b = e.target.value;
+                        setProviderSel((s) => ({ ...s, [a.agent]: b }));
+                        void loadModels(b);
+                      }}
+                    >
+                      <option value="">provider…</option>
+                      {backends.map((b) => (
+                        <option key={b} value={b}>
+                          {b}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className={styles.select}
+                      value=""
+                      disabled={modelList === undefined || modelList.models.length === 0}
+                      onChange={(e) => {
+                        if (e.target.value.length > 0) setDrafts((d) => ({ ...d, [a.agent]: e.target.value }));
+                      }}
+                    >
+                      <option value="">
+                        {modelList === undefined
+                          ? "model…"
+                          : modelList.models.length === 0
+                            ? "no list — type below"
+                            : "model…"}
+                      </option>
+                      {(modelList?.models ?? []).map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   <input
                     className={styles.input}
                     type="text"

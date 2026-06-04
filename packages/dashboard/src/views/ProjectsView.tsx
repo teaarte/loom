@@ -92,7 +92,13 @@ export function ProjectsView({ onOpen }: ProjectsViewProps) {
                 <div className={styles.cardHead}>
                   <span className={styles.id}>{p.label ?? p.id}</span>
                   <span className={styles.badge}>
-                    <span className={cx(styles.dot, DOT_CLASS[badge.tone])} />
+                    <span
+                      className={cx(
+                        styles.dot,
+                        DOT_CLASS[badge.tone],
+                        p.status?.status === "in_progress" && styles.pulse,
+                      )}
+                    />
                     {badge.label}
                   </span>
                 </div>

@@ -7,10 +7,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { ModelMap } from "../components/ModelMap.js";
 import { pruneEmpty, SchemaField } from "../components/SchemaForm.js";
 import { api, ApiError } from "../lib/api.js";
 import { classify } from "../lib/schemaForm.js";
-import type { JsonSchema, LoomConfigShape, SecretsResponse } from "../lib/types.js";
+import type {
+  JsonSchema,
+  LoomConfigShape,
+  ProjectListing,
+  SecretsResponse,
+  WorkspaceResponse,
+} from "../lib/types.js";
 import styles from "./SettingsView.module.css";
 
 export function SettingsView() {
@@ -18,6 +25,13 @@ export function SettingsView() {
     <div>
       <h1>Settings</h1>
       <ConfigForm />
+      <h2>models</h2>
+      <p className={styles.note}>
+        Bind each bundle agent to a model (the same <code>bundles[…].agents</code> map{" "}
+        <code>loom models set</code> writes). Pick a provider + model from the live list, or type a
+        <code> provider:model | tier</code> ref.
+      </p>
+      <ModelMapSection />
       <h2>secrets</h2>
       <p className={styles.note}>
         Stored machine-local (chmod 600) and referenced from config as <code>secret:&lt;name&gt;</code>.
@@ -26,6 +40,45 @@ export function SettingsView() {
       <SecretsWidget />
     </div>
   );
+}
+
+// The model-map editor in global Settings. The roster is read off a project's
+// loaded bundle (`/projects/:id/agents`), but the write target is the GLOBAL
+// config, so editing it here is identical to editing it from any project's
+// detail view. It borrows the first cataloged/supervised project to source the
+// roster; with none, it points the operator at adding one.
+function ModelMapSection() {
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        let id: string | undefined;
+        try {
+          const ws = await api<WorkspaceResponse>("GET", "/workspace");
+          id = ws.projects[0]?.id;
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 501) {
+            const live = await api<ProjectListing[]>("GET", "/projects");
+            id = live[0]?.id;
+          } else throw err;
+        }
+        if (cancelled) return;
+        if (id === undefined) setNote("Add a project to edit its bundle's model map.");
+        else setProjectId(id);
+      } catch (err) {
+        if (!cancelled) setNote(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (projectId !== null) return <ModelMap projectId={projectId} />;
+  return <div className={styles.note}>{note ?? "loading roster…"}</div>;
 }
 
 function ConfigForm() {

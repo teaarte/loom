@@ -95,10 +95,11 @@ loom up --token "$(openssl rand -hex 16)"  # require a bearer token on the API
 
 From the dashboard you can:
 
-- **browse projects** and their live status — running, parked at a gate, or stalled — even when idle;
-- **submit a task** and choose its supervision policy;
-- **answer a gate** (accept / reject / auto-apply) and **tail the live log** over SSE;
-- **configure once** — edit global config, secrets (write-only, shown masked), and the per-agent model map through forms generated from the config schema;
+- **browse projects** and their live status — running (pulsing), parked at a gate, or stalled — even when idle, with total elapsed time;
+- **submit a task**, choose its supervision policy, and **flag it ⚡ fast** for a single-pass run (or pick a complexity) — plus an optional **run-in-Docker** checkbox when the server can sandbox;
+- **pause / resume / cancel** a task — pause stops spending but keeps progress (resume re-drives from where it left off); cancel frees the slot in one click;
+- **answer a gate** (accept / reject / auto-apply) and **tail a human-readable live log** over SSE (timestamps, level chips, `key value` detail), with tokens / turns / cache as the primary cost signal;
+- **configure once** — edit global config, secrets (write-only, shown masked), and the per-agent model map (provider + model dropdowns with a live model list, free-text fallback) through forms generated from the config schema;
 - **see providers** and which backends are available.
 
 **Auth & scope.** The server binds loopback (`127.0.0.1`) by default. Pass `--token` (or set

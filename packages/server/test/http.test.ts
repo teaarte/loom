@@ -5,10 +5,12 @@
 // without crossing stores. No mocked DB, no `claude -p`.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
+
+import { worktreePathFor } from "@loomfsm/driver";
 
 import { readTaskExecPrefs, startControlPlane, type ControlPlaneHandle } from "../src/index.js";
 import {
@@ -19,6 +21,7 @@ import {
   recordingExecutor,
   spawnRegistry,
   tempStateDir,
+  twoSpawnRegistry,
 } from "./fixtures.js";
 import type { Registry } from "@loomfsm/kernel";
 
@@ -320,5 +323,147 @@ describe("http — cancel a task (P5)", () => {
 
     const live = await req("GET", "/projects", { token: TOKEN });
     assert.ok(!(live.json as any[]).some((p) => p.id === id), "cancel unregistered the project");
+  });
+});
+
+describe("http — agent-chain trace (live)", () => {
+  it("GET /projects/:id/trace returns the ordered chain of recorded runs", async () => {
+    const id = await registerProject("spawn");
+    await req("POST", "/submit", { token: TOKEN, body: { project: id, task: "trace me" } });
+    await until(async () => {
+      const r = await req("GET", `/projects/${id}`, { token: TOKEN });
+      return r.json?.status?.status === "completed" ? r.json : null;
+    }, "task to complete before reading the trace");
+
+    const trace = await req("GET", `/projects/${id}/trace`, { token: TOKEN });
+    assert.equal(trace.status, 200);
+    assert.equal(trace.json.archived, false);
+    assert.ok(trace.json.summary, "carries the task summary");
+    assert.equal(trace.json.summary.status, "completed");
+    // The chain is DATA — the agent the fixture flow ran shows up by name, with
+    // a persist timestamp the UI derives a duration from. No name is hardcoded.
+    assert.equal(trace.json.agents.length, 1);
+    assert.equal(trace.json.agents[0].agent, "impl-1");
+    assert.ok(typeof trace.json.agents[0].recorded_at === "string");
+    assert.ok(Array.isArray(trace.json.findings));
+    assert.ok(Array.isArray(trace.json.gates));
+  });
+
+  it("is empty (not an error) for a project with no live store", async () => {
+    const dir = await freshProject("loom-server-trace-empty-");
+    dirs.push(dir);
+    registries.set(dir, spawnRegistry());
+    const add = await req("POST", "/workspace/projects", { token: TOKEN, body: { dir } });
+    const id = add.json.id as string;
+    const trace = await req("GET", `/projects/${id}/trace`, { token: TOKEN });
+    assert.equal(trace.status, 200);
+    assert.equal(trace.json.summary, null);
+    assert.deepEqual(trace.json.agents, []);
+  });
+});
+
+describe("http — genericity: the trace reader names no agent/bundle", () => {
+  // A fabricated multi-spawn roster with names NO bundle ships. The chain reader
+  // must surface them as DATA, in order, proving the server hardcodes nothing.
+  it("renders a chain over an invented roster", async () => {
+    const dir = await freshProject("loom-server-trace-generic-");
+    dirs.push(dir);
+    registries.set(dir, twoSpawnRegistry("zorp-scanner", "qux-weaver"));
+    const reg = await req("POST", "/projects", { token: TOKEN, body: { dir } });
+    const id = reg.json.id as string;
+    await req("POST", "/submit", { token: TOKEN, body: { project: id, task: "generic chain" } });
+    await until(async () => {
+      const r = await req("GET", `/projects/${id}`, { token: TOKEN });
+      return r.json?.status?.status === "completed" ? r.json : null;
+    }, "invented-roster task to complete");
+
+    const trace = await req("GET", `/projects/${id}/trace`, { token: TOKEN });
+    assert.equal(trace.status, 200);
+    assert.deepEqual(
+      trace.json.agents.map((a: any) => a.agent),
+      ["zorp-scanner", "qux-weaver"],
+    );
+  });
+});
+
+describe("http — archived task browser (history + archived trace)", () => {
+  it("lists a finished task and reads its archived trace with the same reader", async () => {
+    const dir = await freshProject("loom-server-history-");
+    dirs.push(dir);
+    registries.set(dir, spawnRegistry());
+    // Catalog it so it stays resolvable after cancel unregisters the live entry.
+    const add = await req("POST", "/workspace/projects", { token: TOKEN, body: { dir } });
+    const id = add.json.id as string;
+
+    await req("POST", "/submit", { token: TOKEN, body: { project: id, task: "archive me" } });
+    const completed = await until(async () => {
+      const r = await req("GET", `/projects/${id}`, { token: TOKEN });
+      return r.json?.status?.status === "completed" ? r.json : null;
+    }, "task to complete before archiving");
+    const taskId = completed.status.task_id as string;
+
+    // Cancel force-archives the (already finished) task into history.
+    const cancel = await req("POST", `/projects/${id}/cancel`, { token: TOKEN });
+    assert.equal(cancel.status, 200);
+    assert.equal(cancel.json.archived, true);
+
+    const hist = await req("GET", `/projects/${id}/history`, { token: TOKEN });
+    assert.equal(hist.status, 200);
+    assert.equal(hist.json.tasks.length, 1);
+    assert.equal(hist.json.tasks[0].task_id, taskId);
+    assert.equal(hist.json.tasks[0].status, "completed");
+    assert.equal(hist.json.tasks[0].verdict, "accepted");
+
+    // The SAME trace view, now over the archived `.db`.
+    const archived = await req("GET", `/projects/${id}/trace?task=${encodeURIComponent(taskId)}`, { token: TOKEN });
+    assert.equal(archived.status, 200);
+    assert.equal(archived.json.archived, true);
+    assert.equal(archived.json.summary.task_id, taskId);
+    assert.equal(archived.json.agents[0].agent, "impl-1");
+
+    // A bogus archived id 404s; a path-y id is refused before any file join.
+    const missing = await req("GET", `/projects/${id}/trace?task=does-not-exist`, { token: TOKEN });
+    assert.equal(missing.status, 404);
+    const evil = await req("GET", `/projects/${id}/trace?task=${encodeURIComponent("../../../etc/passwd")}`, { token: TOKEN });
+    assert.equal(evil.status, 400);
+    assert.equal(evil.json.error.code, "BAD_TASK_ID");
+  });
+});
+
+describe("http — read a prose artifact (whitelisted + traversal-guarded)", () => {
+  it("lists and reads a .claude/*.md doc, and refuses an escape", async () => {
+    const dir = await freshProject("loom-server-artifact-");
+    dirs.push(dir);
+    registries.set(dir, spawnRegistry());
+    const add = await req("POST", "/workspace/projects", { token: TOKEN, body: { dir } });
+    const id = add.json.id as string;
+
+    // Stand in for what a work agent writes into the task's isolated copy.
+    const sandboxClaude = join(worktreePathFor(dir), ".claude");
+    mkdirSync(sandboxClaude, { recursive: true });
+    writeFileSync(join(sandboxClaude, "plan.md"), "# the plan\n1. do it\n", "utf8");
+
+    const list = await req("GET", `/projects/${id}/artifacts`, { token: TOKEN });
+    assert.equal(list.status, 200);
+    assert.deepEqual(list.json.artifacts.map((a: any) => a.path), [".claude/plan.md"]);
+
+    const read = await req("GET", `/projects/${id}/artifact?path=${encodeURIComponent(".claude/plan.md")}`, { token: TOKEN });
+    assert.equal(read.status, 200);
+    assert.match(read.json.content, /the plan/);
+    assert.equal(read.json.truncated, false);
+
+    // A relative-escape path is refused by the whitelist, before any read.
+    const esc1 = await req("GET", `/projects/${id}/artifact?path=${encodeURIComponent("../../../etc/passwd")}`, { token: TOKEN });
+    assert.equal(esc1.status, 400);
+    assert.equal(esc1.json.error.code, "BAD_ARTIFACT_PATH");
+    const esc2 = await req("GET", `/projects/${id}/artifact?path=${encodeURIComponent(".claude/../../etc/passwd")}`, { token: TOKEN });
+    assert.equal(esc2.status, 400);
+
+    // A symlinked leaf that PASSES the whitelist but escapes the sandbox is
+    // refused by the canonical path guard (resolveSafePath), not served.
+    symlinkSync("/etc/hosts", join(sandboxClaude, "escape.md"));
+    const esc3 = await req("GET", `/projects/${id}/artifact?path=${encodeURIComponent(".claude/escape.md")}`, { token: TOKEN });
+    assert.equal(esc3.status, 400);
+    assert.equal(esc3.json.error.code, "BAD_ARTIFACT_PATH");
   });
 });

@@ -8,7 +8,9 @@
 import { useEffect, useState } from "react";
 
 import { api, ApiError } from "../lib/api.js";
+import { History } from "../components/History.js";
 import { ModelMap } from "../components/ModelMap.js";
+import { Trace } from "../components/Trace.js";
 import { useApi } from "../hooks/useApi.js";
 import { useSSE } from "../hooks/useSSE.js";
 import { cx } from "../lib/cx.js";
@@ -118,6 +120,12 @@ export function ProjectDetail({
       <h2>log {connected ? <span className={styles.live}>● live</span> : <span className={styles.dead}>stream closed</span>}</h2>
       <CostNote log={snapshot?.log ?? null} />
       <LogTail lines={snapshot?.log ?? null} />
+
+      <h2>chain</h2>
+      <Trace projectId={projectId} />
+
+      <h2>history</h2>
+      <History projectId={projectId} />
 
       <h2>models</h2>
       <ModelMap projectId={projectId} />

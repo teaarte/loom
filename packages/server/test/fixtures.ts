@@ -131,6 +131,24 @@ export function spawnRegistry(): Registry {
   return assembleFixtureRegistry(bundleOf(stages, agents, flow), agents, stages, flow);
 }
 
+// spawn-1 -> spawn-2 -> finalize : two sequential spawns over a FABRICATED pair
+// of agent names, then terminal complete. The agent-chain trace's genericity
+// vehicle — the reader must surface whatever names a roster carries, in order,
+// with zero code-bundle hardcode.
+export function twoSpawnRegistry(agentA: string, agentB: string): Registry {
+  const stages: Record<string, Stage> = {
+    "spawn-1": { kind: "spawn", name: "spawn-1", phase: "work", agent: agentA },
+    "spawn-2": { kind: "spawn", name: "spawn-2", phase: "work", agent: agentB },
+    "finalize-1": { kind: "finalize", name: "finalize-1" },
+  };
+  const agents: Agent[] = [
+    { name: agentA, template_path: `templates/${agentA}.md`, output_kind: "nonreview" },
+    { name: agentB, template_path: `templates/${agentB}.md`, output_kind: "nonreview" },
+  ];
+  const flow = ["spawn-1", "spawn-2", "finalize-1"];
+  return assembleFixtureRegistry(bundleOf(stages, agents, flow), agents, stages, flow);
+}
+
 // gate-1 (human) -> finalize : parks at an ask-user.
 export function gateRegistry(): Registry {
   const stages: Record<string, Stage> = {

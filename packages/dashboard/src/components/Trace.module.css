@@ -1,0 +1,200 @@
+.note {
+  opacity: 0.65;
+  font-size: 0.88em;
+  padding: 0.3rem 0;
+}
+.total {
+  font-size: 0.85em;
+  opacity: 0.7;
+  margin: 0.3rem 0 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The chain — a vertical list of run cards with a connector arrow between. */
+.chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.step {
+  position: relative;
+  margin: 0.2rem 0;
+}
+.arrow {
+  display: block;
+  opacity: 0.4;
+  font-size: 0.85em;
+  line-height: 1;
+  padding-left: 0.6rem;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.cardHead {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0.45rem 0.7rem;
+  border-radius: 8px;
+  cursor: default;
+}
+.clickable {
+  cursor: pointer;
+}
+.agent {
+  font-weight: 600;
+}
+.kind {
+  font-size: 0.72em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.02rem 0.32rem;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  opacity: 0.85;
+}
+.model {
+  font-size: 0.82em;
+  opacity: 0.75;
+}
+.dur,
+.tokens {
+  font-size: 0.82em;
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+}
+.caret {
+  margin-left: auto;
+  opacity: 0.6;
+}
+
+.drill {
+  padding: 0.2rem 0.7rem 0.6rem;
+  border-top: 1px dashed var(--line);
+}
+.verdict {
+  font-size: 0.88em;
+  margin: 0.35rem 0;
+}
+.counts {
+  margin-left: 0.5rem;
+}
+.counts > span {
+  margin-left: 0.4rem;
+  font-size: 0.92em;
+}
+
+.finding {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin: 0.3rem 0;
+  font-size: 0.86em;
+}
+.sev {
+  flex: none;
+  font-size: 0.78em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.02rem 0.3rem;
+  border-radius: 4px;
+}
+.sevBlocking {
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 18%, transparent);
+}
+.sevWarn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+}
+.sevInfo {
+  opacity: 0.75;
+  background: var(--accent-soft);
+}
+.cat {
+  font-weight: 600;
+  opacity: 0.85;
+}
+.loc {
+  opacity: 0.6;
+  word-break: break-all;
+}
+.findingSummary {
+  flex-basis: 100%;
+  opacity: 0.85;
+}
+
+/* Gates + documents share a small section header. */
+.gates,
+.docs {
+  margin-top: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem 0.7rem 0.5rem;
+}
+.gatesHead {
+  font-weight: 600;
+  font-size: 0.85em;
+  opacity: 0.8;
+  margin-bottom: 0.3rem;
+}
+.gateRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.86em;
+  margin: 0.2rem 0;
+}
+.gateName {
+  font-weight: 600;
+}
+.gateStatus {
+  opacity: 0.85;
+}
+.gateBy {
+  opacity: 0.6;
+  font-size: 0.92em;
+}
+.gateFb {
+  flex-basis: 100%;
+  opacity: 0.75;
+  white-space: pre-wrap;
+}
+
+.docItem {
+  margin: 0.15rem 0;
+}
+.docBtn {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0.1rem 0;
+  cursor: pointer;
+  word-break: break-all;
+  text-align: left;
+}
+.docBody {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem;
+  margin: 0.25rem 0 0.4rem;
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85em;
+}

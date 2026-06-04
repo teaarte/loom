@@ -33,6 +33,18 @@ export type {
   RecoverAndAdvanceResult,
 } from "./compositions.js";
 
+// The per-task agent-chain reader — the read peer of `readState`, used by a
+// transport to project a task's recorded chain (live or archived) domain-blind.
+export { readTrace, readTraceFile } from "./trace.js";
+export type {
+  TraceView,
+  TraceSummary,
+  TraceAgent,
+  TraceFinding,
+  TraceVerdict,
+  TraceGate,
+} from "./trace.js";
+
 export { drive } from "./drive.js";
 export type {
   DriveError,

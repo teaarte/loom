@@ -121,6 +121,114 @@ export interface BackendModelsResponse {
   reason?: string;
 }
 
+// ----- agent-chain trace (`GET /projects/:id/trace`) ---------------------
+// The recorded chain of a task's agent runs + the structured output its review
+// stages produced. Every field is generic FSM DATA — agent / gate / output-kind
+// names are values off the store; the view hardcodes none.
+
+export interface TraceAgent {
+  agent_run_id: string;
+  agent: string;
+  phase: string;
+  model: string | null;
+  output_kind: string;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  tokens_cached: number | null;
+  // ISO-8601 of when the run was persisted; per-agent duration is DERIVED from
+  // the deltas between these (the first anchored to the task's `started_at`).
+  recorded_at: string;
+}
+
+export interface TraceFinding {
+  id: string;
+  agent: string;
+  phase: string;
+  iteration: number;
+  file: string | null;
+  line_start: number | null;
+  line_end: number | null;
+  severity: string;
+  category: string;
+  summary: string;
+  status: string;
+  recorded_at: string;
+}
+
+export interface TraceVerdict {
+  phase: string;
+  agent: string;
+  iteration: number;
+  verdict: string;
+  summary_line: string | null;
+  blocking_issues: number;
+  warn_issues: number;
+  info_issues: number;
+  recorded_at: string;
+}
+
+export interface TraceGate {
+  name: string;
+  status: string;
+  decided_by: string;
+  feedback: string | null;
+  decided_at: string | null;
+}
+
+export interface TraceSummary {
+  task_id: string | null;
+  status: string | null;
+  verdict: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  task: string | null;
+}
+
+export interface TraceResponse {
+  archived: boolean;
+  summary: TraceSummary | null;
+  agents: TraceAgent[];
+  findings: TraceFinding[];
+  verdicts: TraceVerdict[];
+  gates: TraceGate[];
+}
+
+// ----- archived-task browser (`GET /projects/:id/history`) ---------------
+
+export interface HistoryTask {
+  task_id: string | null;
+  db_file: string;
+  task_short: string | null;
+  task: string | null;
+  status: string | null;
+  verdict: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  archived_at: string | null;
+}
+
+export interface HistoryResponse {
+  tasks: HistoryTask[];
+}
+
+// ----- prose artifacts (`GET /projects/:id/artifacts` + `/artifact`) ------
+
+export interface ArtifactInfo {
+  path: string;
+  size: number;
+  modified_at: string | null;
+}
+
+export interface ArtifactsResponse {
+  artifacts: ArtifactInfo[];
+}
+
+export interface ArtifactContent {
+  path: string;
+  content: string;
+  truncated: boolean;
+}
+
 // The masked secret store (`GET /secrets`) — name → masked value (`****1234`).
 // A raw value never crosses this boundary.
 export interface SecretsResponse {

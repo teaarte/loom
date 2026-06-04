@@ -16,6 +16,10 @@
 //   GET  /projects/:id/config    → the project's override config (masked)
 //   PUT  /projects/:id/config    → write the project override config
 //   GET  /projects/:id/agents    → the bundle roster + current model bindings
+//   GET  /projects/:id/trace     → the recorded agent chain (live, or ?task=<archived id>)
+//   GET  /projects/:id/history   → the project's finished-task browser
+//   GET  /projects/:id/artifacts → the prose .md documents the task produced
+//   GET  /projects/:id/artifact  → read one whitelisted, traversal-guarded document (?path=)
 //
 // Control-layer routes (the network face of the config stores the CLI writes,
 // live only when a `loomHome` is injected; secrets masked on GET, write-only on PUT):
@@ -68,6 +72,7 @@ import { readProjectStatus } from "./read-model.js";
 import type { SupervisorRegistry } from "./registry.js";
 import { submitTask } from "./submit.js";
 import { writeTaskExecPrefs } from "./task-exec.js";
+import { getArtifact, getHistory, getTrace, listArtifacts } from "./trace-routes.js";
 
 // The control-layer (config / secrets / workspace) slice of the server deps —
 // the SAME `@loomfsm/config` stores the CLI writes, reached over HTTP. Optional:
@@ -266,6 +271,26 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
       }
       if (sub === "agents" && method === "GET") {
         await getProjectAgents(res, id, deps);
+        return;
+      }
+      // Read-only observability routes (work for a cataloged-but-unsupervised
+      // project too — `knownProjectDir`, no watcher started):
+      //   /trace[?task=<archived id>]  the agent chain (live or an archived task)
+      //   /history                     the project's finished-task browser
+      //   /artifacts                   the prose .md documents the task produced
+      //   /artifact?path=.claude/x.md  read one whitelisted, traversal-guarded doc
+      if ((sub === "trace" || sub === "history" || sub === "artifacts" || sub === "artifact") && method === "GET") {
+        const dir = knownProjectDir(id, deps);
+        if (dir === null) throw new ServerError("PROJECT_NOT_FOUND", 404, `no project ${id}`);
+        if (sub === "trace") {
+          await getTrace(res, dir, url.searchParams.get("task"));
+        } else if (sub === "history") {
+          await getHistory(res, dir);
+        } else if (sub === "artifacts") {
+          listArtifacts(res, dir);
+        } else {
+          await getArtifact(res, dir, url.searchParams.get("path") ?? "");
+        }
         return;
       }
     }

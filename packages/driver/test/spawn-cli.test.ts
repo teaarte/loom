@@ -54,21 +54,55 @@ describe("spawnCapture — idle (output-silence) timeout", () => {
     assert.match(err.message, /no output/);
   });
 
-  it("a steady output stream resets the idle timer — the run completes", async () => {
-    // Emits every 40ms (< the 250ms idle cap), four times, then exits 0. The
-    // idle timer is re-armed on each chunk, so it never fires.
+  it("re-arms the idle timer on every output chunk (so a steady stream never idles out)", async () => {
+    // Deterministic: an injected timer pair makes the idle cap INERT (it never
+    // fires), so the run completes regardless of CPU scheduling — no wall-clock
+    // race against a real child under concurrent load. We assert on the WIRING
+    // instead: each output chunk must re-arm (clear + set) the idle cap, which
+    // — together with the "kills a silent child" test above (proving it FIRES on
+    // real silence) — is the full reset contract: output keeps the run alive.
+    const IDLE_MS = 250;
+    let idleArms = 0;
+    let idleClears = 0;
+    const handles = new Set<ReturnType<typeof setTimeout>>();
+    const setTimer = (_fn: () => void, ms: number): ReturnType<typeof setTimeout> => {
+      if (ms === IDLE_MS) idleArms += 1;
+      // A real but inert handle: the cap's callback is dropped, so the idle /
+      // session timeouts never fire during the test; unref'd so it cannot keep
+      // the event loop alive.
+      const h = setTimeout(() => {}, 3_600_000);
+      h.unref();
+      handles.add(h);
+      return h;
+    };
+    const clearTimer = (h: ReturnType<typeof setTimeout>): void => {
+      if (handles.has(h)) idleClears += 1;
+      clearTimeout(h);
+      handles.delete(h);
+    };
+
+    // Four chunks then exit — emission TIMING is irrelevant here (the cap never
+    // fires), so this is stable under any load.
     const args = [
       "-e",
-      "let n=0;const t=setInterval(()=>{process.stdout.write('tick');if(++n>=4){clearInterval(t);process.exit(0);}},40)",
+      "let n=0;const t=setInterval(()=>{process.stdout.write('tick');if(++n>=4){clearInterval(t);process.exit(0);}},5)",
     ];
     const out = await spawnCapture({
       bin: NODE,
       args,
       label: "claude -p",
       notFoundMessage: "n/a",
-      idle_timeout_ms: 250,
+      idle_timeout_ms: IDLE_MS,
+      setTimer,
+      clearTimer,
     });
+    for (const h of handles) clearTimeout(h);
+
     assert.match(out.stdout, /tick/);
+    // 1 initial arm + ≥1 re-arm driven by output (chunks may coalesce into one
+    // 'data' event, so the floor is 2): the idle cap IS reset on output.
+    assert.ok(idleArms >= 2, `idle timer should re-arm on output (armed ${idleArms}×)`);
+    assert.ok(idleClears >= 1, `idle timer should be cleared before each re-arm (cleared ${idleClears}×)`);
   });
 });
 

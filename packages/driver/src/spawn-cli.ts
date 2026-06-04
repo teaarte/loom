@@ -83,6 +83,13 @@ export interface SpawnCaptureOptions {
   // (envelope on stdout, stderr, exit code) → reject EXECUTOR_RATE_LIMITED
   // instead of EXECUTOR_FAILED. Injectable; omitted → no rate-limit class.
   detectRateLimit?: RateLimitDetector;
+  // Test seam: the timer source for the session / idle / sigkill caps. Defaults
+  // to the global timers. A test injects a controllable pair so the idle-reset
+  // WIRING (each output chunk re-arms the idle cap) is asserted deterministically
+  // — without racing a real child's emission cadence against a wall-clock window
+  // under concurrent CPU load.
+  setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  clearTimer?: (handle: ReturnType<typeof setTimeout>) => void;
 }
 
 // A clean (exit 0) capture: stdout for the caller's parser, plus the stderr and
@@ -115,6 +122,10 @@ export function spawnCapture(opts: SpawnCaptureOptions): Promise<SpawnCaptureRes
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
 
+    // Timer source — global by default; a test injects a controllable pair.
+    const setT = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+    const clearT = opts.clearTimer ?? ((h) => clearTimeout(h));
+
     let stdout = "";
     let stderr = "";
     // Set when a timeout fires: the child is killed and we wait for `close` to
@@ -126,16 +137,16 @@ export function spawnCapture(opts: SpawnCaptureOptions): Promise<SpawnCaptureRes
     let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
 
     const clearTimers = (): void => {
-      if (sessionTimer !== undefined) clearTimeout(sessionTimer);
-      if (idleTimer !== undefined) clearTimeout(idleTimer);
-      if (sigkillTimer !== undefined) clearTimeout(sigkillTimer);
+      if (sessionTimer !== undefined) clearT(sessionTimer);
+      if (idleTimer !== undefined) clearT(idleTimer);
+      if (sigkillTimer !== undefined) clearT(sigkillTimer);
     };
 
     const fireTimeout = (code: string, message: string): void => {
       if (timedOut !== null) return; // first timeout wins
       timedOut = { code, message };
-      if (idleTimer !== undefined) clearTimeout(idleTimer);
-      if (sessionTimer !== undefined) clearTimeout(sessionTimer);
+      if (idleTimer !== undefined) clearT(idleTimer);
+      if (sessionTimer !== undefined) clearT(sessionTimer);
       // Graceful first; the `docker run` client forwards SIGTERM to PID1 and
       // `--rm` cleans up, and a worktree `claude` exits on it. Force-kill only
       // if it ignores the grace window.
@@ -144,7 +155,7 @@ export function spawnCapture(opts: SpawnCaptureOptions): Promise<SpawnCaptureRes
       } catch {
         // already gone — `close` will settle the rejection
       }
-      sigkillTimer = setTimeout(() => {
+      sigkillTimer = setT(() => {
         try {
           child.kill("SIGKILL");
         } catch {
@@ -155,8 +166,8 @@ export function spawnCapture(opts: SpawnCaptureOptions): Promise<SpawnCaptureRes
 
     const armIdle = (): void => {
       if (opts.idle_timeout_ms === undefined) return;
-      if (idleTimer !== undefined) clearTimeout(idleTimer);
-      idleTimer = setTimeout(
+      if (idleTimer !== undefined) clearT(idleTimer);
+      idleTimer = setT(
         () =>
           fireTimeout(
             "EXECUTOR_IDLE_TIMEOUT",
@@ -176,7 +187,7 @@ export function spawnCapture(opts: SpawnCaptureOptions): Promise<SpawnCaptureRes
     });
 
     if (opts.session_timeout_ms !== undefined) {
-      sessionTimer = setTimeout(
+      sessionTimer = setT(
         () =>
           fireTimeout(
             "EXECUTOR_TIMEOUT",

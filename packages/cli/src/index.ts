@@ -1,8 +1,9 @@
-// Public barrel for `@loomfsm/cli`. The meta-package's bin shim imports `run`
-// from here; the rest are surfaced so a host embedding the install commands
-// can call them directly.
+// Public barrel for `@loomfsm/cli`. The meta-package's bin shim imports
+// `launch` from here (the shared process launcher); the rest are surfaced so a
+// host embedding the install commands can call them directly.
 
 export { run } from "./cli.js";
+export { launch } from "./launch.js";
 export { setup } from "./commands/setup.js";
 export { allowlistAdd, allowlistList, allowlistFilePath, readAllowlistEntries } from "./commands/allowlist.js";
 export { init } from "./commands/init.js";

@@ -41,6 +41,7 @@ import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve as resolvePath } from "node:path";
 
+import { listProjects } from "@loomfsm/config";
 import type { Registry } from "@loomfsm/kernel";
 
 import { answerGate, parseAnswer } from "./answer.js";
@@ -271,16 +272,27 @@ async function routeSubmit(
   if (project.length === 0) throw new ServerError("PROJECT_REQUIRED", 400, "project is required");
   const task = typeof body["task"] === "string" ? body["task"] : "";
 
-  // Resolve a registered project (by id or dir); auto-register a real dir on
-  // first submit so an intake adapter can target a project the operator has
-  // not pre-registered.
+  // Resolve the project to a supervised entry, adopting it if needed. A submit
+  // is the "start work" action, so a project that is known but not yet
+  // supervised gets a watcher here. Resolution order: the live supervised set
+  // (by id or dir) → the durable catalog by id (the dashboard adds projects
+  // there) → a real directory path. Each fallback registers the dir, which
+  // starts its watcher.
   let entry = deps.registry.resolve(project);
   if (entry === null) {
-    const dir = resolvePath(project);
-    if (!existsSync(dir)) {
-      throw new ServerError("PROJECT_NOT_FOUND", 404, `project '${project}' is not registered and is not a directory`);
+    const catalogDir =
+      deps.loomHome !== undefined && deps.loomHome.length > 0
+        ? listProjects(deps.loomHome).find((p) => p.id === project)?.dir
+        : undefined;
+    if (catalogDir !== undefined) {
+      entry = deps.registry.register(catalogDir);
+    } else {
+      const dir = resolvePath(project);
+      if (!existsSync(dir)) {
+        throw new ServerError("PROJECT_NOT_FOUND", 404, `project '${project}' is not registered and is not a directory`);
+      }
+      entry = deps.registry.register(dir);
     }
-    entry = deps.registry.register(dir);
   }
 
   const fsm = await resolveFsm(deps, entry.dir);
@@ -309,10 +321,12 @@ function routeRegister(res: ServerResponse, body: Record<string, unknown>, deps:
 }
 
 async function routeGetProject(res: ServerResponse, id: string, deps: ControlServerDeps, nowMs: number): Promise<void> {
-  const entry = deps.registry.get(id);
-  if (entry === null) throw new ServerError("PROJECT_NOT_FOUND", 404, `no registered project ${id}`);
-  const status = await readProjectStatus(entry.dir, nowMs);
-  sendJson(res, 200, { id: entry.id, dir: entry.dir, status });
+  // Read-only status — works for a cataloged project that isn't supervised yet,
+  // so the dashboard's detail view shows status before the first submit.
+  const dir = knownProjectDir(id, deps);
+  if (dir === null) throw new ServerError("PROJECT_NOT_FOUND", 404, `no project ${id}`);
+  const status = await readProjectStatus(dir, nowMs);
+  sendJson(res, 200, { id, dir, status });
 }
 
 async function routeUnregister(res: ServerResponse, id: string, deps: ControlServerDeps): Promise<void> {
@@ -336,9 +350,11 @@ async function routeAnswer(
 }
 
 function streamLog(req: IncomingMessage, res: ServerResponse, id: string, deps: ControlServerDeps): void {
-  const entry = deps.registry.get(id);
-  if (entry === null) {
-    sendJson(res, 404, { error: { code: "PROJECT_NOT_FOUND", message: `no registered project ${id}` } });
+  // Read-only tail — works for a cataloged project that isn't supervised yet,
+  // so the detail view's log opens before the first submit.
+  const dir = knownProjectDir(id, deps);
+  if (dir === null) {
+    sendJson(res, 404, { error: { code: "PROJECT_NOT_FOUND", message: `no project ${id}` } });
     return;
   }
   res.writeHead(200, {
@@ -353,8 +369,8 @@ function streamLog(req: IncomingMessage, res: ServerResponse, id: string, deps: 
     if (inFlight) return;
     inFlight = true;
     try {
-      const status = await readProjectStatus(entry.dir, (deps.now ?? Date.now)());
-      const log = readLogTail(entry.dir, tailLines);
+      const status = await readProjectStatus(dir, (deps.now ?? Date.now)());
+      const log = readLogTail(dir, tailLines);
       res.write(`data: ${JSON.stringify({ status, log })}\n\n`);
     } catch {
       /* a transient read error skips one tick */
@@ -368,6 +384,21 @@ function streamLog(req: IncomingMessage, res: ServerResponse, id: string, deps: 
 }
 
 // ----- helpers -----------------------------------------------------------
+
+// The dir of a project known by id — the live supervised set first, then the
+// durable catalog (`workspace.json`, where the dashboard's add-project writes).
+// Read-only: it does NOT start a watcher, so a GET/SSE can show a cataloged but
+// unsupervised project. Returns null when no face knows the id. The catalog is
+// only consulted when the config API is enabled (a `loomHome` is configured).
+function knownProjectDir(id: string, deps: ControlServerDeps): string | null {
+  const live = deps.registry.get(id);
+  if (live !== null) return live.dir;
+  if (deps.loomHome !== undefined && deps.loomHome.length > 0) {
+    const cataloged = listProjects(deps.loomHome).find((p) => p.id === id);
+    if (cataloged !== undefined) return cataloged.dir;
+  }
+  return null;
+}
 
 async function resolveFsm(deps: ControlServerDeps, dir: string): Promise<Registry> {
   try {

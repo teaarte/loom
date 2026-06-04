@@ -1,0 +1,77 @@
+.note {
+  opacity: 0.7;
+  font-size: 0.9em;
+  margin: 0.2rem 0 0.6rem;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin: 0.8rem 0 1.4rem;
+}
+.btn {
+  font: inherit;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: inherit;
+  cursor: pointer;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.linkBtn {
+  font: inherit;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+}
+.msg {
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+.error {
+  color: var(--bad);
+  border: 1px solid var(--bad);
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+  margin: 0.4rem 0;
+}
+.loading {
+  opacity: 0.6;
+  padding: 0.3rem 0;
+}
+
+.secrets {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.secretRow {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.secretName {
+  font-weight: 600;
+  min-width: 10rem;
+}
+.masked {
+  font-family: ui-monospace, monospace;
+  opacity: 0.7;
+  min-width: 6rem;
+}
+.input {
+  font: inherit;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+}

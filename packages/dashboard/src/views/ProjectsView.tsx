@@ -32,7 +32,13 @@ const DOT_CLASS: Record<StatusTone, string | undefined> = {
   bad: styles.bad,
 };
 
-export function ProjectsView() {
+export interface ProjectsViewProps {
+  // Open a project's detail view. Carries the fields the detail needs so it can
+  // render its header before the first SSE tick.
+  onOpen: (project: { id: string; dir: string; label?: string }) => void;
+}
+
+export function ProjectsView({ onOpen }: ProjectsViewProps) {
   const [projects, setProjects] = useState<WorkspaceProject[] | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
@@ -77,7 +83,12 @@ export function ProjectsView() {
           {projects.map((p) => {
             const badge = statusBadge(p.status);
             return (
-              <div className={styles.card} key={p.id}>
+              <button
+                type="button"
+                className={styles.card}
+                key={p.id}
+                onClick={() => onOpen({ id: p.id, dir: p.dir, ...(p.label !== undefined ? { label: p.label } : {}) })}
+              >
                 <div className={styles.cardHead}>
                   <span className={styles.id}>{p.label ?? p.id}</span>
                   <span className={styles.badge}>
@@ -93,7 +104,7 @@ export function ProjectsView() {
                   </div>
                 )}
                 {p.status?.task_label && <div className={styles.meta}>{p.status.task_label}</div>}
-              </div>
+              </button>
             );
           })}
         </div>

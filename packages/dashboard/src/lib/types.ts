@@ -42,3 +42,92 @@ export interface WorkspaceProject {
 export interface WorkspaceResponse {
   projects: WorkspaceProject[];
 }
+
+// One line of a project's daemon audit log, streamed in each SSE tick alongside
+// the status (`GET /projects/:id/log` → `data: { status, log }`).
+export interface LogLine {
+  ts?: string;
+  level?: string;
+  event?: string;
+  detail?: Record<string, unknown>;
+}
+
+// One SSE snapshot from the live log stream.
+export interface LogSnapshot {
+  status: ProjectStatus;
+  log: LogLine[];
+}
+
+// The result of `POST /submit` (the create-task path) — informational; the
+// project's watcher drives from the first directive.
+export interface SubmitResult {
+  id: string;
+  dir: string;
+  task_id: string | null;
+  driver_state_id: string;
+  status: string;
+  replayed: boolean;
+}
+
+// One agent's current model binding (`GET /projects/:id/agents`). `source`
+// distinguishes a config override from the bundle's own default and an unset
+// agent; `family` is the provider family parsed off the ref, when present.
+export interface AgentBinding {
+  agent: string;
+  ref: string | null;
+  source: "override" | "bundle-default" | "unset";
+  model: string | null;
+  family?: string;
+}
+
+// The bundle's roster + each agent's binding. Names are DATA off the loaded
+// bundle — the view hardcodes none.
+export interface AgentsResponse {
+  bundle: string;
+  agents: AgentBinding[];
+}
+
+// One backend's provider families + a best-effort availability signal
+// (`GET /providers`). `available` is null when the server cannot know without
+// spawning (a local or external-CLI backend).
+export interface ProviderInfo {
+  backend: string;
+  families: string[];
+  available: boolean | null;
+  reason?: string;
+}
+
+export interface ProvidersResponse {
+  backend_mode: string;
+  providers: ProviderInfo[];
+}
+
+// The masked secret store (`GET /secrets`) — name → masked value (`****1234`).
+// A raw value never crosses this boundary.
+export interface SecretsResponse {
+  secrets: Record<string, string>;
+}
+
+// The config document the UI reads (masked) and writes back whole. Open-shaped
+// — the schema-driven form edits arbitrary fields; only `bundles` is named here
+// because the model-map editor splices into it (the same path `loom models set`
+// writes). A masked secret in any field round-trips and the server reconciles it.
+export interface LoomConfigShape {
+  bundles?: Record<string, { agents?: Record<string, string> } & Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+// A JSON Schema node, narrowed to the shapes the config schema actually emits
+// (object with fixed `properties`, open-keyed record via `additionalProperties`,
+// string / integer / array). Open at the edges so an unknown future shape is
+// tolerated rather than mis-typed.
+export interface JsonSchema {
+  type?: string | string[];
+  properties?: Record<string, JsonSchema>;
+  additionalProperties?: boolean | JsonSchema;
+  items?: JsonSchema;
+  minLength?: number;
+  minimum?: number;
+  maximum?: number;
+  [key: string]: unknown;
+}

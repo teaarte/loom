@@ -1,0 +1,65 @@
+.bundle {
+  opacity: 0.8;
+  margin-bottom: 0.6rem;
+  font-size: 0.9em;
+}
+.table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.table th,
+.table td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.table th {
+  font-size: 0.8em;
+  opacity: 0.7;
+  font-weight: 600;
+}
+.agent {
+  font-weight: 600;
+}
+.source {
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+.input {
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+.warn {
+  color: var(--warn);
+  font-size: 0.8em;
+  margin-top: 0.2rem;
+}
+.saveBtn {
+  font: inherit;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+}
+.saveBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.error {
+  color: var(--bad);
+  border: 1px solid var(--bad);
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+}
+.loading {
+  opacity: 0.6;
+}

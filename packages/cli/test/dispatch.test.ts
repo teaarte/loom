@@ -28,8 +28,8 @@ describe("loom dispatcher", () => {
     assert.deepEqual(out, [readCliVersion()]);
   });
 
-  it("--help and a bare invocation print usage", () => {
-    for (const argv of [["--help"], []]) {
+  it("--help / -h / help print usage", () => {
+    for (const argv of [["--help"], ["-h"], ["help"]]) {
       const { env, out } = makeEnv();
       assert.equal(run(argv, env), 0);
       assert.ok(out.join("\n").includes("loom setup"), "usage lists the commands");

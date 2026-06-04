@@ -1,0 +1,96 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0.4rem 0;
+}
+.label {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+.input {
+  font: inherit;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+.hint {
+  font-size: 0.75em;
+  opacity: 0.6;
+}
+.checkField {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.4rem 0;
+}
+
+.group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem 0.7rem;
+  margin: 0.6rem 0;
+}
+.legend {
+  font-weight: 600;
+  padding: 0 0.3rem;
+}
+
+.empty {
+  opacity: 0.6;
+  font-size: 0.85em;
+  padding: 0.2rem 0;
+}
+
+.recordRow {
+  border-left: 2px solid var(--line);
+  padding-left: 0.7rem;
+  margin: 0.5rem 0;
+}
+.recordKey {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
+.keyName {
+  font-weight: 600;
+  font-size: 0.9em;
+}
+.recordValue {
+  margin-top: 0.2rem;
+}
+
+.addRow {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  align-items: center;
+}
+.addRow .input {
+  width: auto;
+  flex: 1;
+}
+
+.addBtn,
+.removeBtn {
+  font: inherit;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+}
+.removeBtn {
+  font-size: 0.8em;
+  opacity: 0.7;
+}
+.removeBtn:hover {
+  opacity: 1;
+  color: var(--bad);
+}

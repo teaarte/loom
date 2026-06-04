@@ -20,7 +20,7 @@ import { createRequire } from "node:module";
 
 import { run } from "./cli.js";
 
-const SQLITE_COMMANDS = new Set(["reset", "status", "run", "daemon", "serve", "models", "projects"]);
+const SQLITE_COMMANDS = new Set(["up", "reset", "status", "run", "daemon", "serve", "models", "projects"]);
 const REEXEC_GUARD = "LOOM_SQLITE_REEXEC";
 
 function nodeSqliteAvailable(): boolean {
@@ -51,9 +51,11 @@ function reexecWithSqliteFlag(): number {
 // to `process.exit`).
 export async function launch(argv: string[] = process.argv.slice(2)): Promise<void> {
   try {
-    const command = argv[0];
+    // A bare `loom` dispatches to `up`, which opens the project store — so it
+    // needs the SQLite flag too. Treat an empty argv as `up` for the re-exec
+    // decision (the child re-runs the same bare argv and dispatches to `up`).
+    const command = argv[0] ?? "up";
     if (
-      command !== undefined &&
       SQLITE_COMMANDS.has(command) &&
       process.env[REEXEC_GUARD] !== "1" &&
       !nodeSqliteAvailable()

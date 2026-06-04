@@ -26,6 +26,7 @@ import { resolveLoomHome } from "@loomfsm/config";
 import type { ExecutorBuildContext, MergeBackResult, Notifier } from "@loomfsm/daemon";
 import type { DriveOutcome, Executor } from "@loomfsm/driver";
 import type { Registry } from "@loomfsm/kernel";
+import type { ControlPlaneHandle, ControlPlaneOptions } from "@loomfsm/server";
 
 import { effectiveEnv } from "../lib/config.js";
 import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
@@ -52,7 +53,13 @@ export interface ServeOverrides {
   buildExecutor?: (projectDir: string, ctx: ExecutorBuildContext) => Executor;
   claudeAvailable?: (bin: string) => boolean;
   dockerAvailable?: () => boolean;
-  startImpl?: (opts: unknown) => Promise<{ host: string; port: number; closed: Promise<void>; stop: () => Promise<void> }>;
+  // Stand in for `startControlPlane` (a test injects a fake so it can assert
+  // parsing + reporting + lifecycle without binding a socket or standing up the
+  // Claude Code CLI). Production resolves the real implementation.
+  startImpl?: (opts: ControlPlaneOptions) => Promise<ControlPlaneHandle>;
+  // Invoked once the control plane is listening, with its base URL — the seam
+  // `loom up` uses to open a browser. Production `serve` leaves it unset.
+  onListening?: (url: string) => void;
   stateDir?: string;
   signal?: AbortSignal;
   // Bust the registry-routing cache after a config write (test seam; production
@@ -147,7 +154,7 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
     return 1;
   }
 
-  const { startControlPlane } = await import("@loomfsm/server");
+  const startControlPlane = overrides.startImpl ?? (await import("@loomfsm/server")).startControlPlane;
   const { createFileLogger } = await import("@loomfsm/daemon");
 
   // The reloadable fleet notifier: built once per project but re-resolves its
@@ -200,7 +207,10 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
     env.out(`loom serve: control plane on http://${handle.host}:${handle.port}`);
     env.out(`  supervising ${handle.attached.length} project(s)${token !== undefined && token.length > 0 ? " [token required]" : ""}`);
     for (const p of handle.attached) env.out(`    - ${p.id}  ${p.dir}`);
-    env.out(`  dashboard: http://${handle.host}:${handle.port}/   |   stop: 'loom serve stop'`);
+    const url = `http://${handle.host}:${handle.port}/`;
+    env.out(`  dashboard: ${url}   |   stop: 'loom serve stop'`);
+
+    overrides.onListening?.(url);
 
     await handle.closed;
     env.out("loom serve: stopped");

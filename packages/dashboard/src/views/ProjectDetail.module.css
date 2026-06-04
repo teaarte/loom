@@ -1,0 +1,169 @@
+.head {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 0.3rem;
+}
+.head h1 {
+  margin: 0;
+}
+.back {
+  font: inherit;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+}
+.dir {
+  opacity: 0.65;
+  font-size: 0.85em;
+  word-break: break-all;
+  margin-bottom: 0.6rem;
+}
+.meta {
+  opacity: 0.75;
+  font-size: 0.9em;
+  margin-bottom: 0.8rem;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85em;
+}
+.dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+  background: var(--muted);
+}
+.idle {
+  background: var(--muted);
+}
+.ok {
+  background: var(--ok);
+}
+.warn {
+  background: var(--warn);
+}
+.bad {
+  background: var(--bad);
+}
+
+.box {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 0.9rem 0;
+  padding: 0.5rem 0.9rem 0.8rem;
+}
+.box legend {
+  font-weight: 600;
+  padding: 0 0.3rem;
+}
+.gateBox {
+  border-color: var(--warn);
+}
+.gateMsg {
+  opacity: 0.85;
+  margin: 0.3rem 0 0.5rem;
+  white-space: pre-wrap;
+}
+
+.row {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 0.4rem 0;
+}
+.policyLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+.select,
+.input {
+  font: inherit;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+}
+.input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.textarea {
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.btn {
+  font: inherit;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: inherit;
+  cursor: pointer;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.msg {
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+.pending {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+  margin: 0.6rem 0;
+  font-size: 0.9em;
+}
+.stalledBox {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.pendingRow {
+  opacity: 0.75;
+  font-size: 0.9em;
+  margin-top: 0.2rem;
+}
+
+.log {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 0.6rem;
+  border-radius: 6px;
+  height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.live {
+  color: var(--ok);
+  font-size: 0.7em;
+  vertical-align: middle;
+}
+.dead {
+  color: var(--muted);
+  font-size: 0.7em;
+  vertical-align: middle;
+}

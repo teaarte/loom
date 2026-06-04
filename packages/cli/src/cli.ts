@@ -15,12 +15,19 @@ import { secrets } from "./commands/secrets.js";
 import { serve } from "./commands/serve.js";
 import { setup } from "./commands/setup.js";
 import { status } from "./commands/status.js";
+import { up } from "./commands/up.js";
 import { processEnv, type CliEnv } from "./lib/env.js";
 import { readCliVersion } from "./version.js";
 
 const HELP = `loom — set up and authorize the pipeline for your agent host
 
 Usage:
+  loom up [--no-open] [--port p] [--token t] [--project <dir>]...
+      The one-command start: bring the control plane up on localhost and open
+      the dashboard in your browser. A bare 'loom' does the same. Zero required
+      flags; every 'loom serve' flag passes through. --no-open suppresses the
+      browser (SSH / headless) — the URL is still printed.
+
   loom setup [--user|--project] [--dry-run] [--force]
       Register the MCP server and install the /task, /done, and /resume commands.
       --user      install for your user (default): ~/.claude.json + ~/.claude/commands/
@@ -107,7 +114,7 @@ Typical first run:
 export function run(argv: string[], env: CliEnv = processEnv()): number | Promise<number> {
   const [command, ...rest] = argv;
 
-  if (command === undefined || command === "--help" || command === "-h" || command === "help") {
+  if (command === "--help" || command === "-h" || command === "help") {
     env.out(HELP);
     return 0;
   }
@@ -115,8 +122,14 @@ export function run(argv: string[], env: CliEnv = processEnv()): number | Promis
     env.out(readCliVersion());
     return 0;
   }
+  // A bare `loom` (no args) is the one-command start, the same as `loom up`.
+  if (command === undefined) {
+    return up([], env);
+  }
 
   switch (command) {
+    case "up":
+      return up(rest, env);
     case "setup":
       return setup(rest, env);
     case "init":

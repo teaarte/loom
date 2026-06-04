@@ -1,12 +1,23 @@
 import { useState } from "react";
 
 import styles from "./App.module.css";
+import { Onboarding } from "./components/Onboarding.js";
 import { useApi } from "./hooks/useApi.js";
 import { getToken, setToken } from "./lib/api.js";
 import { cx } from "./lib/cx.js";
+import { AddProjectView } from "./views/AddProjectView.js";
+import { ProjectDetail } from "./views/ProjectDetail.js";
 import { ProjectsView } from "./views/ProjectsView.js";
+import { ProvidersView } from "./views/ProvidersView.js";
+import { SettingsView } from "./views/SettingsView.js";
 
 type View = "projects" | "settings" | "providers" | "add";
+
+interface OpenProject {
+  id: string;
+  dir: string;
+  label?: string;
+}
 
 const NAV: { id: View; label: string }[] = [
   { id: "projects", label: "Projects" },
@@ -24,22 +35,25 @@ function ConnDot() {
   return <span className={cx(styles.dot, up ? styles.dotOk : styles.dotBad)} />;
 }
 
-function Placeholder({ name }: { name: string }) {
-  return (
-    <div>
-      <h1>{name}</h1>
-      <p style={{ opacity: 0.7 }}>This view lands in a later step of the dashboard build.</p>
-    </div>
-  );
-}
-
 export function App() {
   const [view, setView] = useState<View>("projects");
+  const [open, setOpen] = useState<OpenProject | null>(null);
   const [token, setTokenInput] = useState(getToken());
+  // Bump to nudge views that fetch on mount to re-detect after an onboarding /
+  // add-project action (without a global data layer).
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const save = (): void => {
     setToken(token.trim());
+    setRefreshKey((k) => k + 1);
   };
+
+  const goProjects = (): void => {
+    setOpen(null);
+    setView("projects");
+  };
+
+  const refresh = (): void => setRefreshKey((k) => k + 1);
 
   return (
     <div className={styles.app}>
@@ -49,8 +63,11 @@ export function App() {
           {NAV.map((n) => (
             <button
               key={n.id}
-              className={cx(styles.navItem, view === n.id && styles.navItemActive)}
-              onClick={() => setView(n.id)}
+              className={cx(styles.navItem, view === n.id && open === null && styles.navItemActive)}
+              onClick={() => {
+                setOpen(null);
+                setView(n.id);
+              }}
             >
               {n.label}
             </button>
@@ -78,10 +95,30 @@ export function App() {
       </aside>
 
       <main className={styles.main}>
-        {view === "projects" && <ProjectsView />}
-        {view === "settings" && <Placeholder name="Settings" />}
-        {view === "providers" && <Placeholder name="Providers" />}
-        {view === "add" && <Placeholder name="Add a project" />}
+        {open === null && <Onboarding key={refreshKey} onChanged={refresh} />}
+
+        {open !== null ? (
+          <ProjectDetail
+            projectId={open.id}
+            dir={open.dir}
+            {...(open.label !== undefined ? { label: open.label } : {})}
+            onBack={goProjects}
+          />
+        ) : (
+          <>
+            {view === "projects" && <ProjectsView key={refreshKey} onOpen={setOpen} />}
+            {view === "settings" && <SettingsView />}
+            {view === "providers" && <ProvidersView />}
+            {view === "add" && (
+              <AddProjectView
+                onAdded={() => {
+                  refresh();
+                  goProjects();
+                }}
+              />
+            )}
+          </>
+        )}
       </main>
     </div>
   );

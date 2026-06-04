@@ -10,7 +10,8 @@
 //   POST /projects               → register a project
 //   GET  /projects/:id           → read-model
 //   POST /projects/:id/answer    → answerGate  (deliver a human answer)
-//   DELETE /projects/:id         → unregister
+//   POST /projects/:id/cancel    → abort the in-flight drive + force-archive the task (free the slot)
+//   DELETE /projects/:id         → unregister (pause: stop driving, keep the task)
 //   GET  /projects/:id/log       → SSE: status + log-tail snapshots
 //   GET  /projects/:id/config    → the project's override config (masked)
 //   PUT  /projects/:id/config    → write the project override config
@@ -42,11 +43,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { resolve as resolvePath } from "node:path";
 
 import { listProjects } from "@loomfsm/config";
-import type { Registry } from "@loomfsm/kernel";
+import { archiveAndReset, captureNow, type Registry } from "@loomfsm/kernel";
 
 import { answerGate, parseAnswer } from "./answer.js";
 import {
   addWorkspaceProject,
+  getBackendModels,
   getConfigSchema,
   getGlobalConfig,
   getProjectAgents,
@@ -60,11 +62,12 @@ import {
   removeWorkspaceProject,
 } from "./config-routes.js";
 import { serveDashboard } from "./dashboard/assets.js";
-import { ServerError } from "./errors.js";
+import { fromKernelError, ServerError } from "./errors.js";
 import { readLogTail } from "./log-tail.js";
 import { readProjectStatus } from "./read-model.js";
 import type { SupervisorRegistry } from "./registry.js";
 import { submitTask } from "./submit.js";
+import { writeTaskExecPrefs } from "./task-exec.js";
 
 // The control-layer (config / secrets / workspace) slice of the server deps —
 // the SAME `@loomfsm/config` stores the CLI writes, reached over HTTP. Optional:
@@ -87,6 +90,12 @@ export interface ConfigDeps {
   // Whether the Claude Code CLI is available (a PATH/login probe the CLI injects),
   // surfaced by `GET /providers`. Omitted → reported as "not probed".
   claudeAvailable?: () => boolean;
+  // Whether per-task Docker isolation can be honoured — an image + headless
+  // credential are configured and the Docker CLI is reachable. The CLI injects
+  // this (it owns the container plan); the server stays container-blind. Surfaced
+  // by `GET /providers`; a `docker:true` submit refuses cleanly when it reports
+  // unavailable. Omitted → the Docker option is simply not offered.
+  dockerCapability?: () => { available: boolean; reason?: string };
   // Override the dashboard's built-asset directory. Omitted → resolved from the
   // `@loomfsm/dashboard` workspace dependency. A test injects a fixture dir so it
   // can assert serving without running the front-end build.
@@ -174,6 +183,12 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
       getProviders(res, deps);
       return;
     }
+    // GET /providers/:backend/models — a backend's live model list (for the
+    // model-map editor's dropdown), with a free-text fallback when empty.
+    if (parts[0] === "providers" && parts.length === 3 && parts[2] === "models" && method === "GET") {
+      await getBackendModels(res, parts[1] as string, deps);
+      return;
+    }
     // /secrets collection (masked list) + /secrets/:name (write-only).
     if (parts[0] === "secrets" && parts.length === 1 && method === "GET") {
       listSecrets(res, deps);
@@ -228,6 +243,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
       if (sub === "answer" && method === "POST") {
         const body = await readJsonBody(req);
         await routeAnswer(res, id, body, deps);
+        return;
+      }
+      if (sub === "cancel" && method === "POST") {
+        await routeCancel(res, id, deps);
         return;
       }
       if (sub === "log" && method === "GET") {
@@ -295,12 +314,51 @@ async function routeSubmit(
     }
   }
 
+  const initialDecisions = parseInitialDecisions(body);
+
+  // Per-task Docker (P4): refuse cleanly when requested but unavailable — never
+  // silently run unsandboxed — then record the choice in the project-local
+  // sidecar the watcher's executor factory reads at drive time. Written before
+  // submit so the choice is in place when the watcher next polls. An explicit
+  // false forces the worktree; an absent flag clears to the deployment default.
+  const dockerFlag = typeof body["docker"] === "boolean" ? (body["docker"] as boolean) : undefined;
+  if (dockerFlag === true) {
+    const cap = deps.dockerCapability?.() ?? {
+      available: false,
+      reason: "Docker isolation is not enabled on this server",
+    };
+    if (!cap.available) {
+      throw new ServerError("DOCKER_UNAVAILABLE", 400, cap.reason ?? "Docker isolation is unavailable");
+    }
+  }
+  writeTaskExecPrefs(entry.dir, dockerFlag !== undefined ? { docker: dockerFlag } : {});
+
   const fsm = await resolveFsm(deps, entry.dir);
   const result = await submitTask(entry.dir, fsm, {
     task,
     ...(typeof body["policy_preset"] === "string" ? { policy_preset: body["policy_preset"] } : {}),
+    ...(initialDecisions !== undefined ? { initial_decisions: initialDecisions } : {}),
   });
   sendJson(res, 200, { id: entry.id, dir: entry.dir, ...result });
+}
+
+// The generic opening-decisions seed for a create. A bundle-shaped
+// `initial_decisions` object is passed through verbatim; a top-level
+// `complexity` string is a convenience that folds in as a PINNED decision (the
+// dashboard's ⚡ fast-task / complexity selector — `complexity_pinned` tells the
+// bundle the operator decided, so it skips re-classifying). The server names no
+// decision key beyond mirroring this one convenience; everything else rides in
+// `initial_decisions` under the bundle's own keys. Returns undefined when empty.
+function parseInitialDecisions(body: Record<string, unknown>): Record<string, unknown> | undefined {
+  const raw = body["initial_decisions"];
+  const base: Record<string, unknown> =
+    typeof raw === "object" && raw !== null && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {};
+  const complexity = body["complexity"];
+  if (typeof complexity === "string" && complexity.length > 0) {
+    base["complexity"] = complexity;
+    base["complexity_pinned"] = true;
+  }
+  return Object.keys(base).length > 0 ? base : undefined;
 }
 
 async function routeListProjects(res: ServerResponse, deps: ControlServerDeps, nowMs: number): Promise<void> {
@@ -333,6 +391,30 @@ async function routeUnregister(res: ServerResponse, id: string, deps: ControlSer
   const removed = await deps.registry.unregister(id);
   if (!removed) throw new ServerError("PROJECT_NOT_FOUND", 404, `no registered project ${id}`);
   sendJson(res, 200, { id, unregistered: true });
+}
+
+// Cancel a task in one action: stop supervising (abort the in-flight drive,
+// release the lock) — awaited so the store is quiescent — then force-archive the
+// in-progress task into history and free the slot. The one-click form of the
+// manual `DELETE /projects/:id` + `loom reset --force`. The project stays in the
+// catalog (a later submit re-adopts it), so this cancels the TASK, not the
+// project. Works for a cataloged-but-unsupervised project too (nothing to abort,
+// just archive). The slot-free archive uses an ambient now — transport, outside
+// the kernel's replay graph.
+async function routeCancel(res: ServerResponse, id: string, deps: ControlServerDeps): Promise<void> {
+  const dir = knownProjectDir(id, deps);
+  if (dir === null) throw new ServerError("PROJECT_NOT_FOUND", 404, `no project ${id}`);
+  await deps.registry.unregister(id);
+  let archived = false;
+  let taskId: string | null = null;
+  try {
+    const result = await archiveAndReset(dir, captureNow(), { force: true });
+    archived = result.archived;
+    taskId = result.task_id;
+  } catch (err) {
+    throw fromKernelError(err);
+  }
+  sendJson(res, 200, { id, dir, cancelled: true, archived, task_id: taskId });
 }
 
 async function routeAnswer(

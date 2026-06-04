@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 
-import { startControlPlane, type ControlPlaneHandle } from "../src/index.js";
+import { readTaskExecPrefs, startControlPlane, type ControlPlaneHandle } from "../src/index.js";
 import {
   cleanup,
   freshProject,
@@ -259,5 +259,66 @@ describe("http — two projects in parallel through the registry", () => {
     const res = await req("GET", "/projects/deadbeef0000", { token: TOKEN });
     assert.equal(res.status, 404);
     assert.equal(res.json.error.code, "PROJECT_NOT_FOUND");
+  });
+});
+
+describe("http — pinned complexity + per-task docker (P3/P4)", () => {
+  it("threads a pinned complexity into the create and still drives to complete", async () => {
+    const id = await registerProject("spawn");
+    const sub = await req("POST", "/submit", {
+      token: TOKEN,
+      body: { project: id, task: "a fast little task", complexity: "trivial" },
+    });
+    assert.equal(sub.status, 200, JSON.stringify(sub.json));
+    const done = await until(async () => {
+      const r = await req("GET", `/projects/${id}`, { token: TOKEN });
+      return r.json?.status?.status === "completed" ? r.json : null;
+    }, "pinned-complexity task to complete");
+    assert.equal(done.status.verdict, "accepted");
+  });
+
+  it("exposes the full task text + bookends in the read-model", async () => {
+    const id = await registerProject("spawn");
+    await req("POST", "/submit", { token: TOKEN, body: { project: id, task: "remember this verbatim" } });
+    const got = await until(async () => {
+      const r = await req("GET", `/projects/${id}`, { token: TOKEN });
+      return r.json?.status?.has_task ? r.json : null;
+    }, "task to exist");
+    assert.equal(got.status.task, "remember this verbatim");
+    assert.ok(typeof got.status.started_at === "string" && got.status.started_at.length > 0);
+  });
+
+  it("refuses docker:true cleanly when the server cannot run containers (no silent sidecar)", async () => {
+    const id = await registerProject("spawn");
+    const dir = (await req("GET", `/projects/${id}`, { token: TOKEN })).json.dir as string;
+    const res = await req("POST", "/submit", { token: TOKEN, body: { project: id, task: "x", docker: true } });
+    assert.equal(res.status, 400);
+    assert.equal(res.json.error.code, "DOCKER_UNAVAILABLE");
+    assert.deepEqual(readTaskExecPrefs(dir), {});
+  });
+
+  it("GET /providers omits the docker field when no capability is injected", async () => {
+    const res = await req("GET", "/providers", { token: TOKEN });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.docker, undefined);
+  });
+});
+
+describe("http — cancel a task (P5)", () => {
+  it("POST /projects/:id/cancel aborts the drive, archives the task, and frees the slot", async () => {
+    const id = await registerProject("gate");
+    const sub = await req("POST", "/submit", { token: TOKEN, body: { project: id, task: "park me" } });
+    assert.equal(sub.status, 200);
+    await until(async () => {
+      const r = await req("GET", `/projects/${id}`, { token: TOKEN });
+      return r.json?.status?.has_task ? r.json : null;
+    }, "task to exist before cancel");
+
+    const cancel = await req("POST", `/projects/${id}/cancel`, { token: TOKEN });
+    assert.equal(cancel.status, 200, JSON.stringify(cancel.json));
+    assert.equal(cancel.json.cancelled, true);
+
+    const live = await req("GET", "/projects", { token: TOKEN });
+    assert.ok(!(live.json as any[]).some((p) => p.id === id), "cancel unregistered the project");
   });
 });

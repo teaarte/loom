@@ -238,7 +238,14 @@ export function getProviders(res: ServerResponse, deps: ControlServerDeps): void
     const av = availability(backend, deps, loomHome, env, config);
     return { backend, families: [...families], ...av };
   });
-  sendJson(res, 200, { backend_mode: config.backend ?? AUTO_BACKEND, providers });
+  // Per-task Docker availability (P4) — the CLI injects the probe; omitted when
+  // the deployment cannot run containers, so the UI simply hides the checkbox.
+  const docker = deps.dockerCapability?.();
+  sendJson(res, 200, {
+    backend_mode: config.backend ?? AUTO_BACKEND,
+    providers,
+    ...(docker !== undefined ? { docker } : {}),
+  });
 }
 
 const API_KEY_BACKENDS = new Set(["anthropic-sdk", "openrouter", "openai"]);
@@ -266,6 +273,113 @@ function availability(
   // ollama (local), codex / gemini / aider / opencode (external CLIs): the server
   // cannot know without spawning, so it reports honestly rather than guessing.
   return { available: null, reason: "availability not probed (local or external-CLI backend)" };
+}
+
+// ----- GET /providers/:backend/models --------------------------------------
+// A backend's models, listed LIVE: OpenRouter / Ollama hit their HTTP APIs,
+// the Anthropic family returns a known static set, everything else returns []
+// (the UI then falls back to free-text). Uses node's global `fetch` only — no
+// new runtime dep — with a short timeout so an unreachable backend degrades to
+// an empty list rather than hanging the route, and a brief in-process cache so
+// repeated dropdown opens don't re-hit the network. Returns model REFS already
+// in `family:model` form, so the model-map editor can store them verbatim.
+
+interface ModelCacheEntry {
+  at: number;
+  models: string[];
+  reason?: string;
+}
+const modelCache = new Map<string, ModelCacheEntry>();
+const MODEL_CACHE_TTL_MS = 60_000;
+const MODEL_FETCH_TIMEOUT_MS = 5_000;
+
+// A known Anthropic family set (the latest tiers) — a static catalog for the
+// claude-code / anthropic-sdk backends, which have no public list endpoint here.
+const ANTHROPIC_MODELS = ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"];
+
+export async function getBackendModels(res: ServerResponse, backend: string, deps: ControlServerDeps): Promise<void> {
+  const loomHome = requireConfig(deps);
+  const result = await resolveBackendModels(backend, deps, loomHome);
+  sendJson(res, 200, { backend, models: result.models, ...(result.reason !== undefined ? { reason: result.reason } : {}) });
+}
+
+async function resolveBackendModels(
+  backend: string,
+  deps: ControlServerDeps,
+  loomHome: string,
+): Promise<{ models: string[]; reason?: string }> {
+  const now = nowMs(deps);
+  const cached = modelCache.get(backend);
+  if (cached !== undefined && now - cached.at < MODEL_CACHE_TTL_MS) {
+    return { models: cached.models, ...(cached.reason !== undefined ? { reason: cached.reason } : {}) };
+  }
+  const fresh = await fetchBackendModels(backend, deps, loomHome);
+  modelCache.set(backend, { at: now, models: fresh.models, ...(fresh.reason !== undefined ? { reason: fresh.reason } : {}) });
+  return fresh;
+}
+
+async function fetchBackendModels(
+  backend: string,
+  deps: ControlServerDeps,
+  loomHome: string,
+): Promise<{ models: string[]; reason?: string }> {
+  const env = configEnv(deps, loomHome);
+  if (backend === "anthropic-sdk" || backend === "claude-code") {
+    return { models: ANTHROPIC_MODELS.map((m) => `anthropic:${m}`) };
+  }
+  const config = readConfigOr400(() => readGlobalConfig(loomHome));
+  if (backend === "openrouter") {
+    const override = config.credentials?.["openrouter"];
+    const cred = resolveBackendCredential("openrouter", { loomHome, env, ...(override !== undefined ? { override } : {}) });
+    return await fetchOpenRouterModels(cred.apiKey);
+  }
+  if (backend === "ollama") {
+    const override = config.credentials?.["ollama"];
+    const cred = resolveBackendCredential("ollama", { loomHome, env, ...(override !== undefined ? { override } : {}) });
+    return await fetchOllamaModels(cred.baseUrl ?? env["OLLAMA_HOST"]);
+  }
+  return { models: [], reason: `live model listing is not available for backend '${backend}'` };
+}
+
+async function fetchWithTimeout(url: string, headers: Record<string, string>): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), MODEL_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { headers, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchOpenRouterModels(apiKey: string | undefined): Promise<{ models: string[]; reason?: string }> {
+  try {
+    const headers: Record<string, string> = {};
+    if (apiKey !== undefined && apiKey.length > 0) headers["authorization"] = `Bearer ${apiKey}`;
+    const res = await fetchWithTimeout("https://openrouter.ai/api/v1/models", headers);
+    if (!res.ok) return { models: [], reason: `OpenRouter returned HTTP ${res.status}` };
+    const json = (await res.json()) as { data?: { id?: unknown }[] };
+    const models = (json.data ?? [])
+      .map((d) => (typeof d.id === "string" ? `openrouter:${d.id}` : null))
+      .filter((x): x is string => x !== null);
+    return { models };
+  } catch (err) {
+    return { models: [], reason: `could not reach OpenRouter: ${(err as Error).message}` };
+  }
+}
+
+async function fetchOllamaModels(host: string | undefined): Promise<{ models: string[]; reason?: string }> {
+  const base = (host !== undefined && host.length > 0 ? host : "http://localhost:11434").replace(/\/+$/, "");
+  try {
+    const res = await fetchWithTimeout(`${base}/api/tags`, {});
+    if (!res.ok) return { models: [], reason: `Ollama returned HTTP ${res.status}` };
+    const json = (await res.json()) as { models?: { name?: unknown }[] };
+    const models = (json.models ?? [])
+      .map((m) => (typeof m.name === "string" ? `ollama:${m.name}` : null))
+      .filter((x): x is string => x !== null);
+    return { models };
+  } catch (err) {
+    return { models: [], reason: `could not reach Ollama at ${base}: ${(err as Error).message}` };
+  }
 }
 
 // ----- GET /secrets + PUT /secrets/:name -----------------------------------

@@ -35,6 +35,11 @@ import { fromKernelError, ServerError } from "./errors.js";
 export interface SubmitArgs {
   task: string;
   policy_preset?: string;
+  // Generic opening-decisions seed threaded straight to the kernel create arg —
+  // the server names none of its keys. The dashboard's ⚡ fast-task / complexity
+  // selector rides here as `{ complexity, complexity_pinned }`; a bundle reads
+  // whatever keys it understands. Domain-blind: the server passes it through.
+  initial_decisions?: Record<string, unknown>;
 }
 
 export interface SubmitResult {
@@ -85,6 +90,7 @@ export async function submitTask(
       task,
       client_idempotency_uuid: uuid,
       ...(args.policy_preset !== undefined ? { policy_preset: args.policy_preset } : {}),
+      ...(args.initial_decisions !== undefined ? { initial_decisions: args.initial_decisions } : {}),
     });
     return {
       task_id: created.task_id,

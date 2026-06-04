@@ -21,6 +21,9 @@ export type { RegistryDeps, ProjectListing } from "./registry.js";
 export { submitTask, deterministicUuid } from "./submit.js";
 export type { SubmitArgs, SubmitResult } from "./submit.js";
 
+export { readTaskExecPrefs, writeTaskExecPrefs, taskExecPath } from "./task-exec.js";
+export type { TaskExecPrefs } from "./task-exec.js";
+
 export { answerGate, parseAnswer } from "./answer.js";
 export type { AnswerArgs, AnswerResult } from "./answer.js";
 

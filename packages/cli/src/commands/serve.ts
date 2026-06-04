@@ -29,7 +29,7 @@ import type { Registry } from "@loomfsm/kernel";
 import type { ControlPlaneHandle, ControlPlaneOptions } from "@loomfsm/server";
 
 import { effectiveEnv } from "../lib/config.js";
-import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
+import { containerModeFrom, resolveContainerPlan, type ContainerMode, type ContainerPlan } from "../lib/container.js";
 import { buildDispatchExecutor } from "../lib/dispatch.js";
 import { reloadableNotifier, resolveNotifier } from "../lib/notify.js";
 import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
@@ -43,6 +43,9 @@ type ServeMergeBack = (
 type ServeFactory = {
   buildExecutor: (projectDir: string, ctx: ExecutorBuildContext) => Executor;
   mergeBack?: ServeMergeBack;
+  // Whether a `docker:true` submit can be honoured — surfaced to the control
+  // plane for `GET /providers` + the submit-time refusal.
+  dockerCapability?: () => { available: boolean; reason?: string };
 };
 
 // Test seams — a suite injects a ready registry / executor factory / a fake
@@ -193,6 +196,7 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
       resolveRegistry,
       buildExecutor: factory.buildExecutor,
       ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
+      ...(factory.dockerCapability !== undefined ? { dockerCapability: factory.dockerCapability } : {}),
       ...resolveSupervisionKnobs(cfgEnv),
       makeLogger: (dir: string) => createFileLogger(dir, { echo: () => {} }),
       makeNotifier,
@@ -311,14 +315,14 @@ function envPort(): number | undefined {
   return Number.isInteger(n) && n >= 0 && n <= 65535 ? n : undefined;
 }
 
-// The per-project drive factory: resolve the container toggle ONCE (the toggle
-// + env are server-wide), then build a fresh per-spawn dispatching executor per
-// project per drive attempt so the attempt's abort signal reaches each backend's
-// child. Each spawn is routed to the backend resolved for its agent's model
-// family (`claude -p` worktree/container for Claude Code, a plain raw call
-// otherwise); the bundle name is resolved per project via `resolveRegistry`.
-// Container mode shapes only the Claude Code backend and brings the matching
-// clone merge-back, applied fleet-wide.
+// The per-project drive factory. The SERVER-WIDE default plan is resolved once
+// (per the --docker/--no-docker toggle), and a Docker plan is probed once too,
+// so a PER-TASK `docker` choice (the submit-time flag, persisted in the project's
+// task-exec sidecar) can pick the right isolation per drive. `planFor` reads that
+// sidecar and returns: the Docker plan for a `docker:true` task, a forced
+// worktree for `docker:false`, or the server default when unset. Both the
+// per-spawn executor AND the merge-back dispatch on it, so a Docker task commits
+// from its container clone and a worktree task from its worktree — fleet-wide.
 async function defaultServeFactory(
   env: CliEnv,
   mode: ContainerMode,
@@ -327,23 +331,60 @@ async function defaultServeFactory(
   resolveRegistry: (projectDir: string) => Promise<Registry> | Registry,
 ): Promise<ServeFactory> {
   const home = env.home.length > 0 ? env.home : homedir();
-  const plan = resolveContainerPlan({
+  const dockerAvailable = overrides.dockerAvailable ?? dockerAvailableDefault;
+  const defaultPlan = resolveContainerPlan({
     mode,
     env: cfgEnv,
     home,
-    dockerAvailable: overrides.dockerAvailable ?? dockerAvailableDefault,
+    dockerAvailable,
     onNotice: (message) => env.err(`loom serve: ${message}`),
   });
+
+  // Probe a Docker plan for per-task opt-in. When the server default is already
+  // Docker, reuse it; otherwise resolve a `require`-mode plan with a silent sink
+  // (the real per-drive notice fires in buildExecutor) and capture WHY it failed
+  // so a `docker:true` submit can refuse with a precise reason.
+  let dockerPlan: Extract<ContainerPlan, { useDocker: true }> | null = null;
+  let dockerReason: string | undefined;
+  if (defaultPlan.useDocker) {
+    dockerPlan = defaultPlan;
+  } else {
+    try {
+      const probed = resolveContainerPlan({ mode: "require", env: cfgEnv, home, dockerAvailable, onNotice: () => {} });
+      if (probed.useDocker) dockerPlan = probed;
+    } catch (err) {
+      dockerReason = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   const timeouts = resolveSpawnTimeouts(cfgEnv);
   const bin = cfgEnv["LOOM_CLAUDE_BIN"] ?? "claude";
   const available = overrides.claudeAvailable ?? claudeAvailable;
   // The per-agent execution map (single-shot vs agentic) is per-PROJECT here
   // (the bundle is resolved per project), so a work-agent on a non-Claude
-  // backend gets the Aider worktree harness.
+  // backend gets the Aider worktree harness. These dynamic imports keep
+  // @loomfsm/server (and the heavy daemon/bootstrap) OUT of the eager command
+  // graph, so a bare `loom --version` never loads them.
   const { agentExecutionFor } = await import("@loomfsm/mcp-server/bootstrap");
+  const { commitToBranchMergeBack, commitToBranchMergeBackFromClone } = await import("@loomfsm/daemon");
+  const { readTaskExecPrefs } = await import("@loomfsm/server");
+
+  // The effective plan for a project's CURRENT task: docker:true → the Docker
+  // plan (falling back to default without throwing — submit already refused an
+  // unavailable request); docker:false → forced worktree; unset → server default.
+  const planFor = (projectDir: string): ContainerPlan => {
+    const pref = readTaskExecPrefs(projectDir).docker;
+    if (pref === true) return dockerPlan ?? defaultPlan;
+    if (pref === false) return { useDocker: false };
+    return defaultPlan;
+  };
 
   const factory: ServeFactory = {
     buildExecutor: (projectDir, ctx) => {
+      const plan = planFor(projectDir);
+      if (plan.useDocker) {
+        ctx.onNotice(`container isolation active for this task (image ${plan.container.image})`);
+      }
       const bundleNameP = Promise.resolve(resolveRegistry(projectDir)).then((r) => r.bundle.name);
       return buildDispatchExecutor({
         projectDir,
@@ -359,11 +400,19 @@ async function defaultServeFactory(
         signal: ctx.signal,
       });
     },
+    // Merge-back dispatches on the SAME per-task plan: a Docker task integrates
+    // from its container clone, a worktree task from its worktree. (Each is a
+    // no-op when its copy dir is absent, so a mis-dispatch is safe, but matching
+    // them keeps the path tight.)
+    mergeBack: (dir, outcome) =>
+      planFor(dir).useDocker
+        ? commitToBranchMergeBackFromClone(dir, outcome.task_id)
+        : commitToBranchMergeBack(dir, outcome.task_id),
+    dockerCapability: () =>
+      dockerPlan !== null
+        ? { available: true }
+        : { available: false, ...(dockerReason !== undefined ? { reason: dockerReason } : {}) },
   };
-  if (plan.useDocker) {
-    const { commitToBranchMergeBackFromClone } = await import("@loomfsm/daemon");
-    factory.mergeBack = (dir, outcome) => commitToBranchMergeBackFromClone(dir, outcome.task_id);
-  }
   return factory;
 }
 

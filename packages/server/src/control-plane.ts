@@ -82,6 +82,10 @@ export interface ControlPlaneOptions {
   invalidateRegistry?: (projectDir?: string) => void;
   // Whether the Claude Code CLI is available (surfaced by `GET /providers`).
   claudeAvailable?: () => boolean;
+  // Whether per-task Docker isolation can be honoured (the CLI injects the probe
+  // — image + credential present, Docker reachable). Surfaced by `GET /providers`
+  // and enforced on a `docker:true` submit. Omitted → the Docker option is off.
+  dockerCapability?: () => { available: boolean; reason?: string };
   // Override the dashboard's built-asset directory (default: resolved from the
   // `@loomfsm/dashboard` workspace dependency). A test injects a fixture dir.
   dashboardDir?: string;
@@ -150,6 +154,7 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
     ...(opts.configEnv !== undefined ? { configEnv: opts.configEnv } : {}),
     ...(opts.invalidateRegistry !== undefined ? { invalidateRegistry: opts.invalidateRegistry } : {}),
     ...(opts.claudeAvailable !== undefined ? { claudeAvailable: opts.claudeAvailable } : {}),
+    ...(opts.dockerCapability !== undefined ? { dockerCapability: opts.dockerCapability } : {}),
     ...(opts.dashboardDir !== undefined ? { dashboardDir: opts.dashboardDir } : {}),
     onError: (err) => log(`loom serve: internal error: ${err instanceof Error ? err.message : String(err)}`),
   });

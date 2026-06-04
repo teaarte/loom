@@ -91,6 +91,7 @@ describe("loom projects", () => {
     has_task: false,
     task_id: null,
     task_label: null,
+    task: "",
     status: null,
     verdict: null,
     flow: null,
@@ -98,6 +99,8 @@ describe("loom projects", () => {
     parked_gate: null,
     pending_agents: [],
     stalled: false,
+    started_at: null,
+    ended_at: null,
   });
 
   it("adds, lists with status, and removes", async () => {

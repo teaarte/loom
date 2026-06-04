@@ -30,6 +30,9 @@ export interface ProjectStatusView {
   task_id: string | null;
   // task_short, or the task text truncated — what an operator reads as the label.
   task_label: string | null;
+  // The FULL task text (untruncated) so the detail view can show what was asked
+  // verbatim. Empty string when no task row carries one.
+  task: string;
   status: "in_progress" | "completed" | "abandoned" | null;
   verdict: "accepted" | "rejected" | "failed_force_closed" | null;
   flow: { name: string; step_index: number } | null;
@@ -40,6 +43,12 @@ export interface ProjectStatusView {
   // — the signature of a dropped transport, the same threshold `loom status`
   // flags on.
   stalled: boolean;
+  // Wall-clock task bookends, surfaced so a reader can show total elapsed time
+  // (live-ticking while in_progress, final once terminal). Both are ISO-8601
+  // strings the store already keeps — `ended_at` is null until the task is
+  // terminal. The kernel is unchanged; these are existing canonical fields.
+  started_at: string | null;
+  ended_at: string | null;
 }
 
 const EMPTY = (projectDir: string): ProjectStatusView => ({
@@ -47,6 +56,7 @@ const EMPTY = (projectDir: string): ProjectStatusView => ({
   has_task: false,
   task_id: null,
   task_label: null,
+  task: "",
   status: null,
   verdict: null,
   flow: null,
@@ -54,6 +64,8 @@ const EMPTY = (projectDir: string): ProjectStatusView => ({
   parked_gate: null,
   pending_agents: [],
   stalled: false,
+  started_at: null,
+  ended_at: null,
 });
 
 // Read a project's task snapshot. A store-less project (or one whose store
@@ -98,6 +110,7 @@ export async function readProjectStatus(
     has_task: true,
     task_id: state.task_id,
     task_label: taskLabel(state.task_short, state.task),
+    task: state.task,
     status: state.status,
     verdict: state.verdict,
     flow: { name: state.driver.flow_name, step_index: state.driver.step_index },
@@ -105,6 +118,8 @@ export async function readProjectStatus(
     parked_gate: state.driver.pending_user_answer,
     pending_agents: pending,
     stalled: pending.length > 0 && oldest >= ZOMBIE_PENDING_MS,
+    started_at: state.started_at,
+    ended_at: state.ended_at,
   };
 }
 

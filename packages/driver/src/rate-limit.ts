@@ -41,8 +41,20 @@ const RATE_LIMIT_STATUSES = new Set<number>([429]);
 
 // Text fallback for when the structured status is absent but the message names
 // a limit — including the subscription "you've hit your <window> limit" wording.
+// Applied to CONTROLLED text (a parsed envelope's `result` message + stderr),
+// where a bare `429` is meaningful, so it is included.
 const RATE_LIMIT_TEXT =
   /rate.?limit|usage limit|too many requests|\b429\b|hit your (?:session|weekly|opus|usage) limit|quota/i;
+
+// Stricter fallback for RAW, non-JSON stdout (a flailing spawn that produced no
+// envelope). The structured status is gone, so match only explicit limit /
+// overload WORDING — never a bare `429`, which in arbitrary stdout is as likely
+// a source line number as an HTTP status (the exact false positive that made a
+// flailing planner look rate-limited). `overloaded` is included here, NOT in the
+// structured 5xx set above: with no status to read, a spawn that printed an
+// overload notice and gave up is better waited-out than tight-retried.
+const RATE_LIMIT_TEXT_RAW =
+  /rate.?limit|usage limit|too many requests|hit your (?:session|weekly|opus|usage) limit|quota|overloaded/i;
 
 function statusOf(envelope: Record<string, unknown> | undefined): number | undefined {
   if (envelope === undefined) return undefined;
@@ -81,5 +93,13 @@ export const defaultRateLimitDetector: RateLimitDetector = (signal: RateLimitSig
   const status = statusOf(envelope);
   if (status !== undefined && RATE_LIMIT_STATUSES.has(status)) return true;
   const text = `${envelopeText(envelope)}\n${signal.stderr ?? ""}`;
-  return RATE_LIMIT_TEXT.test(text);
+  if (RATE_LIMIT_TEXT.test(text)) return true;
+  // Non-parseable output (no JSON envelope at all): scan the raw stdout for
+  // explicit limit/overload wording. Guarded on `envelope === undefined` so a
+  // parsed-but-non-rate-limit envelope (e.g. a 5xx the structured set excludes)
+  // is NOT reclassified by a stray word in its body.
+  if (envelope === undefined && signal.stdout !== undefined && RATE_LIMIT_TEXT_RAW.test(signal.stdout)) {
+    return true;
+  }
+  return false;
 };

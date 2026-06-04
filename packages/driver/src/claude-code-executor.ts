@@ -96,25 +96,74 @@ export function buildClaudeArgs(
   return args;
 }
 
+// Raw streams the parser folds into a parse-failure error so "why did this
+// spawn produce no JSON?" is answerable from the surfaced message alone. The
+// capture seam only exposes stderr/exit on a clean (exit-0) run, so a flail
+// that exits 0 with non-JSON output still carries its raw output here.
+export interface ClaudeParseContext {
+  stderr?: string;
+  exitCode?: number | null;
+}
+
+// Keep head AND tail of a long stream (a truncated JSON envelope starts at the
+// front; the final error/message sits at the end), bounded so the message stays
+// log-sized.
+function rawTail(s: string, head = 1_000, tail = 1_000): string {
+  const t = s.trim();
+  const max = head + tail;
+  if (t.length <= max) return t;
+  return `${t.slice(0, head)}\n…[${t.length - max} chars omitted]…\n${t.slice(t.length - tail)}`;
+}
+
+function parseFailureMessage(base: string, stdout: string, ctx: ClaudeParseContext | undefined): string {
+  const parts = [base];
+  const out = stdout.trim();
+  if (out.length > 0) parts.push(`--- stdout ---\n${rawTail(out)}`);
+  const err = (ctx?.stderr ?? "").trim();
+  if (err.length > 0) parts.push(`--- stderr ---\n${rawTail(err)}`);
+  return parts.join("\n");
+}
+
 // Parse `claude --output-format json` stdout → the final assistant text.
 // A non-success result, a malformed envelope, or a missing `result` is a
 // hard failure the loop surfaces (it never silently returns empty output).
 //
-// `detectRateLimit` (when supplied) runs against the parsed envelope FIRST: a
-// rate-limit / quota condition becomes EXECUTOR_RATE_LIMITED (a wait) rather
-// than the generic EXECUTOR_FAILED. This is defence-in-depth — the backend
-// exits non-zero on `is_error`, so the capture seam usually catches the signal
-// before the parser runs, but a clean-exit error envelope is handled here too.
-export function parseClaudeResult(stdout: string, detectRateLimit?: RateLimitDetector): string {
+// `detectRateLimit` (when supplied) runs against the parsed envelope FIRST, and
+// AGAIN over the raw stdout when the output is not JSON at all: a rate-limit /
+// quota / overload condition becomes EXECUTOR_RATE_LIMITED (a wait) rather than
+// the generic EXECUTOR_FAILED. This is defence-in-depth — the backend exits
+// non-zero on `is_error`, so the capture seam usually catches the signal before
+// the parser runs, but a clean-exit error envelope (or a non-JSON limit notice)
+// is handled here too. On a genuine parse failure the raw stdout/stderr (+ exit
+// code) ride into the thrown message so the failure is diagnosable.
+export function parseClaudeResult(
+  stdout: string,
+  detectRateLimit?: RateLimitDetector,
+  ctx?: ClaudeParseContext,
+): string {
   const trimmed = stdout.trim();
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
   } catch {
+    // Not JSON at all: it may still be a non-JSON rate-limit / overload notice
+    // ("you've hit your weekly limit", "overloaded") — classify it as a wait
+    // rather than a tight-retry failure before surfacing the raw output.
+    if (detectRateLimit?.({ stdout: trimmed, ...(ctx?.stderr !== undefined ? { stderr: ctx.stderr } : {}) })) {
+      throw new KernelError({
+        code: "EXECUTOR_RATE_LIMITED",
+        message: "claude -p hit a rate limit / quota",
+        detail: { stdout_head: rawTail(trimmed) },
+      });
+    }
     throw new KernelError({
       code: "EXECUTOR_OUTPUT_INVALID",
-      message: "claude -p did not return parseable JSON output",
-      detail: { stdout_head: trimmed.slice(0, 500) },
+      message: parseFailureMessage("claude -p did not return parseable JSON output", trimmed, ctx),
+      detail: {
+        stdout_head: rawTail(trimmed),
+        ...(ctx?.stderr !== undefined ? { stderr_head: rawTail(ctx.stderr) } : {}),
+        ...(ctx?.exitCode !== undefined ? { exit_code: ctx.exitCode } : {}),
+      },
     });
   }
   const obj = parsed as { is_error?: unknown; subtype?: unknown; result?: unknown };
@@ -205,7 +254,7 @@ async function spawnClaude(
   signal: AbortSignal | undefined,
   capture: SpawnClaudeOptions,
 ): Promise<RunSpawnResult> {
-  const stdout = await spawnCapture({
+  const { stdout, stderr, exitCode } = await spawnCapture({
     bin,
     args,
     cwd,
@@ -218,7 +267,7 @@ async function spawnClaude(
     ...(capture.idle_timeout_ms !== undefined ? { idle_timeout_ms: capture.idle_timeout_ms } : {}),
     ...(signal !== undefined ? { signal } : {}),
   });
-  const output = parseClaudeResult(stdout, capture.detectRateLimit);
+  const output = parseClaudeResult(stdout, capture.detectRateLimit, { stderr, exitCode });
   const usage = parseClaudeUsage(stdout);
   return usage !== undefined ? { output, usage } : { output };
 }

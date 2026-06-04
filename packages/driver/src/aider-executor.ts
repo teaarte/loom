@@ -188,7 +188,7 @@ async function spawnAider(
   signal: AbortSignal | undefined,
   capture: SpawnAiderOptions,
 ): Promise<RunSpawnResult> {
-  const stdout = await spawnCapture({
+  const { stdout } = await spawnCapture({
     bin,
     args,
     cwd,

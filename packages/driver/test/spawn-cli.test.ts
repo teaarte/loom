@@ -68,7 +68,7 @@ describe("spawnCapture — idle (output-silence) timeout", () => {
       notFoundMessage: "n/a",
       idle_timeout_ms: 250,
     });
-    assert.match(out, /tick/);
+    assert.match(out.stdout, /tick/);
   });
 });
 
@@ -103,11 +103,31 @@ describe("spawnCapture — rate-limit recognition on a non-zero exit", () => {
   });
 });
 
+describe("spawnCapture — raw output is diagnosable on a non-zero exit", () => {
+  it("folds the truncated raw stdout AND stderr into the EXECUTOR_FAILED message", async () => {
+    const args = [
+      "-e",
+      "process.stdout.write('partial transcript with no JSON');process.stderr.write('tool error 7');process.exit(3)",
+    ];
+    const err = await expectReject(
+      spawnCapture({ bin: NODE, args, label: "claude -p", notFoundMessage: "n/a" }),
+    );
+    assert.equal(err.code, "EXECUTOR_FAILED");
+    // The message — the only thing drive() forwards — carries the raw output, so
+    // "why did this spawn fail?" is answerable without reading the backend's own
+    // session transcript.
+    assert.match(err.message, /exited with code 3/);
+    assert.match(err.message, /partial transcript with no JSON/);
+    assert.match(err.message, /tool error 7/);
+  });
+});
+
 describe("spawnCapture — baseline paths still hold", () => {
-  it("resolves with stdout on a clean exit", async () => {
+  it("resolves with the captured streams on a clean exit", async () => {
     const args = ["-e", "process.stdout.write('hello');process.exit(0)"];
     const out = await spawnCapture({ bin: NODE, args, label: "claude -p", notFoundMessage: "n/a" });
-    assert.equal(out, "hello");
+    assert.equal(out.stdout, "hello");
+    assert.equal(out.exitCode, 0);
   });
 
   it("rejects EXECUTOR_NOT_FOUND when the binary is missing", async () => {

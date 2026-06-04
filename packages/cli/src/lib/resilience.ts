@@ -36,9 +36,34 @@ export interface SpawnTimeouts {
   idle_timeout_ms?: number;
 }
 
+// Default per-spawn wall-time cap. A single agent spawn that runs longer than
+// this is wedged — the live failure was a planner that looped ~30 min on failing
+// tool calls and never returned a result, with NO cap to stop it. A generous
+// default bounds a runaway (killed → re-driven → eventually parked) without
+// false-killing a heavy-but-legit spawn. Override with
+// LOOM_SPAWN_SESSION_TIMEOUT_MS; set it to 0 to disable the cap.
+export const DEFAULT_SPAWN_SESSION_TIMEOUT_MS = 1_800_000; // 30m
+
+// There is deliberately NO default IDLE cap. `claude -p --output-format json`
+// (the primary backend) does not stream — it prints one JSON object at the END,
+// so its stdout is silent for the whole run, and a default idle cap would
+// false-kill every legitimate long spawn. Idle stays env-only
+// (LOOM_SPAWN_IDLE_TIMEOUT_MS), useful for a streaming harness (aider/opencode).
+
+// Resolve an env duration with a default: unset/blank/malformed → the default
+// (so a cap is always in force); an explicit 0 → no cap (opt-out); an explicit
+// positive value → that value.
+function resolveWithDefault(raw: string | undefined, def: number): number | undefined {
+  if (raw === undefined || raw.trim().length === 0) return def;
+  const ms = parseDurationMs(raw);
+  if (ms === undefined) return def;
+  if (ms === 0) return undefined;
+  return ms;
+}
+
 export function resolveSpawnTimeouts(env: NodeJS.ProcessEnv): SpawnTimeouts {
   const out: SpawnTimeouts = {};
-  const session = parseDurationMs(env["LOOM_SPAWN_SESSION_TIMEOUT_MS"]);
+  const session = resolveWithDefault(env["LOOM_SPAWN_SESSION_TIMEOUT_MS"], DEFAULT_SPAWN_SESSION_TIMEOUT_MS);
   if (session !== undefined && session > 0) out.session_timeout_ms = session;
   const idle = parseDurationMs(env["LOOM_SPAWN_IDLE_TIMEOUT_MS"]);
   if (idle !== undefined && idle > 0) out.idle_timeout_ms = idle;

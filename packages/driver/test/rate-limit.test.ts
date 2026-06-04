@@ -92,3 +92,30 @@ describe("defaultRateLimitDetector — over raw stdout / stderr (the non-zero-ex
     assert.equal(defaultRateLimitDetector({ stdout: "", stderr: "" }), false);
   });
 });
+
+describe("defaultRateLimitDetector — non-parseable (non-JSON) stdout", () => {
+  it("fires on explicit limit / overload WORDING in raw, non-JSON output", () => {
+    assert.equal(
+      defaultRateLimitDetector({ stdout: "You've hit your weekly limit · resets Mon", exitCode: 0 }),
+      true,
+    );
+    assert.equal(defaultRateLimitDetector({ stdout: "Error: API is overloaded, try later" }), true);
+    assert.equal(defaultRateLimitDetector({ stdout: "rate limit exceeded for your plan" }), true);
+  });
+
+  it("does NOT fire on a bare '429' in raw output — it is as likely a line number", () => {
+    // The exact false positive the live failure warned about: a flailing planner
+    // whose transcript mentioned "line 429" must not be misread as rate-limited.
+    assert.equal(
+      defaultRateLimitDetector({ stdout: "TypeError at src/foo.ts:429:12\n  at run()", exitCode: 1 }),
+      false,
+    );
+  });
+
+  it("does not fire on a generic non-JSON flail with no limit wording", () => {
+    assert.equal(
+      defaultRateLimitDetector({ stdout: "I tried to read the file but it does not exist", exitCode: 1 }),
+      false,
+    );
+  });
+});

@@ -24,9 +24,13 @@ import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 import {
   buildClaudeArgs,
   createSandboxedExecutor,
+  defaultRateLimitDetector,
   parseClaudeResult,
+  provisionWorktree,
   worktreePathFor,
 } from "../src/index.js";
+
+import { mkdirSync } from "node:fs";
 
 function intent(overrides: Partial<ProviderShuttleIntent> = {}): ProviderShuttleIntent {
   return {
@@ -59,12 +63,35 @@ function freshGitProject(): string {
 }
 
 function cleanup(projectDir: string): void {
-  // Remove the worktree first (its .git file points back into the repo), then
-  // the project. force/recursive so a partially-written tree never blocks.
-  const wt = worktreePathFor(projectDir);
-  spawnSync("git", ["-C", projectDir, "worktree", "remove", "--force", wt], { encoding: "utf8" });
-  rmSync(wt, { recursive: true, force: true });
+  // The sandbox is a standalone copy (not a registered worktree); a plain
+  // recursive removal suffices. force/recursive so a partial tree never blocks.
+  rmSync(worktreePathFor(projectDir), { recursive: true, force: true });
   rmSync(projectDir, { recursive: true, force: true });
+}
+
+function headOf(dir: string): string {
+  return spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
+}
+
+// A git project that ALSO carries gitignored generated code + a stand-in
+// `node_modules` (committed only `.gitignore` + `seed.ts`) — the real-project
+// shape a tracked-only checkout would have left incomplete.
+function gitProjectWithIgnored(): string {
+  const dir = mkdtempSync(join(tmpdir(), "loom-wt-ign-"));
+  git(dir, "init", "-q");
+  git(dir, "config", "user.email", "test@loom.local");
+  git(dir, "config", "user.name", "loom test");
+  git(dir, "config", "commit.gpgsign", "false");
+  writeFileSync(join(dir, ".gitignore"), "node_modules/\ngenerated/\n", "utf8");
+  writeFileSync(join(dir, "seed.ts"), "export const seed = 1;\n", "utf8");
+  git(dir, "add", ".gitignore", "seed.ts");
+  git(dir, "commit", "-q", "-m", "seed");
+  // Gitignored, uncommitted — present on disk, ABSENT from a git checkout.
+  mkdirSync(join(dir, "generated", "prisma"), { recursive: true });
+  writeFileSync(join(dir, "generated", "prisma", "index.d.ts"), "export type P = 1;\n", "utf8");
+  mkdirSync(join(dir, "node_modules", "dep"), { recursive: true });
+  writeFileSync(join(dir, "node_modules", "dep", "index.js"), "module.exports = 1;\n", "utf8");
+  return dir;
 }
 
 describe("createSandboxedExecutor — worktree isolation + self-diff", () => {
@@ -136,6 +163,26 @@ describe("createSandboxedExecutor — worktree isolation + self-diff", () => {
     }
   });
 
+  it("a spawn inside the copy can READ a gitignored generated file (the root-cause fix)", async () => {
+    const projectDir = gitProjectWithIgnored();
+    try {
+      let readBack = "";
+      const executor = createSandboxedExecutor({
+        project_dir: projectDir,
+        runSpawn: async (_i, dir) => {
+          // The generated Prisma client is gitignored — a tracked-only checkout
+          // would 'path does not exist' here; the full copy carries it.
+          readBack = readFileSync(join(dir, "generated", "prisma", "index.d.ts"), "utf8");
+          return "ok";
+        },
+      });
+      await executor.execute(intent());
+      assert.equal(readBack, "export type P = 1;\n");
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
   it("degrades to the project dir (no isolation) for a non-git project", async () => {
     const projectDir = mkdtempSync(join(tmpdir(), "loom-wt-nogit-"));
     try {
@@ -163,6 +210,40 @@ describe("createSandboxedExecutor — worktree isolation + self-diff", () => {
       rmSync(projectDir, { recursive: true, force: true });
     }
   });
+});
+
+describe("provisionWorktree — full copy carries gitignored files + deps", () => {
+  for (const forcePlainCopy of [false, true]) {
+    const label = forcePlainCopy ? "plain copy (forced fallback)" : "copy-on-write";
+    it(`carries gitignored generated code + node_modules + .git into the copy (${label})`, () => {
+      const projectDir = gitProjectWithIgnored();
+      try {
+        const wt = provisionWorktree(projectDir, { forcePlainCopy });
+        assert.equal(wt.isolated, true);
+        assert.equal(wt.dir, worktreePathFor(projectDir));
+        assert.equal(wt.baseline, headOf(projectDir));
+
+        // The gitignored generated client + a stand-in node_modules dep are
+        // PRESENT in the copy — a tracked-only checkout would have omitted them.
+        assert.equal(
+          readFileSync(join(wt.dir, "generated", "prisma", "index.d.ts"), "utf8"),
+          "export type P = 1;\n",
+        );
+        assert.ok(existsSync(join(wt.dir, "node_modules", "dep", "index.js")));
+        // .git was copied too (merge-back needs it); HEAD resolves in the copy.
+        assert.ok(existsSync(join(wt.dir, ".git")));
+        const copyHead = spawnSync("git", ["-C", wt.dir, "rev-parse", "HEAD"], {
+          encoding: "utf8",
+        }).stdout.trim();
+        assert.equal(copyHead, wt.baseline);
+
+        // The real tree is never touched by provisioning.
+        assert.equal(readFileSync(join(projectDir, "seed.ts"), "utf8"), "export const seed = 1;\n");
+      } finally {
+        cleanup(projectDir);
+      }
+    });
+  }
 });
 
 describe("claude -p runner helpers", () => {
@@ -214,5 +295,31 @@ describe("claude -p runner helpers", () => {
     );
     assert.throws(() => parseClaudeResult("not json at all"), /parseable JSON/);
     assert.throws(() => parseClaudeResult(JSON.stringify({ type: "result" })), /'result' field/);
+  });
+
+  it("folds the raw stdout/stderr into the parse-failure message (diagnosable)", () => {
+    try {
+      parseClaudeResult("I gave up after many failing tool calls — no JSON here", undefined, {
+        stderr: "permission denied: cd /real/tree",
+        exitCode: 0,
+      });
+      assert.fail("expected a throw");
+    } catch (err) {
+      assert.equal((err as { code?: string }).code, "EXECUTOR_OUTPUT_INVALID");
+      // The raw output rides in the message, not just the structured detail.
+      assert.match((err as Error).message, /no JSON here/);
+      assert.match((err as Error).message, /permission denied/);
+    }
+  });
+
+  it("classifies a non-JSON rate-limit notice as EXECUTOR_RATE_LIMITED, not OUTPUT_INVALID", () => {
+    try {
+      parseClaudeResult("You've hit your weekly limit · resets Monday", defaultRateLimitDetector, {
+        exitCode: 0,
+      });
+      assert.fail("expected a throw");
+    } catch (err) {
+      assert.equal((err as { code?: string }).code, "EXECUTOR_RATE_LIMITED");
+    }
   });
 });

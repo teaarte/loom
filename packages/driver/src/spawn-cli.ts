@@ -31,6 +31,35 @@ import type { RateLimitDetector } from "./rate-limit.js";
 // SIGTERM to PID1 so `--rm` can clean up) tear down cleanly before forcing it.
 const KILL_GRACE_MS = 5_000;
 
+// How much of each captured stream is folded into a failure (truncated). A
+// failed/hung spawn is only diagnosable if its raw output rides into the
+// surfaced error — `drive()` forwards the thrown error's MESSAGE, not its
+// structured detail, so the raw tail has to live in the message to reach the
+// daemon log without spelunking the backend's own session transcript.
+const RAW_HEAD = 1_500;
+const RAW_TAIL = 1_500;
+
+// Keep the head AND tail of a long stream (the start of a broken JSON envelope
+// and the final error/result, which sit at opposite ends), bounded so a log
+// line never balloons. A short stream passes through whole.
+export function truncateStream(s: string, head = RAW_HEAD, tail = RAW_TAIL): string {
+  const t = s.trim();
+  const max = head + tail;
+  if (t.length <= max) return t;
+  return `${t.slice(0, head)}\n…[${t.length - max} chars omitted]…\n${t.slice(t.length - tail)}`;
+}
+
+// A compact "what did it actually print?" annex for a failure message — only
+// the streams that carried anything, each truncated.
+function rawAnnex(stdout: string, stderr: string): string {
+  const parts: string[] = [];
+  const out = stdout.trim();
+  const err = stderr.trim();
+  if (out.length > 0) parts.push(`--- stdout ---\n${truncateStream(out)}`);
+  if (err.length > 0) parts.push(`--- stderr ---\n${truncateStream(err)}`);
+  return parts.length > 0 ? `\n${parts.join("\n")}` : "";
+}
+
 export interface SpawnCaptureOptions {
   bin: string;
   args: string[];
@@ -56,13 +85,23 @@ export interface SpawnCaptureOptions {
   detectRateLimit?: RateLimitDetector;
 }
 
-// Spawn the CLI and resolve with its stdout on a clean (exit 0) run. Rejects
-// with EXECUTOR_NOT_FOUND on ENOENT, EXECUTOR_TIMEOUT / EXECUTOR_IDLE_TIMEOUT on
-// a timeout kill, EXECUTOR_RATE_LIMITED on a recognised rate-limit, and
-// EXECUTOR_FAILED on any other non-zero exit — the loop's executor-retry /
-// rate-limit-wait / error-surfacing handles each.
-export function spawnCapture(opts: SpawnCaptureOptions): Promise<string> {
-  return new Promise<string>((resolveRun, reject) => {
+// A clean (exit 0) capture: stdout for the caller's parser, plus the stderr and
+// exit code so a downstream parse FAILURE can fold the raw output into its error
+// (the caller only sees these on success; a non-zero exit is rejected here).
+export interface SpawnCaptureResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+}
+
+// Spawn the CLI and resolve with its captured streams on a clean (exit 0) run.
+// Rejects with EXECUTOR_NOT_FOUND on ENOENT, EXECUTOR_TIMEOUT /
+// EXECUTOR_IDLE_TIMEOUT on a timeout kill, EXECUTOR_RATE_LIMITED on a recognised
+// rate-limit, and EXECUTOR_FAILED on any other non-zero exit (its message
+// carries the truncated raw stdout/stderr so the failure is diagnosable) — the
+// loop's executor-retry / rate-limit-wait / error-surfacing handles each.
+export function spawnCapture(opts: SpawnCaptureOptions): Promise<SpawnCaptureResult> {
+  return new Promise<SpawnCaptureResult>((resolveRun, reject) => {
     const child = spawn(opts.bin, opts.args, {
       // No stdin: this is a non-interactive capture seam — the backend's input
       // rides in argv, never on stdin. `ignore` gives the child immediate EOF on
@@ -167,13 +206,18 @@ export function spawnCapture(opts: SpawnCaptureOptions): Promise<string> {
     child.on("close", (exitCode) => {
       clearTimers();
       // A timeout kill: surface the timeout class, not the incidental non-zero
-      // exit the kill produced.
+      // exit the kill produced. Carry the raw tails so a wedged spawn's partial
+      // output is inspectable.
       if (timedOut !== null) {
         reject(
           new KernelError({
             code: timedOut.code,
-            message: timedOut.message,
-            detail: { exit_code: exitCode, stderr_head: stderr.slice(0, 1000) },
+            message: `${timedOut.message}${rawAnnex(stdout, stderr)}`,
+            detail: {
+              exit_code: exitCode,
+              stdout_head: truncateStream(stdout),
+              stderr_head: truncateStream(stderr),
+            },
           }),
         );
         return;
@@ -186,21 +230,28 @@ export function spawnCapture(opts: SpawnCaptureOptions): Promise<string> {
             new KernelError({
               code: "EXECUTOR_RATE_LIMITED",
               message: `${opts.label} hit a rate limit / quota`,
-              detail: { exit_code: exitCode, stderr_head: stderr.slice(0, 1000) },
+              detail: { exit_code: exitCode, stderr_head: truncateStream(stderr) },
             }),
           );
           return;
         }
+        // Fold the raw stdout/stderr (truncated) into the MESSAGE: `drive()`
+        // forwards the message but drops the detail, so this is the only path by
+        // which "why did this spawn fail?" reaches the daemon log.
         reject(
           new KernelError({
             code: "EXECUTOR_FAILED",
-            message: `${opts.label} exited with code ${exitCode}`,
-            detail: { exit_code: exitCode, stderr_head: stderr.slice(0, 1000) },
+            message: `${opts.label} exited with code ${exitCode}${rawAnnex(stdout, stderr)}`,
+            detail: {
+              exit_code: exitCode,
+              stdout_head: truncateStream(stdout),
+              stderr_head: truncateStream(stderr),
+            },
           }),
         );
         return;
       }
-      resolveRun(stdout);
+      resolveRun({ stdout, stderr, exitCode });
     });
   });
 }

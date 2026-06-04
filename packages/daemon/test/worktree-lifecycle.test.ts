@@ -4,7 +4,7 @@
 // removes the worktree. The branch ref must OUTLIVE the worktree dir.
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,6 +95,36 @@ describe("worktree-lifecycle — commit-to-branch merge-back", () => {
       const result = commitToBranchMergeBack(dir, "task-none");
       assert.equal(result.merged, false);
       assert.equal(result.reason, "no-worktree");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  it("carries gitignored files in the copy but keeps them OUT of the merge-back branch", () => {
+    const dir = freshGitRepo();
+    try {
+      // Add a .gitignore so a generated dir is ignored, then provision a copy.
+      writeFileSync(join(dir, ".gitignore"), "generated/\n", "utf8");
+      spawnSync("git", ["-C", dir, "add", ".gitignore"], { encoding: "utf8" });
+      spawnSync(
+        "git",
+        ["-C", dir, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "ignore"],
+        { encoding: "utf8" },
+      );
+      const wt = provisionWorktree(dir);
+
+      // The agent edits a TRACKED file and (re)generates a GITIGNORED one.
+      writeFileSync(join(wt.dir, "seed.ts"), "export const seed = 2;\n", "utf8");
+      mkdirSync(join(wt.dir, "generated"), { recursive: true });
+      writeFileSync(join(wt.dir, "generated", "out.ts"), "export const gen = 1;\n", "utf8");
+
+      const result = commitToBranchMergeBack(dir, "task-ign");
+      assert.equal(result.merged, true);
+      // The tracked edit is on the branch; the gitignored generated file is NOT.
+      assert.ok(result.files_changed?.includes("seed.ts"));
+      assert.equal(result.files_changed?.includes("generated/out.ts"), false);
+      assert.equal(git(dir, "cat-file", "-e", "loom/task-ign:generated/out.ts").ok, false);
+      assert.equal(git(dir, "show", "loom/task-ign:seed.ts").stdout, "export const seed = 2;");
     } finally {
       cleanup(dir);
     }

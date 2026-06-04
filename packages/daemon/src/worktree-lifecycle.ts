@@ -1,17 +1,24 @@
-// Worktree lifecycle — the half D2 explicitly left to E1: merge-back of the
-// isolated worktree's changes, plus GC.
+// Sandbox lifecycle — merge-back of the isolated copy's changes, plus GC.
 //
-// D2 runs each headless spawn in a detached git worktree at a deterministic
-// out-of-repo path (`worktreePathFor`) and self-diffs it, but it never
-// integrates or cleans the result — "D2 isolates and accounts; it does not
-// auto-merge." On `complete` the supervisor here commits the worktree's work
-// to a branch `loom/<task_id>` (the branch ref outlives the worktree dir),
-// then removes the worktree. It NEVER auto-merges into the operator's checked
-// out branch — the work lands reviewable on its own branch, and the operator
-// merges (or discards) it deliberately.
+// The sandboxed executor runs each headless spawn in an isolated COPY of the
+// project (a copy-on-write full copy at a deterministic out-of-repo path —
+// `worktreePathFor` for the non-container backend, `clonePathFor` for the
+// container backend) and self-diffs it, but it never integrates or cleans the
+// result — "isolate and account; do not auto-merge." On `complete` the
+// supervisor here commits the copy's work to a branch `loom/<task_id>` (the
+// branch ref outlives the copy dir), then removes the copy. It NEVER auto-merges
+// into the operator's checked-out branch — the work lands reviewable on its own
+// branch, and the operator merges (or discards) it deliberately.
 //
-// Domain-blind: this reasons about git refs and paths only — never a
-// bundle's vocabulary (the driver/daemon-leak gate stays green).
+// Because the isolated copy is a SEPARATE repo (its own `.git`, copied), the
+// branch must be EXTRACTED into the shared repo via a host-side `git fetch` from
+// the copy (into FETCH_HEAD, then a local branch) — a colon-refspec push would
+// risk writing into the operator's checked-out repo. Both backends share this
+// one path (`mergeBackFromCopy`); they differ only in WHERE the copy lives and
+// how its dir is GC'd.
+//
+// Domain-blind: this reasons about git refs and paths only — never a bundle's
+// vocabulary (the driver/daemon-leak gate stays green).
 
 import { spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
@@ -19,7 +26,7 @@ import { existsSync, rmSync } from "node:fs";
 import { clonePathFor, worktreePathFor } from "@loomfsm/driver";
 
 export interface MergeBackResult {
-  // True when the worktree's work was committed to a `loom/<task>` branch.
+  // True when the copy's work was committed to a `loom/<task>` branch.
   merged: boolean;
   // Present when merged: the branch name, its tip sha, and the file set
   // (name-only) relative to the project's current HEAD — surfaced so the
@@ -27,10 +34,10 @@ export interface MergeBackResult {
   branch?: string;
   head_sha?: string;
   files_changed?: string[];
-  // The isolated working copy (worktree or clone) was removed (GC ran).
+  // The isolated copy (worktree-path or clone-path) was removed (GC ran).
   worktree_removed?: boolean;
   // When not merged, why: "no-worktree" / "no-clone" (never provisioned),
-  // "no-git", "no-head", "no-changes", "branch-failed", or (clone) "fetch-failed".
+  // "no-git", "no-head", "no-changes", "branch-failed", or "fetch-failed".
   reason?: string;
 }
 
@@ -61,142 +68,112 @@ function branchNameFor(taskId: string): string {
   return `loom/${safe.length > 0 ? safe : "task"}`;
 }
 
-// Commit the task's worktree to a `loom/<task_id>` branch and (by default)
-// GC the worktree. Idempotent: a re-run force-updates the branch and a
-// missing worktree is a clean no-op. Never throws on a git failure — it
-// degrades to `{ merged: false, reason }` so a merge-back hiccup never
-// crashes the supervisor mid-completion.
+// Integrate one isolated COPY's work into the project as a `loom/<task>` branch,
+// then (by default) GC the copy. The copy is a separate repo, so the branch is
+// EXTRACTED via a host-side fetch (never pushed into the checked-out repo).
+// Idempotent: a re-run force-updates the branch and a missing copy is a clean
+// no-op. Never throws on a git failure — it degrades to `{ merged:false, reason }`
+// so a merge-back hiccup never crashes the supervisor mid-completion.
+function mergeBackFromCopy(args: {
+  projectDir: string;
+  copyDir: string;
+  taskId: string | null;
+  gc: boolean;
+  removeDir: (projectDir: string) => boolean;
+  noCopyReason: string;
+}): MergeBackResult {
+  const { projectDir, copyDir, taskId, gc, removeDir, noCopyReason } = args;
+  const finish = (result: MergeBackResult): MergeBackResult =>
+    gc ? { ...result, worktree_removed: removeDir(projectDir) } : result;
+
+  // No isolated copy (a non-git project degraded to running in-place, or nothing
+  // was ever provisioned) → nothing to integrate, and nothing to GC.
+  if (!existsSync(copyDir)) return { merged: false, reason: noCopyReason };
+  if (!isWorkTree(projectDir)) return finish({ merged: false, reason: "no-git" });
+
+  const projectHead = git(projectDir, ["rev-parse", "HEAD"]).stdout;
+
+  // Stage everything the agent left (git respects .gitignore, so node_modules /
+  // generated code carried by the copy are NOT committed), then commit only if
+  // the index actually differs. A backend that committed its own work leaves a
+  // clean index but an advanced HEAD — caught by the sha comparison below.
+  // `core.hooksPath=/dev/null` neutralises any pre-commit hook the copied `.git`
+  // carried (this internal merge-back commit must not run the project's hooks).
+  git(copyDir, ["add", "-A"]);
+  const indexDirty = !git(copyDir, ["diff", "--cached", "--quiet"]).ok; // exit 1 == dirty
+  if (indexDirty) {
+    git(copyDir, [
+      "-c",
+      "user.email=loom@localhost",
+      "-c",
+      "user.name=loom",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "commit",
+      "-m",
+      `loom: ${taskId ?? "task"}`,
+    ]);
+  }
+
+  const copyHead = git(copyDir, ["rev-parse", "HEAD"]).stdout;
+  if (copyHead.length === 0) return finish({ merged: false, reason: "no-head" });
+  // Nothing changed relative to the task-start state → no branch worth making.
+  if (copyHead === projectHead) return finish({ merged: false, reason: "no-changes" });
+
+  const branch = branchNameFor(taskId ?? "task");
+  // Name the work in the copy, then EXTRACT it into the shared repo: a host-side
+  // fetch into FETCH_HEAD (avoids a colon-refspec and never pushes into the
+  // operator's checked-out repo), then create the local branch. The fetch copies
+  // copyHead's objects into the shared store, so the diff below resolves there.
+  const named = git(copyDir, ["branch", "-f", branch, copyHead]);
+  if (!named.ok) return finish({ merged: false, reason: "branch-failed" });
+  const fetched = git(projectDir, ["fetch", "--quiet", copyDir, branch]);
+  if (!fetched.ok) return finish({ merged: false, reason: "fetch-failed" });
+  const branched = git(projectDir, ["branch", "-f", branch, "FETCH_HEAD"]);
+  if (!branched.ok) return finish({ merged: false, reason: "branch-failed" });
+
+  const files = parsePaths(git(projectDir, ["diff", "--name-only", projectHead, copyHead]).stdout);
+  return finish({ merged: true, branch, head_sha: copyHead, files_changed: files });
+}
+
+// Merge-back for the non-container backend (copy at `worktreePathFor`).
 export function commitToBranchMergeBack(
   projectDir: string,
   taskId: string | null,
   opts: { gc?: boolean } = {},
 ): MergeBackResult {
-  const gc = opts.gc ?? true;
-  const wt = worktreePathFor(projectDir);
-
-  // No isolated worktree (a non-git project degraded to running in-place, or
-  // nothing was ever provisioned) → nothing to integrate.
-  if (!existsSync(wt)) return { merged: false, reason: "no-worktree" };
-  if (!isWorkTree(projectDir)) return { merged: false, reason: "no-git" };
-
-  const projectHead = git(projectDir, ["rev-parse", "HEAD"]).stdout;
-
-  // Stage everything the agent left, then commit only if the index actually
-  // differs (a backend that committed its own work leaves a clean index but
-  // an advanced detached HEAD — handled by the sha comparison below).
-  git(wt, ["add", "-A"]);
-  const indexDirty = !git(wt, ["diff", "--cached", "--quiet"]).ok; // exit 1 == dirty
-  if (indexDirty) {
-    git(wt, [
-      "-c",
-      "user.email=loom@localhost",
-      "-c",
-      "user.name=loom",
-      "-c",
-      "commit.gpgsign=false",
-      "commit",
-      "-m",
-      `loom: ${taskId ?? "task"}`,
-    ]);
-  }
-
-  const headSha = git(wt, ["rev-parse", "HEAD"]).stdout;
-  if (headSha.length === 0) {
-    return finishGc(projectDir, wt, gc, { merged: false, reason: "no-head" });
-  }
-  // Nothing changed relative to the task-start state → no branch worth making.
-  if (headSha === projectHead) {
-    return finishGc(projectDir, wt, gc, { merged: false, reason: "no-changes" });
-  }
-
-  const branch = branchNameFor(taskId ?? "task");
-  const branched = git(projectDir, ["branch", "-f", branch, headSha]);
-  if (!branched.ok) {
-    return finishGc(projectDir, wt, gc, { merged: false, reason: "branch-failed" });
-  }
-
-  const files = parsePaths(
-    git(projectDir, ["diff", "--name-only", projectHead, headSha]).stdout,
-  );
-  return finishGc(projectDir, wt, gc, {
-    merged: true,
-    branch,
-    head_sha: headSha,
-    files_changed: files,
+  return mergeBackFromCopy({
+    projectDir,
+    copyDir: worktreePathFor(projectDir),
+    taskId,
+    gc: opts.gc ?? true,
+    removeDir: removeWorktree,
+    noCopyReason: "no-worktree",
   });
 }
 
-// The container backend's merge-back: integrate the dedicated CLONE's work,
-// not a worktree's. A `git clone --local` is a SEPARATE repo with its own
-// refs, so the `loom/<task>` branch must be EXTRACTED into the shared repo
-// (host-side `git fetch` from the clone), where the worktree variant's ref
-// lands directly. Otherwise identical posture: commit the agent's work, branch
-// it, NEVER auto-merge into the checked-out tree, then GC the clone. Never
-// throws — degrades to `{ merged: false, reason }` so a hiccup never crashes
-// the supervisor mid-completion.
+// Merge-back for the container backend (copy at `clonePathFor`). Identical
+// posture; only the copy location and its GC differ.
 export function commitToBranchMergeBackFromClone(
   projectDir: string,
   taskId: string | null,
   opts: { gc?: boolean } = {},
 ): MergeBackResult {
-  const gc = opts.gc ?? true;
-  const clone = clonePathFor(projectDir);
-
-  // No clone (a non-container run, or nothing provisioned) → nothing to do.
-  if (!existsSync(clone)) return { merged: false, reason: "no-clone" };
-  if (!isWorkTree(projectDir)) return finishGcClone(projectDir, gc, { merged: false, reason: "no-git" });
-
-  const projectHead = git(projectDir, ["rev-parse", "HEAD"]).stdout;
-
-  // Stage + commit inside the clone (idempotent: a clean index is a no-op; a
-  // backend that committed its own work leaves a clean index but an advanced
-  // HEAD — caught by the sha comparison below).
-  git(clone, ["add", "-A"]);
-  const indexDirty = !git(clone, ["diff", "--cached", "--quiet"]).ok; // exit 1 == dirty
-  if (indexDirty) {
-    git(clone, [
-      "-c",
-      "user.email=loom@localhost",
-      "-c",
-      "user.name=loom",
-      "-c",
-      "commit.gpgsign=false",
-      "commit",
-      "-m",
-      `loom: ${taskId ?? "task"}`,
-    ]);
-  }
-
-  const cloneHead = git(clone, ["rev-parse", "HEAD"]).stdout;
-  if (cloneHead.length === 0) return finishGcClone(projectDir, gc, { merged: false, reason: "no-head" });
-  if (cloneHead === projectHead) return finishGcClone(projectDir, gc, { merged: false, reason: "no-changes" });
-
-  const branch = branchNameFor(taskId ?? "task");
-  // Name the work in the clone, then EXTRACT it into the shared repo: a
-  // host-side fetch into FETCH_HEAD (avoids a colon-refspec and never pushes
-  // into the operator's checked-out repo), then create the local branch. The
-  // fetch copies cloneHead's objects into the shared store, so the diff below
-  // resolves there.
-  const named = git(clone, ["branch", "-f", branch, cloneHead]);
-  if (!named.ok) return finishGcClone(projectDir, gc, { merged: false, reason: "branch-failed" });
-  const fetched = git(projectDir, ["fetch", "--quiet", clone, branch]);
-  if (!fetched.ok) return finishGcClone(projectDir, gc, { merged: false, reason: "fetch-failed" });
-  const branched = git(projectDir, ["branch", "-f", branch, "FETCH_HEAD"]);
-  if (!branched.ok) return finishGcClone(projectDir, gc, { merged: false, reason: "branch-failed" });
-
-  const files = parsePaths(git(projectDir, ["diff", "--name-only", projectHead, cloneHead]).stdout);
-  return finishGcClone(projectDir, gc, {
-    merged: true,
-    branch,
-    head_sha: cloneHead,
-    files_changed: files,
+  return mergeBackFromCopy({
+    projectDir,
+    copyDir: clonePathFor(projectDir),
+    taskId,
+    gc: opts.gc ?? true,
+    removeDir: removeClone,
+    noCopyReason: "no-clone",
   });
 }
 
-// Remove the project's dedicated clone. A clone is a standalone repo (NOT a
-// registered worktree), so this is a plain directory removal — no
-// `git worktree` admin. The extracted branch ref lives in the shared store and
-// survives. Safe when there is no clone.
+// Remove the project's container-backend copy. A copy is a standalone repo (NOT
+// a registered git worktree), so this is a plain directory removal. The extracted
+// branch ref lives in the shared store and survives. Safe when there is none.
 export function removeClone(projectDir: string): boolean {
   const clone = clonePathFor(projectDir);
   if (!existsSync(clone)) return false;
@@ -208,8 +185,8 @@ export function removeClone(projectDir: string): boolean {
   return !existsSync(clone);
 }
 
-// Startup GC for the clone, mirroring `sweepOrphanWorktree`: drop this
-// project's clone when no task is live to own it (a previous container run that
+// Startup GC for the container copy, mirroring `sweepOrphanWorktree`: drop this
+// project's copy when no task is live to own it (a previous container run that
 // died after finishing). A no-op when none exists.
 export function sweepOrphanClone(
   projectDir: string,
@@ -220,30 +197,30 @@ export function sweepOrphanClone(
   return { removed: removeClone(projectDir) };
 }
 
-// Remove the project's worktree (and prune its admin entry). Safe to call
-// when there is no worktree. The branch ref created above is NOT touched —
-// it lives in the shared object store and survives the removal.
+// Remove the project's non-container copy. The copy is a plain directory (a
+// standalone repo, NOT a registered git worktree), so this is a plain removal;
+// `git worktree prune` then clears any LEGACY admin entry a pre-copy version may
+// have left (harmless when there is none). The branch ref created above lives in
+// the shared store and survives. Safe to call when there is nothing to remove.
 export function removeWorktree(projectDir: string): boolean {
   const wt = worktreePathFor(projectDir);
   if (!existsSync(wt)) {
     git(projectDir, ["worktree", "prune"]);
     return false;
   }
-  git(projectDir, ["worktree", "remove", "--force", wt]);
-  // Belt-and-suspenders if git left the directory behind.
   try {
     rmSync(wt, { recursive: true, force: true });
   } catch {
-    /* a lingering dir is not fatal — prune below tidies the admin entry */
+    /* a lingering dir is not fatal — prune below tidies any admin entry */
   }
   git(projectDir, ["worktree", "prune"]);
-  return true;
+  return !existsSync(wt);
 }
 
-// Startup GC: prune stale worktree admin entries, and remove THIS project's
-// worktree when no task is live to own it (a previous run that died after
-// finishing, or a rotated slot). Scoped to the single project — an age-based
-// sweep across every project's worktrees is a follow-on.
+// Startup GC: remove THIS project's copy when no task is live to own it (a
+// previous run that died after finishing, or a rotated slot), and prune any
+// stale legacy worktree admin entries. Scoped to the single project — an
+// age-based sweep across every project's copies is a follow-on.
 export function sweepOrphanWorktree(
   projectDir: string,
   opts: { slotInProgress: boolean },
@@ -253,23 +230,6 @@ export function sweepOrphanWorktree(
   const wt = worktreePathFor(projectDir);
   if (!existsSync(wt)) return { removed: false };
   return { removed: removeWorktree(projectDir) };
-}
-
-function finishGc(
-  projectDir: string,
-  _wt: string,
-  gc: boolean,
-  result: MergeBackResult,
-): MergeBackResult {
-  if (!gc) return result;
-  const removed = removeWorktree(projectDir);
-  return { ...result, worktree_removed: removed };
-}
-
-function finishGcClone(projectDir: string, gc: boolean, result: MergeBackResult): MergeBackResult {
-  if (!gc) return result;
-  const removed = removeClone(projectDir);
-  return { ...result, worktree_removed: removed };
 }
 
 function parsePaths(out: string): string[] {

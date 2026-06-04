@@ -84,6 +84,9 @@ export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executo
   const provision = (): WorktreeProvision => {
     if (provisioned === null) {
       provisioned = doProvision();
+      // A provisioning notice (e.g. the heavy plain-copy fallback when
+      // copy-on-write is unavailable) — surfaced once, never fatal.
+      if (provisioned.notice !== undefined) opts.onNotice?.(provisioned.notice);
       if (!provisioned.isolated) {
         opts.onNotice?.(
           `sandbox isolation unavailable (not a git work tree); ` +

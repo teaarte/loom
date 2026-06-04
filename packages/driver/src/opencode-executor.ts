@@ -183,7 +183,7 @@ async function spawnOpencode(
   signal: AbortSignal | undefined,
   capture: SpawnOpencodeOptions,
 ): Promise<RunSpawnResult> {
-  const stdout = await spawnCapture({
+  const { stdout } = await spawnCapture({
     bin,
     args,
     cwd,

@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -151,6 +151,36 @@ describe("provisionClone — dedicated clone over a real repo", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  for (const forcePlainCopy of [false, true]) {
+    const label = forcePlainCopy ? "plain copy (forced fallback)" : "copy-on-write";
+    it(`carries gitignored generated code + node_modules into the mounted copy (${label})`, () => {
+      const dir = mkdtempSync(join(tmpdir(), "loom-clone-ign-"));
+      git(dir, "init", "-q");
+      git(dir, "config", "user.email", "test@loom.local");
+      git(dir, "config", "user.name", "loom test");
+      git(dir, "config", "commit.gpgsign", "false");
+      writeFileSync(join(dir, ".gitignore"), "node_modules/\ngenerated/\n", "utf8");
+      writeFileSync(join(dir, "seed.ts"), "export const seed = 1;\n", "utf8");
+      git(dir, "add", ".gitignore", "seed.ts");
+      git(dir, "commit", "-q", "-m", "seed");
+      mkdirSync(join(dir, "generated"), { recursive: true });
+      writeFileSync(join(dir, "generated", "client.d.ts"), "export type C = 1;\n", "utf8");
+      mkdirSync(join(dir, "node_modules", "dep"), { recursive: true });
+      writeFileSync(join(dir, "node_modules", "dep", "index.js"), "module.exports = 1;\n", "utf8");
+      try {
+        const clone = provisionClone(dir, { forcePlainCopy });
+        assert.equal(clone.isolated, true);
+        // The copy Docker mounts rw now carries the gitignored generated client
+        // + deps — a `git clone --local` mount would have omitted both.
+        assert.equal(readFileSync(join(clone.dir, "generated", "client.d.ts"), "utf8"), "export type C = 1;\n");
+        assert.ok(existsSync(join(clone.dir, "node_modules", "dep", "index.js")));
+        assert.ok(existsSync(join(clone.dir, ".git")));
+      } finally {
+        cleanupClone(dir);
+      }
+    });
+  }
 });
 
 describe("parseClaudeUsage — usage/cost extraction from the claude -p envelope", () => {

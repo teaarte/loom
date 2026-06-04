@@ -195,7 +195,7 @@ export function createContainerExecutor(opts: ContainerExecutorOptions): Executo
         opts.oauth_token !== undefined && opts.oauth_token !== ""
           ? { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: opts.oauth_token }
           : undefined;
-      const stdout = await spawnCapture({
+      const { stdout, stderr, exitCode } = await spawnCapture({
         bin: dockerBin,
         args: dockerArgs,
         label: "docker run (claude -p)",
@@ -208,7 +208,7 @@ export function createContainerExecutor(opts: ContainerExecutorOptions): Executo
         ...(childEnv !== undefined ? { env: childEnv } : {}),
         ...(signal !== undefined ? { signal } : {}),
       });
-      const output = parseClaudeResult(stdout, detectRateLimit);
+      const output = parseClaudeResult(stdout, detectRateLimit, { stderr, exitCode });
       const usage = parseClaudeUsage(stdout);
       return usage !== undefined ? { output, usage } : { output };
     });

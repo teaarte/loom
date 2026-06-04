@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/dashboard",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "description": "loom's web control plane — a React SPA over the @loomfsm/server HTTP API. A PEER client of the same resolver the CLI drives: edit config/secrets/models, browse projects, submit tasks, answer gates. Ships as PREBUILT static assets the server serves at / — it adds no runtime dependency to the server.",
   "license": "Apache-2.0",

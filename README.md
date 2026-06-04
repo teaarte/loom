@@ -289,7 +289,7 @@ Full design rationale in [WHITEPAPER.md](WHITEPAPER.md).
 | Autonomy | `Policy = (state, role, ctx) → Decision` — three stock factories |
 | Default policy | `on-blockers` — asks a human only when a blocking finding exists |
 | Concurrency | One task in flight per project; finished tasks archive to `.claude/history/` |
-| Providers | `claude-code-shuttle` (zero-config, published); `anthropic-sdk`, `openrouter`, `ollama` in-repo; non-Claude work-agents via `aider` / `opencode` harness adapters (in development) |
+| Providers | `claude-code-shuttle` (zero-config), `anthropic-sdk`, `openrouter`, `ollama` — all published; non-Claude work-agents via `aider` / `opencode` harness adapters |
 | Transports | `mcp-server` (stdio), `cli`, the local-process `daemon`, and an HTTP control plane (`loom serve`) serving a React web dashboard |
 | License | Apache 2.0 |
 
@@ -298,7 +298,7 @@ Full design rationale in [WHITEPAPER.md](WHITEPAPER.md).
 ```
 packages/
   kernel/                  FSM, invariants, ledger, gate-policy, types — no vendor names
-  config/                  configure-once control layer — keys, per-agent model map, project catalog (in-repo)
+  config/                  configure-once control layer — keys, per-agent model map, project catalog (published)
   driver/                  orchestration runtime — drive() loop, Executor seam, and the backend executors (claude -p, container, aider / opencode harnesses)
   daemon/                  long-lived supervisor over drive() — park/wake, retry, recovery, worktree merge-back
   server/                  HTTP control plane — submit / read-model / answer / SSE, multi-project (published)
@@ -308,17 +308,18 @@ packages/
   pipeline/                @loomfsm/pipeline — the one-step `npm i -g` meta-package
   providers/
     claude-code-shuttle/   default provider, no API key needed (published)
-    anthropic-sdk/         direct Anthropic with prompt-caching + idempotent spawn (in-repo)
-    openrouter/            multi-model routing (in-repo)
-    ollama/                local models (in-repo)
+    anthropic-sdk/         direct Anthropic with prompt-caching + idempotent spawn (published)
+    openrouter/            multi-model routing (published)
+    ollama/                local models (published)
   bundles/
     code/                  the code-review / implementation bundle
 ```
 
 Published under the `@loomfsm/*` scope: install **`@loomfsm/pipeline`**, which pulls
-`@loomfsm/{kernel, driver, daemon, server, dashboard, mcp-server, cli, bundle-code, provider-claude-code-shuttle}`
-(plus `transport-types`). The control layer (`config`), the `anthropic-sdk` / `openrouter` /
-`ollama` providers, and the work-agent harness adapters live in the repo and build from source.
+`@loomfsm/{kernel, transport-types, config, driver, daemon, server, dashboard, mcp-server, cli, bundle-code, provider-claude-code-shuttle}`.
+The `anthropic-sdk` / `openrouter` / `ollama` providers also publish and install on demand
+(optional dependencies, so the base install stays lean). A second bundle used as a
+genericity fixture stays in-repo.
 
 ## What it isn't
 
@@ -329,9 +330,9 @@ Published under the `@loomfsm/*` scope: install **`@loomfsm/pipeline`**, which p
 
 ## Status & roadmap
 
-**In development (`0.3.0`) — configure once, any model, drive it from a browser, and run
-fully without Claude.** A control layer (`@loomfsm/config`) lets you set API keys and a
-per-agent model map *once*, globally, and keep a browsable project catalog — all from the CLI
+`v0.3.0` (current): **configure once, any model, drive it from a browser, and run without
+Claude.** A control layer (`@loomfsm/config`) lets you set API keys and a per-agent model map
+*once*, globally, and keep a browsable project catalog — all from the CLI
 (`loom config / secrets / models / projects`). Backend is then resolved **per spawn**: `auto` prefers the Claude Code CLI when
 it's present (your subscription, no key) and falls back to configured providers (OpenRouter
 / Ollama / Anthropic) otherwise. Decision-agents (classify, review) run as a single model
@@ -340,17 +341,16 @@ call; a **file-editing work-agent** runs through an agentic-CLI harness — **Ai
 run on, say, DeepSeek via OpenRouter or a local Ollama model and actually edit files. The
 harness is chosen by a generic, bundle-declared agent capability (does this agent edit
 files?), never by name. All of it is additive over the same `drive()` loop with **zero
-kernel change**; it has landed in the repo and the individual executor + dispatch paths are
-validated against real non-Claude models, with full-pipeline hardening ongoing. The same
-release adds a **web control plane**: a React dashboard the server hosts at its bind address
-(prebuilt static assets — no runtime dependency added), a peer client of the same routes the
-CLI drives — browse projects, tail a task's log, submit and answer gates, and edit the
-configure-once layer (config, secrets, per-agent models) through forms generated from the
-config schema. **`loom up`** (or a bare `loom`) brings the control plane up on localhost and
-opens it in your browser, zero flags required. The published `0.2.x` line is
-Claude-Code-backed and CLI/host-only.
+kernel change**; the per-spawn executor + dispatch paths are validated against real
+non-Claude models, with hardening continuing. This line also adds a **web control plane**: a
+React dashboard the server hosts at its bind address (prebuilt static assets — no runtime
+dependency added), a peer client of the same routes the CLI drives — browse projects, tail a
+task's log, submit and answer gates, and edit the configure-once layer (config, secrets,
+per-agent models) through forms generated from the config schema. **`loom up`** (or a bare
+`loom`) brings the control plane up on localhost and opens it in your browser, zero flags
+required.
 
-`v0.2.1` (current): the network control plane and unattended hardening. `loom serve` runs
+`v0.2.1`: the network control plane and unattended hardening. `loom serve` runs
 an HTTP control plane that supervises a fleet of projects over loopback — submit a task,
 read status, answer a gate, all as JSON routes (a reference Telegram intake adapter rides
 the same `/submit`). Each spawn can be fenced in a container for a safe permission bypass.

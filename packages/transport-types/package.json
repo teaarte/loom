@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/transport-types",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "Shared wire-response types for loom transports.",
   "license": "Apache-2.0",

@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/driver",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "Transport-neutral orchestration runtime for loom — the headless driver-loop, the directive→wire adapter, and the conformant delivery composition shared by every transport.",
   "license": "Apache-2.0",

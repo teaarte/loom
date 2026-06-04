@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/server",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "Network control plane for loom — an HTTP transport over the headless driver-loop and a registry that supervises a fleet of projects from one process. Submit a task, read status, and answer a gate over localhost; intake adapters (a dashboard, a chat bot, an issue poller) are thin clients of POST /submit.",
   "license": "Apache-2.0",

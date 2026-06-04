@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/bundle-code",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "Code review / implementation bundle for loom — agents, reference knowledge, schemas, and stack candidates.",
   "license": "Apache-2.0",

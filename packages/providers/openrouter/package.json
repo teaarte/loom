@@ -1,17 +1,32 @@
 {
   "name": "@loomfsm/provider-openrouter",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.3.0",
   "type": "module",
+  "description": "Multi-model routing provider for loom — runs agents through OpenRouter's OpenAI-compatible API.",
+  "license": "Apache-2.0",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/src"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
+    "prepack": "pnpm run build",
     "test": "tsc && node --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
     "@loomfsm/kernel": "workspace:*",
     "openai": "^6.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

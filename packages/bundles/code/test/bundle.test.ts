@@ -16,6 +16,7 @@ import {
 import type {
   Bundle,
   BundleStateView,
+  ConditionalSpawnContext,
   LLMProvider,
   NowToken,
   PipelineState,
@@ -89,7 +90,7 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
     // Every agent's `.md` is read off disk into the prompt map at load.
     assert.equal(registry.prompts?.size, 22);
     assert.ok((registry.prompts?.get("classifier")?.body.length ?? 0) > 0);
-    assert.equal(registry.flows.size, 3);
+    assert.equal(registry.flows.size, 4);
     assert.deepEqual(
       registry.flows.get("medium"),
       [
@@ -108,7 +109,7 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
     assert.ok(registry.vocabularies.gate_roles.has("classify"));
   });
 
-  it("declares a complexity→flow map and a lean `simple` flow (loads cleanly past the prefix invariant)", async () => {
+  it("declares a complexity→flow map, a lean `simple` flow, and a fast `trivial` flow (loads cleanly past the prefix invariant)", async () => {
     const now = captureNow();
     await installManifest(projectDir, now);
 
@@ -125,12 +126,17 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
     assert.ok(cf !== undefined, "bundle must declare complexity_flows");
     assert.equal(cf?.decision_key, "complexity");
     assert.equal(cf?.after_stage, "classify-agent");
-    assert.deepEqual(cf?.map, { simple: "simple", medium: "medium", complex: "complex" });
+    assert.deepEqual(cf?.map, {
+      trivial: "trivial",
+      simple: "simple",
+      medium: "medium",
+      complex: "complex",
+    });
 
-    // The three flows share the [initialize, classify, classify-agent]
+    // Every mapped flow shares the [initialize, classify, classify-agent]
     // prefix (the invariant the loader enforced to admit this bundle).
     const sharedPrefix = ["initialize", "classify", "classify-agent"];
-    for (const name of ["simple", "medium", "complex"]) {
+    for (const name of ["trivial", "simple", "medium", "complex"]) {
       assert.deepEqual(
         registry.flows.get(name)?.slice(0, 3),
         sharedPrefix,
@@ -144,6 +150,34 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
     assert.ok(!simple.includes("review"), "lean flow drops the review fanout");
     assert.ok(!simple.includes("plan-review"), "lean flow drops the plan-review fanout");
     assert.ok(!simple.includes("gate-classify"), "lean flow drops the classify gate");
+
+    // The `trivial` (fast-task) flow is a single implementer spawn → finalize:
+    // no planner, no reviewers, no gates.
+    const trivial = registry.flows.get("trivial") ?? [];
+    assert.ok(trivial.includes("implement"), "fast flow runs the implementer");
+    assert.ok(trivial.includes("finalize"), "fast flow finalizes");
+    for (const dropped of ["plan", "review", "review-light", "plan-review", "gate-classify", "gate-plan", "gate-final"]) {
+      assert.ok(!trivial.includes(dropped), `fast flow drops '${dropped}'`);
+    }
+  });
+
+  it("self-skips the classifier spawn when the operator pinned the complexity", () => {
+    const stage = codeBundle.stages["classify-agent"];
+    assert.equal(stage?.kind, "spawn");
+    const when = stage?.kind === "spawn" ? stage.when : undefined;
+    assert.ok(when !== undefined, "classify-agent must carry a `when` guard");
+    const ctx = {} as unknown as ConditionalSpawnContext;
+    const view = (decisions: Record<string, unknown>): BundleStateView =>
+      ({ decisions } as unknown as BundleStateView);
+
+    // Pinned (fast-task ⚡ or the complexity selector) → skip the classifier.
+    assert.equal(when(view({ complexity: "trivial", complexity_pinned: true }), ctx), false);
+    assert.equal(when(view({ complexity: "medium", complexity_pinned: true }), ctx), false);
+    // Not pinned → run the classifier (the default path is unchanged).
+    assert.equal(when(view({}), ctx), true);
+    assert.equal(when(view({ complexity: "complex" }), ctx), true);
+    // A pin flag without a valid complexity value is ignored (still classifies).
+    assert.equal(when(view({ complexity_pinned: true }), ctx), true);
   });
 
   it("materializes the declared spawn-context assets and injects them into the classifier prompt", async () => {

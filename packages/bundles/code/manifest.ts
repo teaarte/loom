@@ -6,7 +6,7 @@ export default defineManifest({
   display_name: "Code review & implementation bundle",
   description:
     "Multi-agent code-review / implementation flow — classifier, planner, reviewer fanout, gate, and finalize.",
-  version: "3.0.0",
+  version: "3.1.0",
   kind: "bundle",
   publisher: "@loom",
   // What this bundle's runtime structure actually demands. The loader

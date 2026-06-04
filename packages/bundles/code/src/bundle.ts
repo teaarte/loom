@@ -38,6 +38,30 @@ function decisionEquals(state: BundleStateView, key: string, value: unknown): bo
   return state.decisions[key] === value;
 }
 
+// The complexity values the flow router understands. `trivial` is the fast-task
+// flow (one implementer spawn, no gates/review); the other three are the
+// classifier's own output range.
+function isComplexity(v: unknown): v is "trivial" | "simple" | "medium" | "complex" {
+  return v === "trivial" || v === "simple" || v === "medium" || v === "complex";
+}
+
+// True when the OPERATOR pinned the complexity at submit (the ⚡ fast-task toggle
+// / complexity selector seeds `complexity` + `complexity_pinned` via
+// `initial_decisions`). When pinned, the heuristic `classify` step keeps the
+// value verbatim and the `classify-agent` spawn self-skips — a pinned task never
+// pays for (re-)classification, which is the whole point of fast-task.
+function complexityPinned(state: BundleStateView): boolean {
+  return state.decisions["complexity_pinned"] === true && isComplexity(state.decisions["complexity"]);
+}
+
+// `when` for the `classify-agent` spawn: run the classifier UNLESS the operator
+// pinned the complexity. A skipped spawn advances the stage launching nothing,
+// so the complexity switch (right after, `after_stage: classify-agent`) reads
+// the pinned value and routes accordingly.
+function shouldClassify(state: BundleStateView): boolean {
+  return !complexityPinned(state);
+}
+
 // The one source of truth for the `tests_mode` decision. Every producer
 // (the classify step below) and consumer (the planner template, the `test`
 // agent's `applies_to`, the host's task hint) speaks this union — there is
@@ -62,18 +86,22 @@ async function writeClassifyDecisions(
 ): Promise<void> {
   const task = state.task.toLowerCase();
   const len = task.length;
-  let complexity: "simple" | "medium" | "complex";
-  if (/\b(refactor|migrate|migration|architecture|redesign|rewrite)\b/.test(task) || len > 400) {
-    complexity = "complex";
-  } else if (len < 120 && /\b(typo|rename|bump|comment|docs?|readme)\b/.test(task)) {
-    complexity = "simple";
-  } else {
-    complexity = "medium";
+  // Honour an operator-pinned complexity verbatim; only guess when none was
+  // pinned (the default path — byte-identical to before).
+  if (!complexityPinned(state)) {
+    let complexity: "simple" | "medium" | "complex";
+    if (/\b(refactor|migrate|migration|architecture|redesign|rewrite)\b/.test(task) || len > 400) {
+      complexity = "complex";
+    } else if (len < 120 && /\b(typo|rename|bump|comment|docs?|readme)\b/.test(task)) {
+      complexity = "simple";
+    } else {
+      complexity = "medium";
+    }
+    ctx.tx.set_decision?.("complexity", complexity);
   }
   const tests_mode: TestsMode = /\btdd\b|tests? first|test-first/.test(task)
     ? "tdd"
     : "regression-only";
-  ctx.tx.set_decision?.("complexity", complexity);
   ctx.tx.set_decision?.("tests_mode", tests_mode);
 }
 
@@ -456,7 +484,7 @@ async function observeReviewFanout(ctx: HookContext): Promise<void> {
 
 export default defineBundle({
   name: "code",
-  version: "3.0.0",
+  version: "3.1.0",
   description:
     "Code generation pipeline — classify, plan, implement, multi-reviewer fanout, gate, and finalize across TypeScript / Python / Go / Rust and friends.",
 
@@ -476,7 +504,7 @@ export default defineBundle({
   complexity_flows: {
     decision_key: "complexity",
     after_stage: "classify-agent",
-    map: { simple: "simple", medium: "medium", complex: "complex" },
+    map: { trivial: "trivial", simple: "simple", medium: "medium", complex: "complex" },
   },
 
   // Honest baseline: every role gates on open blockers. A deployment may
@@ -645,7 +673,17 @@ export default defineBundle({
       ],
       run: writeClassifyDecisions,
     },
-    "classify-agent": { kind: "spawn", name: "classify-agent", phase: "context", agent: "classifier" },
+    // The classifier spawn self-skips when the operator pinned the complexity
+    // (fast-task / complexity selector) — the stage stays in every flow's prefix
+    // so the complexity switch keeps step_index aligned, but it launches nothing
+    // and the switch routes on the pinned value.
+    "classify-agent": {
+      kind: "spawn",
+      name: "classify-agent",
+      phase: "context",
+      agent: "classifier",
+      when: shouldClassify,
+    },
     // Move the classifier's stack pick from the generic decisions map into the
     // bundle-owned bundle_state slot. Positional at index 3 in every flow — the
     // same boundary the complexity switch fires at, so the three flows stay
@@ -789,6 +827,17 @@ export default defineBundle({
   },
 
   flows: {
+    // Fast-task path: a SINGLE implementer spawn → finalize. No gates, no
+    // reviewers, no planner — selected by pinning `complexity=trivial` (the ⚡
+    // toggle), which also self-skips the classifier spawn. Shares the
+    // [initialize, classify, classify-agent, stack-to-bundle-state] prefix with
+    // the other flows (the loader verifies it) so the complexity switch lands
+    // here without misaligning step_index; `git-diff` records the touched-file
+    // surface for merge-back/observability, then `finalize` accepts.
+    trivial: [
+      "initialize", "classify", "classify-agent", "stack-to-bundle-state",
+      "implement", "git-diff", "finalize",
+    ],
     // Lean path for routine work: one planner, one implementer, ONE
     // reviewer (review-light), acceptance, the final gate, finalize. No
     // gate-classify, no plan-review/review fanouts, no enrich/architect —

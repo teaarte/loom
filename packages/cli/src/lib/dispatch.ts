@@ -14,6 +14,7 @@
 
 import {
   AUTO_BACKEND,
+  bundleAgentFallbacks,
   bundleAgentMap,
   parseModelRef,
   resolveBackend,
@@ -23,7 +24,7 @@ import {
 // `@loomfsm/driver` (and thus `@loomfsm/kernel` → `node:sqlite`) is imported
 // LAZILY in `execute` so loading this module does not pull SQLite into the
 // flag-free commands (`loom --version` / `setup`); types are erased.
-import type { Executor, ResolveExecutor, SpawnUsage } from "@loomfsm/driver";
+import type { ChainEntry, Executor, ResolveExecutor, SpawnUsage } from "@loomfsm/driver";
 import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import {
@@ -161,6 +162,17 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
     return agentRefsP;
   };
 
+  // The per-(bundle,agent) ORDERED fallback chains, resolved once on first spawn.
+  let fallbacksP: Promise<Record<string, string[]>> | undefined;
+  const agentFallbacks = (): Promise<Record<string, string[]>> => {
+    if (fallbacksP === undefined) {
+      fallbacksP = Promise.resolve(args.resolveBundleName()).then((name) =>
+        bundleAgentFallbacks(resolved.merged, name),
+      );
+    }
+    return fallbacksP;
+  };
+
   // One executor per (backend, harness[, family]) for the whole drive (the
   // deterministic worktree is shared across CC/aider spawns; a raw client is
   // reused). A backend that serves BOTH a work-agent and a decision-agent builds
@@ -180,11 +192,20 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
       return modelFn(p.family, p.model);
     };
 
+  // A fallback entry pins ONE concrete model (a specific fallback ref), so its
+  // harness `resolveModel` is constant rather than reading the per-agent map.
+  // Absent → the primary path (the harness reads the agent's ref dynamically).
+  interface ModelPin {
+    family: string | undefined;
+    model: string;
+  }
+
   const make = (
     backend: string,
     harness: Harness,
     family: string | undefined,
     refs: Record<string, string>,
+    modelPin?: ModelPin,
   ): Promise<Executor> => {
     if (args.buildBackendExecutor !== undefined) {
       return Promise.resolve(args.buildBackendExecutor(backend, sinks, harness));
@@ -216,7 +237,10 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
       return buildAiderBackend(
         {
           project_dir: args.projectDir,
-          resolveModel: harnessResolveModel(refs, aiderModelString),
+          resolveModel:
+            modelPin !== undefined
+              ? () => aiderModelString(modelPin.family, modelPin.model)
+              : harnessResolveModel(refs, aiderModelString),
           env: harnessChildEnv(args.env, family, creds),
           timeouts: args.timeouts,
         },
@@ -227,7 +251,10 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
       return buildOpencodeBackend(
         {
           project_dir: args.projectDir,
-          resolveModel: harnessResolveModel(refs, opencodeModelString),
+          resolveModel:
+            modelPin !== undefined
+              ? () => opencodeModelString(modelPin.family, modelPin.model)
+              : harnessResolveModel(refs, opencodeModelString),
           env: harnessChildEnv(args.env, family, creds),
           timeouts: args.timeouts,
         },
@@ -235,6 +262,23 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
       );
     }
     return buildRawBackend(backend, creds, sinks);
+  };
+
+  // Select the harness for a (backend, agent-execution) pair — the same logic the
+  // primary resolver applies, factored out so the fallback resolver reuses it.
+  const selectHarness = (backend: string, execution: AgentExecution): Harness => {
+    if (backend === CLAUDE_CODE_BACKEND) return "claude-code";
+    if (HARNESS_BACKENDS.has(backend)) return backend as Harness;
+    if (execution === "agentic") {
+      if (!HARNESS_BACKENDS.has(defaultHarness)) {
+        throw new Error(
+          `unknown harness '${defaultHarness}' — set LOOM_HARNESS or config.harness to one of: ` +
+            [...HARNESS_BACKENDS].join(", "),
+        );
+      }
+      return defaultHarness as Harness;
+    }
+    return "plain";
   };
 
   const resolveExecutor: ResolveExecutor = async (intent) => {
@@ -254,22 +298,7 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
     const execution = await Promise.resolve(
       (args.resolveAgentExecution ?? (() => "single-shot" as const))(intent.agent),
     );
-    let harness: Harness;
-    if (res.backend === CLAUDE_CODE_BACKEND) {
-      harness = "claude-code";
-    } else if (HARNESS_BACKENDS.has(res.backend)) {
-      harness = res.backend as Harness; // explicit pin to a harness CLI
-    } else if (execution === "agentic") {
-      if (!HARNESS_BACKENDS.has(defaultHarness)) {
-        throw new Error(
-          `unknown harness '${defaultHarness}' — set LOOM_HARNESS or config.harness to one of: ` +
-            [...HARNESS_BACKENDS].join(", "),
-        );
-      }
-      harness = defaultHarness as Harness;
-    } else {
-      harness = "plain";
-    }
+    const harness = selectHarness(res.backend, execution);
     // Key by (harness, backend, family) for a CLI harness so a backend serving
     // both a work-agent and a decision-agent — or a mixed-family pin — builds the
     // distinct shapes separately; plain/CC key by (backend, harness).
@@ -283,18 +312,75 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
     return exec;
   };
 
+  // Resolve ONE fallback ref → a chain entry, or null when its backend cannot be
+  // served (no credential / CC absent / no wired executor) — a misconfigured
+  // fallback is skipped, never fatal. The entry pins the fallback ref's model so
+  // the overridden intent (and the harness, via `modelPin`) run THAT model.
+  const resolveFallbackEntry = async (
+    intent: ProviderShuttleIntent,
+    ref: string,
+    refs: Record<string, string>,
+  ): Promise<ChainEntry | null> => {
+    try {
+      const parsed = parseModelRef(ref);
+      const family = parsed.family;
+      const res = resolveBackend({ configBackend, family, ccAvailable });
+      if (!res.ok) return null;
+      const execution = await Promise.resolve(
+        (args.resolveAgentExecution ?? (() => "single-shot" as const))(intent.agent),
+      );
+      const harness = selectHarness(res.backend, execution);
+      const modelPin: ModelPin = { family, model: parsed.model };
+      const isHarnessCli = harness === "aider" || harness === "opencode";
+      // Harness entries bake the model in (constant resolveModel), so key by the
+      // ref; CC/raw entries are model-agnostic (model rides on the intent), so
+      // they share the primary cache key.
+      const key = isHarnessCli
+        ? `fb:${harness}:${res.backend}:${family ?? ""}:${parsed.model}`
+        : `${res.backend}:${harness}`;
+      let exec = cache.get(key);
+      if (exec === undefined) {
+        exec = make(res.backend, harness, family, refs, isHarnessCli ? modelPin : undefined);
+        cache.set(key, exec);
+      }
+      // Surface a credential / build failure as "skip" rather than propagate.
+      const executor = await exec;
+      return { executor, model: parsed.model, label: ref };
+    } catch {
+      // A fallback that cannot be built (missing key, uninstalled provider) is
+      // simply not offered — the chain advances past it.
+      return null;
+    }
+  };
+
+  // The ORDERED chain for one spawn: the primary first (model unchanged — the
+  // kernel already resolved it), then each configured fallback that resolves.
+  const resolveChain = async (intent: ProviderShuttleIntent): Promise<ChainEntry[]> => {
+    const primary: ChainEntry = { executor: await resolveExecutor(intent) };
+    const chains = await agentFallbacks();
+    const refs = await agentRefs();
+    const fallbackRefs = chains[intent.agent] ?? [];
+    const entries: ChainEntry[] = [primary];
+    for (const ref of fallbackRefs) {
+      const entry = await resolveFallbackEntry(intent, ref, refs);
+      if (entry !== null) entries.push(entry);
+    }
+    return entries;
+  };
+
   // Build via the driver's canonical dispatch shell (single source of the
   // dispatch semantics, incl. the idempotent default), imported lazily on the
   // first spawn so this module stays SQLite-free at load. `idempotent: true`
   // matches the shell's default — the resume restart-head behaves exactly as the
-  // single-executor model did.
+  // single-executor model did. The chain resolver advances to a configured
+  // fallback on a rate-limit / permanent provider error.
   let inner: Executor | undefined;
   return {
     idempotent: true,
     async execute(intent) {
       if (inner === undefined) {
         const { createDispatchExecutor } = await import("@loomfsm/driver");
-        inner = createDispatchExecutor({ resolveExecutor });
+        inner = createDispatchExecutor({ resolveExecutorChain: resolveChain, onNotice: args.onNotice });
       }
       return inner.execute(intent);
     },

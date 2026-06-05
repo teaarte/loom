@@ -29,6 +29,7 @@
 import type { Transaction } from "../types/transaction.js";
 
 import { extractInsertTable, KERNEL_OWNED_TABLES } from "./ddl-allowlist.js";
+import { scanStringLiteral } from "./sql-scan.js";
 
 // Order matters for the foreign-key edge agent_records.phase →
 // phases(name): phases must be created and populated before agent_records.
@@ -197,15 +198,7 @@ function matchParen(s: string, open: number): number {
   while (i < n) {
     const ch = s[i] as string;
     if (ch === "'") {
-      i += 1;
-      while (i < n) {
-        const c = s[i] as string;
-        i += 1;
-        if (c === "'") {
-          if (i < n && s[i] === "'") { i += 1; continue; }
-          break;
-        }
-      }
+      i = scanStringLiteral(s, i);
       continue;
     }
     if (ch === "(") depth += 1;
@@ -229,17 +222,9 @@ function splitListItems(body: string): string[] {
   while (i < n) {
     const ch = body[i] as string;
     if (ch === "'") {
-      buf += ch;
-      i += 1;
-      while (i < n) {
-        const c = body[i] as string;
-        buf += c;
-        i += 1;
-        if (c === "'") {
-          if (i < n && body[i] === "'") { buf += "'"; i += 1; continue; }
-          break;
-        }
-      }
+      const end = scanStringLiteral(body, i);
+      buf += body.slice(i, end);
+      i = end;
       continue;
     }
     if (ch === ",") {

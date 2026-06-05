@@ -23,6 +23,7 @@
 // conservative — an ambiguous statement is refused, not parsed.
 
 import { KernelError } from "../state/db.js";
+import { scanStringLiteral } from "./sql-scan.js";
 
 // Kernel-owned table set. CREATE / INSERT against any other name is
 // refused so a dump cannot plant a side table or overwrite host data.
@@ -87,22 +88,10 @@ function splitStatements(sql: string): string[] {
     const next = i + 1 < n ? (sql[i + 1] as string) : "";
 
     if (ch === "'") {
-      // Consume the whole literal, honoring the '' escape.
-      buf += ch;
-      i += 1;
-      while (i < n) {
-        const c = sql[i] as string;
-        buf += c;
-        i += 1;
-        if (c === "'") {
-          if (i < n && sql[i] === "'") {
-            buf += "'";
-            i += 1;
-            continue;
-          }
-          break;
-        }
-      }
+      // Consume the whole literal (honoring the '' escape) via the shared scanner.
+      const end = scanStringLiteral(sql, i);
+      buf += sql.slice(i, end);
+      i = end;
       continue;
     }
 

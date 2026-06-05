@@ -25,10 +25,18 @@ import type {
   Violation,
 } from "./types/invariants.js";
 import type { AgentRecord } from "./types/agent-result.js";
-import type { IdempotencyKey, IdempotencyLedgerEntry, IdempotencyOp } from "./types/idempotency.js";
+import type { IdempotencyLedgerEntry, IdempotencyOp } from "./types/idempotency.js";
 import type { BundleStateView } from "./types/state.js";
 import type { Transaction } from "./types/transaction.js";
 import { narrowStateForBundle } from "./narrow.js";
+import {
+  AGENT_RECORD_COLUMNS,
+  LEDGER_COLUMNS,
+  mapAgentRecord,
+  mapLedgerRow,
+  type AgentRecordRow,
+  type LedgerRow,
+} from "./lib/row-mappers.js";
 
 // ============================================================================
 // Constants
@@ -559,54 +567,17 @@ async function loadFindings(tx: Transaction): Promise<FindingSnapshotRow[]> {
 }
 
 async function loadAgentRecords(tx: Transaction): Promise<AgentRecord[]> {
-  const rows = await tx.queryAll<{
-    id: unknown;
-    agent_run_id: unknown;
-    agent: unknown;
-    phase: unknown;
-    model: unknown;
-    output_kind: unknown;
-    tokens_in: unknown;
-    tokens_out: unknown;
-    tokens_cached: unknown;
-    recorded_at: unknown;
-  }>(
-    "SELECT id, agent_run_id, agent, phase, model, output_kind, " +
-      "tokens_in, tokens_out, tokens_cached, recorded_at FROM agent_records ORDER BY id ASC",
+  const rows = await tx.queryAll<AgentRecordRow>(
+    `SELECT ${AGENT_RECORD_COLUMNS} FROM agent_records ORDER BY id ASC`,
   );
-  return rows.map((r) => ({
-    id: Number(r.id),
-    agent_run_id: String(r.agent_run_id),
-    agent: String(r.agent),
-    phase: String(r.phase),
-    model: r.model === null ? null : String(r.model),
-    output_kind: String(r.output_kind),
-    tokens_in: r.tokens_in === null ? null : Number(r.tokens_in),
-    tokens_out: r.tokens_out === null ? null : Number(r.tokens_out),
-    tokens_cached: r.tokens_cached === null ? null : Number(r.tokens_cached),
-    recorded_at: String(r.recorded_at),
-  }));
+  return rows.map(mapAgentRecord);
 }
 
 async function loadLedger(tx: Transaction): Promise<IdempotencyLedgerEntry[]> {
-  const rows = await tx.queryAll<{
-    key: unknown;
-    first_seen_ts: unknown;
-    last_seen_ts: unknown;
-    response_blob: unknown;
-    hook_results_json: unknown;
-  }>(
-    "SELECT key, first_seen_ts, last_seen_ts, response_blob, hook_results_json " +
-      "FROM kernel_idempotency_ledger ORDER BY first_seen_ts ASC",
+  const rows = await tx.queryAll<LedgerRow>(
+    `SELECT ${LEDGER_COLUMNS} FROM kernel_idempotency_ledger ORDER BY first_seen_ts ASC`,
   );
-  return rows.map((r) => ({
-    key: String(r.key) as IdempotencyKey,
-    first_seen_ts: String(r.first_seen_ts),
-    last_seen_ts: String(r.last_seen_ts),
-    response_blob: r.response_blob === null ? null : String(r.response_blob),
-    hook_results_json:
-      r.hook_results_json === null ? null : String(r.hook_results_json),
-  }));
+  return rows.map(mapLedgerRow);
 }
 
 // ============================================================================

@@ -17,6 +17,7 @@
 import type { IdempotencyKey, IdempotencyLedgerEntry } from "../types/idempotency.js";
 import type { NowToken } from "../types/now.js";
 import type { Transaction } from "../types/transaction.js";
+import { LEDGER_COLUMNS, mapLedgerRow, type LedgerRow } from "./row-mappers.js";
 
 // 24h per-entry TTL. The replay-after-TTL and eviction passes that act
 // on this value land with the recovery surface; the column is written
@@ -70,26 +71,12 @@ export async function readLedgerRow(
   tx: Transaction,
   key: IdempotencyKey | string,
 ): Promise<IdempotencyLedgerEntry | null> {
-  const row = await tx.queryRow<{
-    key: unknown;
-    first_seen_ts: unknown;
-    last_seen_ts: unknown;
-    response_blob: unknown;
-    hook_results_json: unknown;
-  }>(
-    "SELECT key, first_seen_ts, last_seen_ts, response_blob, hook_results_json " +
-      "FROM kernel_idempotency_ledger WHERE key = ?",
+  const row = await tx.queryRow<LedgerRow>(
+    `SELECT ${LEDGER_COLUMNS} FROM kernel_idempotency_ledger WHERE key = ?`,
     [key],
   );
   if (row === null) return null;
-  return {
-    key: String(row.key) as IdempotencyKey,
-    first_seen_ts: String(row.first_seen_ts),
-    last_seen_ts: String(row.last_seen_ts),
-    response_blob: row.response_blob === null ? null : String(row.response_blob),
-    hook_results_json:
-      row.hook_results_json === null ? null : String(row.hook_results_json),
-  };
+  return mapLedgerRow(row);
 }
 
 // Add `ms` to a NowToken. The `Date` constructor here parses the

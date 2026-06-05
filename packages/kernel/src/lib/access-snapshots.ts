@@ -22,6 +22,7 @@ import type {
 } from "../types/context.js";
 import type { Finding } from "../types/findings.js";
 import type { AuditEntry, Transaction } from "../types/transaction.js";
+import { AGENT_RECORD_COLUMNS, mapAgentRecord, type AgentRecordRow } from "./row-mappers.js";
 
 export interface AccessSnapshot {
   findings: FindingsAccess;
@@ -43,9 +44,7 @@ export async function materializeAccessSnapshot(
       "error_class FROM audit ORDER BY id DESC LIMIT 200",
   );
   const agentRows = await tx.queryAll<AgentRecordRow>(
-    "SELECT id, agent_run_id, agent, phase, model, output_kind, " +
-      "tokens_in, tokens_out, tokens_cached, recorded_at " +
-      "FROM agent_records ORDER BY id ASC",
+    `SELECT ${AGENT_RECORD_COLUMNS} FROM agent_records ORDER BY id ASC`,
   );
 
   const stored: StoredFinding[] = findingsRows.map((r) => ({
@@ -87,18 +86,7 @@ export async function materializeAccessSnapshot(
     error_class: r.error_class === null ? null : String(r.error_class),
   }));
 
-  const agents: AgentRecord[] = agentRows.map((r) => ({
-    id: Number(r.id),
-    agent_run_id: String(r.agent_run_id),
-    agent: String(r.agent),
-    phase: String(r.phase),
-    model: r.model === null ? null : String(r.model),
-    output_kind: String(r.output_kind) as AgentRecord["output_kind"],
-    tokens_in: r.tokens_in === null ? null : Number(r.tokens_in),
-    tokens_out: r.tokens_out === null ? null : Number(r.tokens_out),
-    tokens_cached: r.tokens_cached === null ? null : Number(r.tokens_cached),
-    recorded_at: String(r.recorded_at),
-  }));
+  const agents: AgentRecord[] = agentRows.map(mapAgentRecord);
 
   return {
     findings: buildFindingsAccess(stored),
@@ -273,17 +261,4 @@ interface AuditRow {
   payload: unknown;
   verdict: unknown;
   error_class: unknown;
-}
-
-interface AgentRecordRow {
-  id: unknown;
-  agent_run_id: unknown;
-  agent: unknown;
-  phase: unknown;
-  model: unknown;
-  output_kind: unknown;
-  tokens_in: unknown;
-  tokens_out: unknown;
-  tokens_cached: unknown;
-  recorded_at: unknown;
 }

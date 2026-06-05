@@ -13,7 +13,7 @@ enforced at commit time, and a complete, replayable audit trail.
 [![node](https://img.shields.io/badge/node-%E2%89%A5%2022-339933.svg?logo=node.js&logoColor=white)](.nvmrc)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg?logo=typescript&logoColor=white)](#)
 
-[Quickstart](#quickstart) · [Running loom](#running-loom) · [Configure once](#configure-once) · [Why loom](#why-loom) · [How it works](#how-it-works) · [Whitepaper](WHITEPAPER.md)
+[Quickstart](#quickstart) · [Running loom](#running-loom) · [Configure once](#configure-once) · [Why loom](#why-loom) · [Architecture](ARCHITECTURE.md) · [Whitepaper](WHITEPAPER.md)
 
 </div>
 
@@ -252,47 +252,16 @@ and it resumes on its own.
 > *output* is correct — that's the agents' job. What you get is the ability to *prove* which
 > process ran and *see* every decision behind a result.
 
-## How it works
+## Architecture
 
-The kernel is generic — it knows nothing about code review or any domain. Three orthogonal
-axes plug into it, and any combination is valid:
+The kernel is generic — it knows nothing about code review or any domain. Three orthogonal axes
+plug into it (**bundles** = the domain, **providers** = the LLM backend, **transports** = the
+wire), and any combination is valid. A shared `@loomfsm/driver` runtime holds the transport-neutral
+`drive()` loop every transport wraps, so the directive contract is implemented once and the kernel
+never changes for a new domain.
 
-```mermaid
-flowchart TB
-    T["🔌 Transports — the wire<br/>mcp-server · cli · daemon · HTTP control plane + web dashboard"]
-    K["⚙️ @loomfsm/kernel<br/>generic FSM · atomic state · invariants · policy · audit"]
-    B["📦 Bundles — the domain<br/>code · …your own"]
-    P["🧠 Providers — the LLM backend<br/>claude-code · anthropic · openrouter · ollama"]
-    T -->|"directive ⇄ response"| K
-    K --> B
-    K --> P
-```
-
-A shared runtime, `@loomfsm/driver`, holds the transport-neutral orchestration loop (`drive()`)
-that `loom run`, the daemon, and the HTTP control plane all wrap — so the directive contract is
-implemented once and every transport behaves identically.
-
-- **Stage** — one of `SpawnStage`, `FanoutStage`, `GateStage`, `StepStage`, `FinalizeStage`. A bundle's `flows` name sequences of stages.
-- **Gate** — a checkpoint whose outcome a **Policy** decides. Roles: `classify`, `plan`, `final` (bundles add more).
-- **Policy** — a function `(state, role, ctx) → Decision`. The kernel never switches on policy names; the function *is* the contract. Stock factories: `human`, `on-blockers`, `auto`.
-- **Invariant** — a pure function over state, called in-transaction; a violation rolls it back.
-- **Provider** — the LLM backend, chosen by *capability*, not name; per-agent / per-phase routing.
-
-Full design rationale in [WHITEPAPER.md](WHITEPAPER.md).
-
-## At a glance
-
-| | |
-|---|---|
-| Language | TypeScript (Node 22+, pnpm workspaces) |
-| State | SQLite (WAL, `BEGIN IMMEDIATE`), atomic per kernel call |
-| Determinism | Replay-deterministic via a persisted timestamp token |
-| Idempotency | Co-committed ledger keyed per boundary-crossing op |
-| Autonomy | `Policy = (state, role, ctx) → Decision`; default `on-blockers` |
-| Concurrency | One task in flight per project; finished tasks archive to `.claude/history/` |
-| Providers | `claude-code-shuttle` (zero-config), `anthropic-sdk`, `openrouter`, `ollama` |
-| Transports | `mcp-server` (stdio), `cli`, `daemon`, HTTP control plane + web dashboard |
-| License | Apache 2.0 |
+**📐 Full architecture, with diagrams — [ARCHITECTURE.md](ARCHITECTURE.md).** Design rationale —
+[WHITEPAPER.md](WHITEPAPER.md).
 
 ## Packages
 

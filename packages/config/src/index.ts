@@ -88,6 +88,7 @@ export {
 
 export {
   bundleAgentMap,
+  bundleAgentFallbacks,
   resolveModelRef,
   resolveBundleModels,
   type ResolvedModel,

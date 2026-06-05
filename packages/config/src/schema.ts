@@ -25,6 +25,7 @@ const ModelRefSchema = z.string().min(1);
 
 const BundleModelConfigSchema = z.object({
   agents: z.record(z.string(), ModelRefSchema).optional(),
+  fallbacks: z.record(z.string(), z.array(ModelRefSchema)).optional(),
 });
 
 const NotifyConfigSchema = z.object({

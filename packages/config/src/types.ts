@@ -16,6 +16,16 @@ export type ModelRef = string;
 // roster). Open-keyed — no fixed agent names.
 export interface BundleModelConfig {
   agents?: Record<string, ModelRef>;
+  // OPTIONAL ordered per-agent fallback chain: the backends to try, in order,
+  // AFTER the agent's primary (`agents[<agent>]` / the bundle default) hits a
+  // wall that the same backend cannot clear — a sustained rate-limit or a
+  // permanent provider error (bad model id / auth). Each entry is a full
+  // `provider:model` ref the dispatcher resolves to a backend exactly as the
+  // primary; an entry whose backend cannot be served (no credential / CC absent)
+  // is skipped. Purely additive — only the per-spawn dispatch reads it; the rest
+  // of the config layer (the model-map editor, validation, the kernel routing
+  // adapter) is unchanged.
+  fallbacks?: Record<string, ModelRef[]>;
 }
 
 // Outbound-notify settings, mirroring the existing `LOOM_NOTIFY_*` env knobs so

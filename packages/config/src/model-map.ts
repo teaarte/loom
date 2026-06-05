@@ -16,6 +16,14 @@ export function bundleAgentMap(config: LoomConfig, bundleName: string): Record<s
   return config.bundles?.[bundleName]?.agents ?? {};
 }
 
+// The agent → ordered fallback-chain bindings for one bundle, from the
+// (already-merged) config. Empty when none are configured. The dispatcher tries
+// each ref AFTER the agent's primary when the primary hits a rate-limit or a
+// permanent provider error.
+export function bundleAgentFallbacks(config: LoomConfig, bundleName: string): Record<string, ModelRef[]> {
+  return config.bundles?.[bundleName]?.fallbacks ?? {};
+}
+
 export interface ResolvedModel {
   // The concrete model name to dispatch (after tier expansion).
   model: string;

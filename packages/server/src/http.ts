@@ -11,6 +11,8 @@
 //   GET  /projects/:id           → read-model
 //   POST /projects/:id/answer    → answerGate  (deliver a human answer)
 //   POST /projects/:id/cancel    → abort the in-flight drive + force-archive the task (free the slot)
+//   POST /projects/:id/push      → push the task's loom/<task> branch to a remote
+//   POST /projects/:id/merge     → squash-merge the task branch into the operator's checkout
 //   DELETE /projects/:id         → unregister (pause: stop driving, keep the task)
 //   GET  /projects/:id/log       → SSE: status + log-tail snapshots
 //   GET  /projects/:id/config    → the project's override config (masked)
@@ -20,6 +22,7 @@
 //   GET  /projects/:id/history   → the project's finished-task browser
 //   GET  /projects/:id/artifacts → the prose .md documents the task produced
 //   GET  /projects/:id/artifact  → read one whitelisted, traversal-guarded document (?path=)
+//   GET  /projects/:id/spawn/:run_id → one spawn's transcript sidecar (prompt/output/parse/usage)
 //
 // Control-layer routes (the network face of the config stores the CLI writes,
 // live only when a `loomHome` is injected; secrets masked on GET, write-only on PUT):
@@ -47,6 +50,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { resolve as resolvePath } from "node:path";
 
 import { listProjects } from "@loomfsm/config";
+import { pushTaskBranch, squashMergeTaskBranch } from "@loomfsm/daemon";
 import { archiveAndReset, captureNow, type Registry } from "@loomfsm/kernel";
 
 import { answerGate, parseAnswer } from "./answer.js";
@@ -72,7 +76,7 @@ import { readProjectStatus } from "./read-model.js";
 import type { SupervisorRegistry } from "./registry.js";
 import { submitTask } from "./submit.js";
 import { writeTaskExecPrefs } from "./task-exec.js";
-import { getArtifact, getHistory, getTrace, listArtifacts } from "./trace-routes.js";
+import { getArtifact, getHistory, getSpawnTranscript, getTrace, listArtifacts } from "./trace-routes.js";
 
 // The control-layer (config / secrets / workspace) slice of the server deps —
 // the SAME `@loomfsm/config` stores the CLI writes, reached over HTTP. Optional:
@@ -254,6 +258,19 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
         await routeCancel(res, id, deps);
         return;
       }
+      // POST /projects/:id/push  — push the task's loom/<task> branch to a remote
+      // POST /projects/:id/merge — squash-merge it into the operator's checkout
+      // The two sanctioned writes to the operator's branch / remote, taken on
+      // demand (the "ship from the phone" buttons). They refuse cleanly (a typed
+      // reason) on no-git / no-remote / dirty tree.
+      if (sub === "push" && method === "POST") {
+        await routeShip(res, id, deps, "push");
+        return;
+      }
+      if (sub === "merge" && method === "POST") {
+        await routeShip(res, id, deps, "merge");
+        return;
+      }
       if (sub === "log" && method === "GET") {
         streamLog(req, res, id, deps);
         return;
@@ -291,6 +308,16 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
         } else {
           await getArtifact(res, dir, url.searchParams.get("path") ?? "");
         }
+        return;
+      }
+      // GET /projects/:id/spawn/:run_id — one spawn's transcript sidecar (the
+      // prompt + raw output + parse + usage the driver wrote). Read-only, host
+      // sidecar, traversal-guarded; works for a cataloged-but-unsupervised
+      // project (read the chain, then drill into a spawn).
+      if (sub === "spawn" && parts.length === 4 && method === "GET") {
+        const dir = knownProjectDir(id, deps);
+        if (dir === null) throw new ServerError("PROJECT_NOT_FOUND", 404, `no project ${id}`);
+        await getSpawnTranscript(res, dir, parts[3] as string);
         return;
       }
     }
@@ -356,7 +383,15 @@ async function routeSubmit(
       throw new ServerError("DOCKER_UNAVAILABLE", 400, cap.reason ?? "Docker isolation is unavailable");
     }
   }
-  writeTaskExecPrefs(entry.dir, dockerFlag !== undefined ? { docker: dockerFlag } : {});
+  // Submit-time "ship on accept" choices ride in the same per-task sidecar; the
+  // watcher's merge-back wrapper pushes / squash-merges on a terminal accept.
+  const pushFlag = typeof body["push"] === "boolean" ? (body["push"] as boolean) : undefined;
+  const squashFlag = typeof body["squash_merge"] === "boolean" ? (body["squash_merge"] as boolean) : undefined;
+  writeTaskExecPrefs(entry.dir, {
+    ...(dockerFlag !== undefined ? { docker: dockerFlag } : {}),
+    ...(pushFlag !== undefined ? { push: pushFlag } : {}),
+    ...(squashFlag !== undefined ? { squash_merge: squashFlag } : {}),
+  });
 
   // Pass the resolver as a THUNK: submitTask invokes it AFTER it rotates any
   // finished slot, so the bundle re-reconciles into the fresh store (otherwise
@@ -453,6 +488,30 @@ async function routeCancel(res: ServerResponse, id: string, deps: ControlServerD
     throw fromKernelError(err);
   }
   sendJson(res, 200, { id, dir, cancelled: true, archived, task_id: taskId });
+}
+
+// Ship the current task's work: push its `loom/<task>` branch to a remote, or
+// squash-merge it into the operator's checkout. The branch is named for the
+// canonical task id (the same one merge-back used), read from the project's
+// status. Works for a cataloged-but-unsupervised project (the git ops are
+// host-side, no watcher needed). A clean refusal (no remote / dirty / non-git /
+// no branch) returns 200 with `{ pushed:false, reason }` — it is an outcome, not
+// a server error — so the UI shows WHY without an exception path.
+async function routeShip(
+  res: ServerResponse,
+  id: string,
+  deps: ControlServerDeps,
+  action: "push" | "merge",
+): Promise<void> {
+  const dir = knownProjectDir(id, deps);
+  if (dir === null) throw new ServerError("PROJECT_NOT_FOUND", 404, `no project ${id}`);
+  const status = await readProjectStatus(dir, (deps.now ?? Date.now)());
+  if (status.task_id === null) {
+    throw new ServerError("NO_TASK", 400, "no task to ship — the slot is empty");
+  }
+  const result =
+    action === "push" ? pushTaskBranch(dir, status.task_id) : squashMergeTaskBranch(dir, status.task_id);
+  sendJson(res, 200, { id, dir, ...result });
 }
 
 async function routeAnswer(

@@ -22,6 +22,7 @@ import {
   clonePathFor,
   readTrace,
   readTraceFile,
+  spawnTranscriptDir,
   worktreePathFor,
   type TraceView,
 } from "@loomfsm/driver";
@@ -75,6 +76,46 @@ export async function getTrace(
     trace = await readTrace(dir);
   }
   sendJson(res, 200, { archived: archivedTaskId !== null, ...trace });
+}
+
+// ----- GET /projects/:id/spawn/:run_id ------------------------------------
+
+// Read ONE spawn's transcript sidecar (the prompt + raw output + structured
+// parse + usage the driver wrote per spawn). The id must be a single path
+// segment (no separators / dot-dot); `resolveSafePath` then canonicalizes it
+// against the HOST transcripts dir and refuses anything that escapes — the same
+// double guard the artifact reader stacks. The transcript lives at the HOST
+// project (NOT the discarded sandbox), so a live OR an archived run resolves the
+// same way. The body is returned verbatim (already shaped + size-capped at write
+// time); a torn file yields `transcript: null` rather than a 500.
+export async function getSpawnTranscript(res: ServerResponse, dir: string, runId: string): Promise<void> {
+  if (!SAFE_ARCHIVE_ID.test(runId)) {
+    throw new ServerError("BAD_RUN_ID", 400, "the spawn run id is not a valid identifier");
+  }
+  const root = spawnTranscriptDir(dir);
+  if (!existsSync(root)) {
+    throw new ServerError("TRANSCRIPT_NOT_FOUND", 404, `no transcript for ${runId}`);
+  }
+  const safe = await resolveSafePath(`${runId}.json`, root);
+  if (!safe.ok) {
+    throw new ServerError("BAD_RUN_ID", 400, `spawn run id refused: ${safe.reason}`);
+  }
+  if (!existsSync(safe.path)) {
+    throw new ServerError("TRANSCRIPT_NOT_FOUND", 404, `no transcript for ${runId}`);
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(safe.path, "utf8");
+  } catch (err) {
+    throw new ServerError("TRANSCRIPT_UNREADABLE", 500, err instanceof Error ? err.message : String(err));
+  }
+  let transcript: unknown = null;
+  try {
+    transcript = JSON.parse(raw);
+  } catch {
+    transcript = null; // a torn / partial write surfaces as "no parseable transcript"
+  }
+  sendJson(res, 200, { run_id: runId, transcript });
 }
 
 // ----- GET /projects/:id/history -----------------------------------------

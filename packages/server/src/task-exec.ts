@@ -18,6 +18,13 @@ export interface TaskExecPrefs {
   // true → run this task's spawns in the container; false → force the worktree;
   // absent → the deployment default (the server-wide --docker/--no-docker plan).
   docker?: boolean;
+  // Submit-time "ship on accept" choices: on a terminal accept the watcher
+  // pushes the task's branch / squash-merges it into the operator's checkout
+  // (the "fix it, push after it finishes, not at my desk" case). Absent → the
+  // operator ships manually via the post-completion buttons. Domain-blind
+  // booleans the server stores and the watcher's merge-back wrapper acts on.
+  push?: boolean;
+  squash_merge?: boolean;
 }
 
 export function taskExecPath(projectDir: string): string {
@@ -34,8 +41,12 @@ export function readTaskExecPrefs(projectDir: string): TaskExecPrefs {
   try {
     const parsed = JSON.parse(readFileSync(taskExecPath(projectDir), "utf8")) as unknown;
     if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-      const docker = (parsed as Record<string, unknown>)["docker"];
-      if (typeof docker === "boolean") return { docker };
+      const obj = parsed as Record<string, unknown>;
+      const out: TaskExecPrefs = {};
+      if (typeof obj["docker"] === "boolean") out.docker = obj["docker"];
+      if (typeof obj["push"] === "boolean") out.push = obj["push"];
+      if (typeof obj["squash_merge"] === "boolean") out.squash_merge = obj["squash_merge"];
+      return out;
     }
   } catch {
     /* no sidecar / unreadable → the deployment default */

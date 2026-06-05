@@ -27,7 +27,10 @@ import { resolve } from "node:path";
 
 import {
   acquireLock,
+  commitToBranchMergeBack,
   nullLogger,
+  pushTaskBranch,
+  squashMergeTaskBranch,
   superviseWatch,
   systemClock,
   withProjectId,
@@ -56,6 +59,7 @@ import { ServerError } from "./errors.js";
 import { gatedExecutor } from "./executor-gate.js";
 import { readRegisteredProjects, writeRegisteredProjects } from "./process-control.js";
 import { Semaphore } from "./semaphore.js";
+import { readTaskExecPrefs } from "./task-exec.js";
 
 export interface RegistryDeps {
   // Resolve the FSM registry for a project — the deployment's bundle/provider
@@ -176,7 +180,7 @@ export class SupervisorRegistry {
       ...(this.deps.makeNotifier !== undefined
         ? { notifier: withProjectId(this.deps.makeNotifier(projectDir), id) }
         : {}),
-      ...(this.deps.mergeBack !== undefined ? { mergeBack: this.deps.mergeBack } : {}),
+      mergeBack: this.shipOnAccept(logger),
       ...(this.deps.retry_policy !== undefined ? { retry_policy: this.deps.retry_policy } : {}),
       ...(this.deps.wake !== undefined ? { wake: this.deps.wake } : {}),
       ...(this.deps.watch_idle_ms !== undefined ? { watch_idle_ms: this.deps.watch_idle_ms } : {}),
@@ -258,6 +262,43 @@ export class SupervisorRegistry {
 
   private loggerFor(dir: string): DaemonLogger {
     return this.deps.makeLogger !== undefined ? this.deps.makeLogger(dir) : nullLogger;
+  }
+
+  // The merge-back the supervisor runs on `complete`, wrapped to honour the
+  // task's submit-time "ship on accept" prefs. The base step (the injected
+  // backend variant, else commit-to-branch) creates the `loom/<task>` branch;
+  // then, ONLY on a terminal accept and ONLY for the flags the operator set, the
+  // branch is pushed / squash-merged into the operator's checkout. Each ship
+  // step is best-effort and logged (never throws — the daemon git helpers degrade
+  // to a typed reason), so a push/merge hiccup never wedges the completion.
+  private shipOnAccept(logger: DaemonLogger): FleetMergeBack {
+    const base = this.deps.mergeBack;
+    return async (projectDir, outcome) => {
+      const result = base !== undefined
+        ? await base(projectDir, outcome)
+        : commitToBranchMergeBack(projectDir, outcome.task_id);
+      if (outcome.verdict !== "accepted" || result.merged !== true) return result;
+      const prefs = readTaskExecPrefs(projectDir);
+      if (prefs.push === true) {
+        const r = pushTaskBranch(projectDir, outcome.task_id);
+        logger.info("auto-push", {
+          pushed: r.pushed,
+          ...(r.branch !== undefined ? { branch: r.branch } : {}),
+          ...(r.remote !== undefined ? { remote: r.remote } : {}),
+          ...(r.reason !== undefined ? { reason: r.reason } : {}),
+        });
+      }
+      if (prefs.squash_merge === true) {
+        const r = squashMergeTaskBranch(projectDir, outcome.task_id);
+        logger.info("auto-merge", {
+          merged: r.merged,
+          ...(r.into !== undefined ? { into: r.into } : {}),
+          ...(r.files_changed !== undefined ? { files: r.files_changed.length } : {}),
+          ...(r.reason !== undefined ? { reason: r.reason } : {}),
+        });
+      }
+      return result;
+    };
   }
 
   private persist(): void {

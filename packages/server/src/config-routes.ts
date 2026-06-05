@@ -351,17 +351,43 @@ async function fetchWithTimeout(url: string, headers: Record<string, string>): P
   }
 }
 
+// Parse the OpenRouter `/models` payload, filtering to TOOL-CAPABLE models where
+// the API exposes capability: a model whose `supported_parameters` is present but
+// lacks "tools" cannot drive a file-editing (agentic) agent — offering it is
+// exactly the trap a free non-tool model fell into (it produced nothing). When
+// the field is ABSENT (capability unknown) the model is kept — never suppress
+// without evidence. The free-text ref stays the source of truth, so a non-tool
+// model is still typeable for a single-shot decision agent that needs no tools.
+// Pure → unit-tested without the network.
+export function parseOpenRouterModels(
+  data: { id?: unknown; supported_parameters?: unknown }[],
+): { models: string[]; reason?: string } {
+  let total = 0;
+  let dropped = 0;
+  const models: string[] = [];
+  for (const d of data) {
+    if (typeof d.id !== "string") continue;
+    total += 1;
+    const params = Array.isArray(d.supported_parameters) ? (d.supported_parameters as unknown[]) : null;
+    if (params !== null && !params.includes("tools")) {
+      dropped += 1;
+      continue;
+    }
+    models.push(`openrouter:${d.id}`);
+  }
+  return dropped > 0
+    ? { models, reason: `showing ${models.length} tool-capable of ${total} models` }
+    : { models };
+}
+
 async function fetchOpenRouterModels(apiKey: string | undefined): Promise<{ models: string[]; reason?: string }> {
   try {
     const headers: Record<string, string> = {};
     if (apiKey !== undefined && apiKey.length > 0) headers["authorization"] = `Bearer ${apiKey}`;
     const res = await fetchWithTimeout("https://openrouter.ai/api/v1/models", headers);
     if (!res.ok) return { models: [], reason: `OpenRouter returned HTTP ${res.status}` };
-    const json = (await res.json()) as { data?: { id?: unknown }[] };
-    const models = (json.data ?? [])
-      .map((d) => (typeof d.id === "string" ? `openrouter:${d.id}` : null))
-      .filter((x): x is string => x !== null);
-    return { models };
+    const json = (await res.json()) as { data?: { id?: unknown; supported_parameters?: unknown }[] };
+    return parseOpenRouterModels(json.data ?? []);
   } catch (err) {
     return { models: [], reason: `could not reach OpenRouter: ${(err as Error).message}` };
   }

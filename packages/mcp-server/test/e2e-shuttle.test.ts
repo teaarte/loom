@@ -871,6 +871,9 @@ describe("first-run hardening — end to end", () => {
       // final gate must escalate to a human, not silently pass.
       const blocked = await drive(h2, "small cleanup", "stuck-blocked-1", {
         gatePolicies: ON_BLOCKERS,
+        // A real source change so the review fanout runs (an empty diff now skips
+        // the panel) and can surface the injected blocker.
+        implementerFiles: ["src/cleanup.ts"],
         blockReviewFanout: true,
         stopAtGateFinalAsk: true,
       });
@@ -935,6 +938,10 @@ async function driveWithComplexity(
         type: "agent-result",
         agent_run_id: resp.agent_run_id,
         agent_output: resp.agent === "classifier" ? classifierOutput : CANONICAL_AGENT_OUTPUT,
+        // The implementer reports a source-file change so the run is not a no-op:
+        // an empty diff now (correctly) skips the review panel + parks the final
+        // gate, so a flow-routing test must produce a real change to exercise it.
+        ...(resp.agent === "implementer" ? { files_modified: ["src/impl.ts"] } : {}),
       };
     } else if (resp.status === "spawn-agents-parallel") {
       trace.push(`parallel:[${resp.spawns.map((s) => s.agent).join(",")}]`);

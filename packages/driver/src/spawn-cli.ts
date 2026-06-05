@@ -24,6 +24,7 @@ import { spawn } from "node:child_process";
 
 import { KernelError } from "@loomfsm/kernel";
 
+import { classifyPermanentProviderError, PERMANENT_PROVIDER_ERROR_CODE } from "./provider-error.js";
 import type { RateLimitDetector } from "./rate-limit.js";
 
 // Grace between SIGTERM and SIGKILL when a timeout kills the child: let the
@@ -242,6 +243,25 @@ export function spawnCapture(opts: SpawnCaptureOptions): Promise<SpawnCaptureRes
               code: "EXECUTOR_RATE_LIMITED",
               message: `${opts.label} hit a rate limit / quota`,
               detail: { exit_code: exitCode, stderr_head: truncateStream(stderr) },
+            }),
+          );
+          return;
+        }
+        // A PERMANENT provider error (an invalid/unknown model id, an auth /
+        // billing rejection) returns identically on every attempt — surface it
+        // under its own code so the supervisor PARKS with an actionable message
+        // instead of burning the backoff budget on five identical failures.
+        const permanent = classifyPermanentProviderError(`${stderr}\n${stdout}`);
+        if (permanent !== null) {
+          reject(
+            new KernelError({
+              code: PERMANENT_PROVIDER_ERROR_CODE[permanent],
+              message: `${opts.label} rejected the request (${permanent})${rawAnnex(stdout, stderr)}`,
+              detail: {
+                exit_code: exitCode,
+                stdout_head: truncateStream(stdout),
+                stderr_head: truncateStream(stderr),
+              },
             }),
           );
           return;

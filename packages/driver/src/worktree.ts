@@ -39,7 +39,7 @@ import { join, resolve } from "node:path";
 
 import { KernelError } from "@loomfsm/kernel";
 
-import { clearGitLocks, copyTree, heavyCopyNotice } from "./copy.js";
+import { cleanLoomArtifacts, clearGitLocks, copyTree, heavyCopyNotice } from "./copy.js";
 import { gitBaselineRef } from "./git-delta.js";
 
 export interface WorktreeProvision {
@@ -99,6 +99,10 @@ export function provisionWorktree(
       detail: { project_dir: projectDir, stderr_head: copied.stderr.slice(0, 500) },
     });
   }
+  // Fresh copy only — strip loom's own state + a prior task's stale artifacts
+  // so the spawn sees a clean `.claude/` working set (the reuse path above
+  // returns before here, keeping the in-flight task's own working set intact).
+  cleanLoomArtifacts(dest);
   clearGitLocks(dest);
   return {
     dir: dest,

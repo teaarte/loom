@@ -48,6 +48,7 @@ import {
   readState,
   recoverAndAdvance,
 } from "./compositions.js";
+import { PERMANENT_PROVIDER_ERROR_CODES } from "./provider-error.js";
 import { resumeDirective } from "./resume-directive.js";
 
 // Per-spawn resource accounting a backend can surface when its envelope
@@ -159,13 +160,15 @@ export type DriveOutcome =
 
 // Executor-thrown KernelError codes the caller's retry policy must act on
 // differently from a generic blip — a sustained rate-limit (wait, don't
-// retry) or a wedged-spawn timeout. These are preserved through to the error
-// outcome; every other executor throw stays the generic EXECUTOR_FAILED. By
-// CODE only — the loop never reads what a spawn meant, only how it failed.
+// retry), a wedged-spawn timeout, or a PERMANENT provider error (bad model id,
+// auth/billing) that no retry can clear. These are preserved through to the
+// error outcome; every other executor throw stays the generic EXECUTOR_FAILED.
+// By CODE only — the loop never reads what a spawn meant, only how it failed.
 const SURFACEABLE_EXECUTOR_CODES = new Set<string>([
   "EXECUTOR_RATE_LIMITED",
   "EXECUTOR_TIMEOUT",
   "EXECUTOR_IDLE_TIMEOUT",
+  ...PERMANENT_PROVIDER_ERROR_CODES,
 ]);
 
 // A spawn batch that ran past its stage's wall-time `spawn_budget`. Thrown
@@ -269,10 +272,12 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
             err instanceof KernelError && SURFACEABLE_EXECUTOR_CODES.has(err.code)
               ? err.code
               : "EXECUTOR_FAILED";
-          // A rate-limit will not clear within the fast in-loop retries —
-          // surface it at once so the caller can apply its wait policy instead
-          // of burning the retry budget on a wall the next attempt hits again.
-          if (execCode === "EXECUTOR_RATE_LIMITED") {
+          // A rate-limit will not clear within the fast in-loop retries, and a
+          // permanent provider error (bad model id, auth/billing) will not
+          // clear AT ALL — surface either at once so the caller applies its
+          // wait/park policy instead of burning the retry budget on a wall the
+          // next attempt hits identically.
+          if (execCode === "EXECUTOR_RATE_LIMITED" || PERMANENT_PROVIDER_ERROR_CODES.has(execCode)) {
             return {
               kind: "error",
               driver_state_id: driverStateId,

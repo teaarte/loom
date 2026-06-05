@@ -17,6 +17,11 @@ export type { AuditRowArgs } from "./audit.js";
 
 export { resumeDirective } from "./resume-directive.js";
 
+// The crash-safe create-id derivation shared by every intake path (the
+// control-plane submit + the daemon watcher seed). One home so the two can
+// never drift and break create-dedup.
+export { deterministicUuid } from "./idempotency.js";
+
 export {
   createAndStart,
   deliverAndAdvance,
@@ -101,3 +106,14 @@ export { provisionClone, clonePathFor } from "./clone.js";
 // signal the supervisor's wait disposition keys on.
 export { defaultRateLimitDetector } from "./rate-limit.js";
 export type { RateLimitDetector, RateLimitSignal } from "./rate-limit.js";
+
+// Permanent provider errors (bad model id, auth/billing) — the error codes a
+// retry can never clear, so the supervisor parks them rather than spending its
+// backoff budget. Exported so the daemon's classifier dispositions them
+// terminal from one source of truth.
+export {
+  classifyPermanentProviderError,
+  PERMANENT_PROVIDER_ERROR_CODE,
+  PERMANENT_PROVIDER_ERROR_CODES,
+} from "./provider-error.js";
+export type { PermanentProviderError } from "./provider-error.js";

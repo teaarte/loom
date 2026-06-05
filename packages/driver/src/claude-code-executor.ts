@@ -28,6 +28,7 @@
 import { KernelError, type ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import type { Executor, SpawnUsage } from "./drive.js";
+import { classifyPermanentProviderError, PERMANENT_PROVIDER_ERROR_CODE } from "./provider-error.js";
 import { defaultRateLimitDetector, type RateLimitDetector } from "./rate-limit.js";
 import { createSandboxedExecutor, type RunSpawn, type RunSpawnResult } from "./sandboxed-executor.js";
 import { spawnCapture } from "./spawn-cli.js";
@@ -177,12 +178,25 @@ export function parseClaudeResult(
     });
   }
   if (obj.is_error === true) {
+    const resultText = typeof obj.result === "string" ? obj.result : "";
+    const subtype = typeof obj.subtype === "string" ? obj.subtype : undefined;
+    // A clean-exit error envelope carrying a PERMANENT provider error (bad
+    // model id, auth/billing) gets its own code so the supervisor parks rather
+    // than re-running an identical, identically-failing spawn five times.
+    const permanent = classifyPermanentProviderError(`${subtype ?? ""}\n${resultText}`);
+    if (permanent !== null) {
+      throw new KernelError({
+        code: PERMANENT_PROVIDER_ERROR_CODE[permanent],
+        message: `claude -p rejected the request (${permanent}): ${resultText.slice(0, 300)}`,
+        detail: { subtype, result_head: resultText.slice(0, 500) },
+      });
+    }
     throw new KernelError({
       code: "EXECUTOR_FAILED",
       message: `claude -p reported an error (subtype: ${String(obj.subtype)})`,
       detail: {
-        subtype: typeof obj.subtype === "string" ? obj.subtype : undefined,
-        result_head: typeof obj.result === "string" ? obj.result.slice(0, 500) : undefined,
+        subtype,
+        result_head: resultText.length > 0 ? resultText.slice(0, 500) : undefined,
       },
     });
   }

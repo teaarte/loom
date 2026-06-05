@@ -24,6 +24,7 @@ import type {
 } from "@loomfsm/kernel";
 
 import codeBundle from "../src/bundle.js";
+import { invCode105 } from "../src/invariants.js";
 import codeManifest from "../manifest.js";
 
 // The compiled test lives at dist/test/; the package root (where agents/,
@@ -101,9 +102,9 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
         "gate-final", "finish-summary", "finalize",
       ],
     );
-    // Two post-commit observers, eight domain + floor invariants.
+    // Two post-commit observers, nine domain + floor invariants.
     assert.equal(registry.hooks.length, 2);
-    assert.equal(registry.invariants.length, 8);
+    assert.equal(registry.invariants.length, 9);
     // Vocabulary merged the bundle's error_classes onto the kernel set.
     assert.ok(registry.vocabularies.error_classes.has("impl-blockers"));
     assert.ok(registry.vocabularies.gate_roles.has("classify"));
@@ -518,15 +519,16 @@ describe("@loomfsm/bundle-code — review panel gates on source presence", () =>
 
   const ALWAYS_ON = ["logic-reviewer", "challenger-reviewer", "style-reviewer", "performance"];
 
-  it("pre-review sets source_changed=false only for a doc-only diff", async () => {
+  it("pre-review sets source_changed=false for a doc-only OR an empty (no-op) diff", async () => {
     assert.equal(await runPreReview(["docs/HANDOFF.md"], []), false);
     assert.equal(await runPreReview([], ["NOTES.md"]), false);
     assert.equal(await runPreReview(["README.md", "docs/x.rst"]), false);
     // Any source file present → true.
     assert.equal(await runPreReview(["src/app.ts", "README.md"]), true);
     assert.equal(await runPreReview(["src/app.ts"]), true);
-    // No files reported → unknown → true (never suppress without evidence).
-    assert.equal(await runPreReview([], []), true);
+    // Empty diff at pre-review (post-implement) → a no-op: suppress the panel
+    // (the work also parks at the final gate via INV_CODE_105).
+    assert.equal(await runPreReview([], []), false);
   });
 
   it("the code reviewers skip a doc-only outcome but run otherwise", () => {
@@ -590,5 +592,53 @@ describe("@loomfsm/bundle-code — tests_mode union has no fall-through", () => 
   it("both handled values drive the test agent deterministically (no third case)", () => {
     assert.equal(testAgentApplies("tdd"), true, "tdd → the test agent runs");
     assert.equal(testAgentApplies("regression-only"), false, "regression-only → the test agent is filtered");
+  });
+});
+
+// ============================================================================
+// no-op guard — an empty (no-op) implementation must not silently auto-accept
+// ============================================================================
+
+describe("@loomfsm/bundle-code — INV_CODE_105 no-op guard", () => {
+  function stateWith(opts: {
+    modified_count?: number;
+    created_count?: number;
+    final?: { status: string; decided_by: string };
+    snapshot?: boolean;
+  }): BundleStateView {
+    const bundle_state: Record<string, unknown> = {};
+    if (opts.snapshot !== false) {
+      bundle_state["diff_snapshot"] = {
+        files_modified: [],
+        files_created: [],
+        modified_count: opts.modified_count ?? 0,
+        created_count: opts.created_count ?? 0,
+      };
+    }
+    return {
+      bundle_state,
+      gates: opts.final !== undefined ? { "gate-final": opts.final } : {},
+    } as unknown as BundleStateView;
+  }
+  const snaps = {} as never;
+
+  it("fires when an empty diff is auto-approved at the final gate", () => {
+    const v = invCode105(stateWith({ final: { status: "auto-approved", decided_by: "policy" } }), snaps);
+    assert.ok(v !== null);
+    assert.equal(v?.code, "INV_CODE_105");
+  });
+
+  it("passes when a HUMAN approved the empty result (a deliberate no-op accept)", () => {
+    assert.equal(invCode105(stateWith({ final: { status: "approved", decided_by: "human" } }), snaps), null);
+  });
+
+  it("passes when the implementation actually changed files", () => {
+    const v = invCode105(stateWith({ modified_count: 2, final: { status: "auto-approved", decided_by: "policy" } }), snaps);
+    assert.equal(v, null);
+  });
+
+  it("does not assert before the diff is snapshotted, or before the final gate is approved", () => {
+    assert.equal(invCode105(stateWith({ snapshot: false, final: { status: "auto-approved", decided_by: "policy" } }), snaps), null);
+    assert.equal(invCode105(stateWith({}), snaps), null); // no gate-final yet (e.g. the trivial flow)
   });
 });

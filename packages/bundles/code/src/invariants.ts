@@ -144,6 +144,34 @@ export const invCode104: Invariant = defineInvariant(["agent_verdicts"], (state)
   };
 });
 
+// A no-op outcome — the implementer produced an EMPTY diff (zero files changed
+// or created) — must not be silently auto-accepted. The final gate may close a
+// zero-change implementation only with explicit HUMAN approval, so a mis-scoped /
+// did-nothing run PARKS for a human to judge rather than completing as "accepted"
+// with nothing done (the token-economy guard's terminal half; the review panel is
+// already skipped on the empty diff via `source_changed`). Reads `diff_snapshot`,
+// the file-accounting the `git-diff` step records in every flow; absent → no
+// assertion (the diff has not been snapshotted yet).
+export const invCode105: Invariant = defineInvariant(
+  ["bundle_state.diff_snapshot", "gates"],
+  (state) => {
+    const snap = bundleStateField(state, "diff_snapshot");
+    if (typeof snap !== "object" || snap === null) return null;
+    const modified = Number((snap as { modified_count?: unknown }).modified_count ?? NaN);
+    const created = Number((snap as { created_count?: unknown }).created_count ?? NaN);
+    if (!Number.isFinite(modified) || !Number.isFinite(created)) return null;
+    if (modified + created > 0) return null; // there were changes — nothing to assert
+    const g = state.gates["gate-final"];
+    if (!g || !isApproved(g.status)) return null;
+    if (g.decided_by === "human") return null;
+    return {
+      code: "INV_CODE_105",
+      message: `the implementation produced no file changes; an empty (no-op) result must be human-approved, not '${g.decided_by}'`,
+      detail: { decided_by: g.decided_by },
+    };
+  },
+);
+
 // ============================================================================
 // Safety floor — only engages when the final role's policy is `auto`
 // ============================================================================
@@ -236,6 +264,7 @@ export const codeBundleInvariants: Invariant[] = [
   invCode102,
   invCode103,
   invCode104,
+  invCode105,
   invLintClean,
   invTestsPass,
   invTypecheckClean,

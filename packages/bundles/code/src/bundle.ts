@@ -89,10 +89,18 @@ async function writeClassifyDecisions(
   // Honour an operator-pinned complexity verbatim; only guess when none was
   // pinned (the default path — byte-identical to before).
   if (!complexityPinned(state)) {
+    // Deterministic FALLBACK only — the classifier agent (now a balanced-tier
+    // model) does the real scoping and overwrites this. Kept conservative: it
+    // never guesses `trivial` (which skips ALL review/gates — too risky for a
+    // keyword heuristic; the LLM emits it under strict criteria, or the operator
+    // pins it). Greenfield/scaffold/migration verbs route to the full panel.
     let complexity: "simple" | "medium" | "complex";
-    if (/\b(refactor|migrate|migration|architecture|redesign|rewrite)\b/.test(task) || len > 400) {
+    if (
+      /\b(refactor|migrate|migration|architecture|redesign|rewrite|scaffold|bootstrap|monorepo|set ?up|initiali[sz]e)\b/.test(task) ||
+      len > 400
+    ) {
       complexity = "complex";
-    } else if (len < 120 && /\b(typo|rename|bump|comment|docs?|readme)\b/.test(task)) {
+    } else if (len < 120 && /\b(typo|rename|bump|comment|docs?|readme|wording)\b/.test(task)) {
       complexity = "simple";
     } else {
       complexity = "medium";
@@ -153,17 +161,19 @@ async function derivePreReview(
   ctx.tx.set_decision?.("api_touched", api_touched);
   ctx.tx.set_decision?.("security_needed", security_needed);
 
-  // `source_changed`: false ONLY when there is positive evidence that the
-  // outcome touched no source — every modified/created path is a doc. A
-  // doc-only outcome (e.g. a verdict whose only artifact is a hand-off `.md`)
-  // does not warrant the full adversarial code panel; the always-on reviewers
-  // self-gate on this flag below. Left true when files are absent (unknown —
-  // never suppress review without evidence) so the only behavior change is the
-  // doc-only case. The conditional reviewers (ui/api/security/playwright)
-  // already drop out on a doc-only diff via their own flags.
+  // `source_changed`: false when there is positive evidence the outcome changed
+  // no source the adversarial code panel should run on — EITHER an empty diff
+  // (the implementer produced nothing: a no-op that must not burn the panel) OR
+  // every modified/created path is a doc (a hand-off `.md`). This step runs in
+  // the implementation phase, AFTER `git-diff`, so an empty diff here is the
+  // self-diff's verdict that nothing changed — not the "files unknown" case
+  // `plan-review` (planning, before any diff, flag unset) sits in. The always-on
+  // reviewers self-gate on this flag below; a no-op additionally PARKS at the
+  // final gate (INV_CODE_105) rather than auto-accepting.
   const allFiles = [...state.files_modified, ...state.files_created];
+  const noChanges = allFiles.length === 0;
   const docOnly = allFiles.length > 0 && allFiles.every((f) => DOC_FILE.test(f));
-  ctx.tx.set_decision?.("source_changed", !docOnly);
+  ctx.tx.set_decision?.("source_changed", !(noChanges || docOnly));
 }
 
 // Documentation file extensions — a change confined to these is a doc-only
@@ -199,18 +209,45 @@ async function verifyTestFileHashes(
   ctx.tx.audit({ type: "sacred-tests-checked", modified_test_files: touched.length });
 }
 
-// Surface any Finish-contract actions the task asked for that the engine
-// does NOT perform — committing, pushing, opening a PR, publishing,
-// deploying. The kernel is side-effect-free by design (it never touches the
-// operator's repo), so when the brief names one of these the honest "done"
-// summary should say it is still the operator's to run, rather than imply
-// full completion. Deterministic scan over the task text; writes the note
-// into the generic `completion_summary` field the kernel appends to the
-// terminal summary. No match → no note (the common case).
+// Build the task-completion summary — the concise "what was done" digest an
+// operator reads to judge a result from the phone. Deterministic over what the
+// substrate already tracks (the file accounting + the classification decisions),
+// plus the existing reminder of any finish-contract actions the engine does NOT
+// perform (commit / push / PR / publish / deploy — the kernel never touches the
+// operator's repo, so it is honest to flag them as still theirs to run).
+//
+// It rides in the generic `completion_summary` field the kernel appends to the
+// terminal summary (verbatim) — and, because it lives in the store, it survives
+// archival, so the dashboard surfaces it on a completed task and in the archived
+// trace alike (a sandbox file would be GC'd with the worktree at merge-back).
+// A pure state derivation: no FS write, no clock, idempotent.
 async function deriveFinishSummary(
   state: BundleStateView,
   ctx: StageContext,
 ): Promise<void> {
+  const created = state.files_created;
+  const modified = state.files_modified;
+
+  const counts: string[] = [];
+  if (created.length > 0) counts.push(`${created.length} new`);
+  if (modified.length > 0) counts.push(`${modified.length} changed`);
+  const fileLine =
+    counts.length > 0 ? `Touched ${counts.join(", ")} file(s).` : "No file changes were recorded.";
+
+  // A short, deterministic sample of the touched paths so the digest names the
+  // surface without dumping a huge list.
+  const sample = [...created, ...modified].slice(0, 8);
+  const sampleLine = sample.length > 0 ? ` Files: ${sample.join(", ")}${[...created, ...modified].length > sample.length ? ", …" : ""}.` : "";
+
+  const complexity = state.decisions["complexity"];
+  const tests = state.decisions["tests_mode"];
+  const classBits: string[] = [];
+  if (typeof complexity === "string") classBits.push(`complexity ${complexity}`);
+  if (typeof tests === "string") classBits.push(`tests ${tests}`);
+  const classLine = classBits.length > 0 ? ` (${classBits.join(", ")})` : "";
+
+  const parts = [`${fileLine}${sampleLine}${classLine}`];
+
   const task = state.task.toLowerCase();
   const actions: string[] = [];
   if (/\bcommit(s|ted|ting)?\b/.test(task)) actions.push("commit");
@@ -218,12 +255,12 @@ async function deriveFinishSummary(
   if (/\bpull[ -]request\b|\bpr\b|\bmr\b|\bmerge[ -]request\b/.test(task)) actions.push("open a PR");
   if (/\bpublish(es|ed|ing)?\b|\brelease[sd]?\b|\btag\b/.test(task)) actions.push("publish/release");
   if (/\bdeploy(s|ed|ment|ing)?\b/.test(task)) actions.push("deploy");
-  if (actions.length === 0) return;
-  const list = [...new Set(actions)].join(", ");
-  ctx.tx.set_bundle_state_field?.(
-    "completion_summary",
-    `the task named finish steps the engine does not perform (it never modifies your repo) — run them yourself: ${list}.`,
-  );
+  if (actions.length > 0) {
+    const list = [...new Set(actions)].join(", ");
+    parts.push(`The task named finish steps the engine does not perform (it never modifies your repo) — run them yourself: ${list}.`);
+  }
+
+  ctx.tx.set_bundle_state_field?.("completion_summary", parts.join(" "));
 }
 
 // ============================================================================
@@ -557,7 +594,7 @@ export default defineBundle({
   },
 
   agents: [
-    { name: "classifier", template_path: "agents/classifier.md", output_kind: "classifier", default_model: "fast" },
+    { name: "classifier", template_path: "agents/classifier.md", output_kind: "classifier", default_model: "balanced" },
     { name: "planner", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "premium" },
     { name: "implementer", template_path: "agents/implementer.md", output_kind: "nonreview", default_model: "premium" },
     { name: "code-analyzer", template_path: "agents/code-analyzer.md", output_kind: "nonreview", default_model: "balanced" },

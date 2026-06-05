@@ -34,6 +34,9 @@ export function ModelMap({ projectId }: { projectId: string }) {
   // The per-agent provider dropdown selection + a per-backend model-list cache.
   const [providerSel, setProviderSel] = useState<Record<string, string>>({});
   const [modelsByBackend, setModelsByBackend] = useState<Record<string, BackendModelsResponse>>({});
+  // Per-agent model-dropdown search (OpenRouter lists hundreds — a substring
+  // filter keeps the picker usable without a heavier combobox).
+  const [modelSearch, setModelSearch] = useState<Record<string, string>>({});
 
   const reload = useCallback(async () => {
     try {
@@ -97,7 +100,9 @@ export function ModelMap({ projectId }: { projectId: string }) {
 
   if (error !== null) return <div className={styles.error}>{error}</div>;
   if (agents === null || providers === null) return <div className={styles.loading}>loading models…</div>;
-  const backends = providers.providers.map((p) => p.backend);
+  // Hide backends with no credential / unsupported family (`available === false`);
+  // keep the unprobed ones (`null` — local / external CLI, may still work).
+  const backends = providers.providers.filter((p) => p.available !== false).map((p) => p.backend);
 
   return (
     <div>
@@ -124,6 +129,9 @@ export function ModelMap({ projectId }: { projectId: string }) {
                 : { ok: true as const };
             const selBackend = providerSel[a.agent] ?? "";
             const modelList = selBackend.length > 0 ? modelsByBackend[selBackend] : undefined;
+            const search = (modelSearch[a.agent] ?? "").trim().toLowerCase();
+            const allModels = modelList?.models ?? [];
+            const shownModels = search.length > 0 ? allModels.filter((m) => m.toLowerCase().includes(search)) : allModels;
             return (
               <tr key={a.agent}>
                 <td className={styles.agent}>{a.agent}</td>
@@ -155,10 +163,19 @@ export function ModelMap({ projectId }: { projectId: string }) {
                         </option>
                       ))}
                     </select>
+                    {modelList !== undefined && allModels.length > 8 && (
+                      <input
+                        className={styles.search}
+                        type="text"
+                        placeholder="filter models…"
+                        value={modelSearch[a.agent] ?? ""}
+                        onChange={(e) => setModelSearch((s) => ({ ...s, [a.agent]: e.target.value }))}
+                      />
+                    )}
                     <select
                       className={styles.select}
                       value=""
-                      disabled={modelList === undefined || modelList.models.length === 0}
+                      disabled={modelList === undefined || allModels.length === 0}
                       onChange={(e) => {
                         if (e.target.value.length > 0) setDrafts((d) => ({ ...d, [a.agent]: e.target.value }));
                       }}
@@ -166,17 +183,22 @@ export function ModelMap({ projectId }: { projectId: string }) {
                       <option value="">
                         {modelList === undefined
                           ? "model…"
-                          : modelList.models.length === 0
+                          : allModels.length === 0
                             ? "no list — type below"
-                            : "model…"}
+                            : shownModels.length === 0
+                              ? "no match"
+                              : `model… (${shownModels.length})`}
                       </option>
-                      {(modelList?.models ?? []).map((m) => (
+                      {shownModels.map((m) => (
                         <option key={m} value={m}>
                           {m}
                         </option>
                       ))}
                     </select>
                   </div>
+                  {modelList?.reason !== undefined && (
+                    <div className={styles.modelNote}>{modelList.reason}</div>
+                  )}
                   <input
                     className={styles.input}
                     type="text"

@@ -1,0 +1,74 @@
+.note {
+  opacity: 0.65;
+  font-size: 0.85em;
+  padding: 0.3rem 0;
+}
+.loadBtn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--accent, #6ea8fe);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85em;
+  padding: 0.2rem 0;
+  text-align: left;
+}
+.loadBtn:hover {
+  text-decoration: underline;
+}
+.box {
+  margin-top: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.field {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.fieldHead {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85em;
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+}
+.caret {
+  opacity: 0.6;
+}
+.size {
+  margin-left: auto;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.92em;
+}
+.body {
+  margin: 0;
+  padding: 0.5rem;
+  border-top: 1px solid var(--line);
+  max-height: 22rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8em;
+  line-height: 1.4;
+}
+.empty {
+  opacity: 0.5;
+}
+.parse {
+  font-size: 0.8em;
+  opacity: 0.75;
+  padding: 0.1rem 0.2rem;
+  word-break: break-word;
+}

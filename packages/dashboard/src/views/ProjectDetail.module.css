@@ -73,6 +73,14 @@
   margin: 0.3rem 0 0.5rem;
   white-space: pre-wrap;
 }
+.approving {
+  margin: 0.3rem 0 0.6rem;
+}
+.approvingHead {
+  font-size: 0.82em;
+  opacity: 0.7;
+  margin-bottom: 0.2rem;
+}
 
 .row {
   display: flex;

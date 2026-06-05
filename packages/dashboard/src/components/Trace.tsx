@@ -13,6 +13,7 @@ import { useState } from "react";
 import { api, ApiError } from "../lib/api.js";
 import { useApi } from "../hooks/useApi.js";
 import { cx } from "../lib/cx.js";
+import { SpawnTranscriptView } from "./SpawnTranscript.js";
 import { formatDuration } from "../lib/format.js";
 import {
   deriveAgentDurations,
@@ -56,9 +57,15 @@ export function Trace({ projectId, archivedTaskId }: { projectId: string; archiv
 
   const timed = deriveAgentDurations(data.agents, data.summary?.started_at ?? null);
   const totalMs = totalTime(data);
+  const summaryNote = data.summary?.completion_summary ?? null;
 
   return (
     <div>
+      {summaryNote !== null && summaryNote.length > 0 && (
+        <div className={styles.summary}>
+          <span className={styles.summaryLabel}>summary</span> {summaryNote}
+        </div>
+      )}
       {totalMs !== null && (
         <div className={styles.total}>
           total {formatDuration(totalMs)} · {data.agents.length} run{data.agents.length === 1 ? "" : "s"}
@@ -68,7 +75,7 @@ export function Trace({ projectId, archivedTaskId }: { projectId: string; archiv
         {timed.map((a, i) => (
           <li key={a.agent_run_id} className={styles.step}>
             {i > 0 && <span className={styles.arrow}>→</span>}
-            <AgentCard agent={a} findings={data.findings} verdicts={data.verdicts} />
+            <AgentCard projectId={projectId} agent={a} findings={data.findings} verdicts={data.verdicts} />
           </li>
         ))}
       </ol>
@@ -96,10 +103,12 @@ function parse(iso: string | null): number | null {
 }
 
 function AgentCard({
+  projectId,
   agent,
   findings,
   verdicts,
 }: {
+  projectId: string;
   agent: TimedAgent;
   findings: TraceFinding[];
   verdicts: TraceVerdict[];
@@ -107,24 +116,26 @@ function AgentCard({
   const [open, setOpen] = useState(false);
   const mine = findingsForAgent(findings, agent.agent, agent.phase);
   const myVerdicts = verdictsForAgent(verdicts, agent.agent, agent.phase);
-  const hasDrill = mine.length > 0 || myVerdicts.length > 0;
+  // Every run now drills in: at minimum its transcript (prompt + output) is
+  // readable, plus any structured findings/verdicts it produced.
   const tokens = tokenSummary(agent);
 
   return (
     <div className={styles.card}>
       <button
-        className={cx(styles.cardHead, hasDrill && styles.clickable)}
-        onClick={() => hasDrill && setOpen((o) => !o)}
+        className={cx(styles.cardHead, styles.clickable)}
+        onClick={() => setOpen((o) => !o)}
       >
         <span className={styles.agent}>{agent.agent}</span>
         <span className={styles.kind}>{agent.output_kind}</span>
         {agent.model !== null && <span className={styles.model}>{agent.model}</span>}
         {agent.duration_ms !== null && <span className={styles.dur}>{formatDuration(agent.duration_ms)}</span>}
         {tokens.length > 0 && <span className={styles.tokens}>{tokens}</span>}
-        {hasDrill && <span className={styles.caret}>{open ? "▾" : "▸"}</span>}
+        <span className={styles.caret}>{open ? "▾" : "▸"}</span>
       </button>
       {open && (
         <div className={styles.drill}>
+          <SpawnTranscriptView projectId={projectId} runId={agent.agent_run_id} />
           {myVerdicts.map((v, i) => (
             <div key={i} className={styles.verdict}>
               <strong>{v.verdict}</strong>

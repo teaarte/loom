@@ -9,6 +9,23 @@
   margin: 0.3rem 0 0.5rem;
   font-variant-numeric: tabular-nums;
 }
+.summary {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent, #6ea8fe);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 0.5rem 0.6rem;
+  margin: 0.2rem 0 0.6rem;
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+.summaryLabel {
+  text-transform: uppercase;
+  font-size: 0.72em;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+  margin-right: 0.4rem;
+}
 
 /* The chain — a vertical list of run cards with a connector arrow between. */
 .chain {

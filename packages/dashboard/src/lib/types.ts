@@ -187,6 +187,10 @@ export interface TraceSummary {
   started_at: string | null;
   ended_at: string | null;
   task: string | null;
+  // The bundle's "what was done" completion note (DATA off the store) — shown on
+  // a completed task and in the archived trace. Optional so an older server is
+  // tolerated.
+  completion_summary?: string | null;
 }
 
 export interface TraceResponse {
@@ -232,6 +236,38 @@ export interface ArtifactContent {
   path: string;
   content: string;
   truncated: boolean;
+}
+
+// ----- per-spawn transcript (`GET /projects/:id/spawn/:run_id`) -----------
+// The prompt + raw output + structured parse + usage the driver wrote for one
+// spawn, so the operator can read WHAT a spawn produced at the gate / in the
+// chain. Every field is generic DATA — agent / phase names are values.
+
+export interface SpawnUsageView {
+  agent?: string;
+  model?: string;
+  tokens?: { in: number; out: number; cached?: number };
+  cost_usd?: number;
+  num_turns?: number;
+  duration_ms?: number;
+}
+
+export interface SpawnTranscript {
+  agent: string;
+  agent_run_id: string;
+  phase: string;
+  model: string | null;
+  prompt: string;
+  raw_output: string;
+  parse_result: { files_modified?: string[]; files_created?: string[] };
+  usage?: SpawnUsageView;
+  recorded_at: string;
+}
+
+export interface SpawnTranscriptResponse {
+  run_id: string;
+  // Null when the file was present but unparseable (a torn write).
+  transcript: SpawnTranscript | null;
 }
 
 // The masked secret store (`GET /secrets`) — name → masked value (`****1234`).

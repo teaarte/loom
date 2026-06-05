@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../lib/api.js";
 import { History } from "../components/History.js";
 import { ModelMap } from "../components/ModelMap.js";
+import { SpawnTranscriptView } from "../components/SpawnTranscript.js";
 import { Trace } from "../components/Trace.js";
 import { useApi } from "../hooks/useApi.js";
 import { useSSE } from "../hooks/useSSE.js";
@@ -17,7 +18,7 @@ import { cx } from "../lib/cx.js";
 import { elapsedFor, formatDetailValue, logParts } from "../lib/format.js";
 import { POLICY_PRESETS } from "../lib/policies.js";
 import { statusBadge, type StatusTone } from "../lib/status.js";
-import type { LogLine, ProjectStatus, ProvidersResponse, SubmitResult } from "../lib/types.js";
+import type { LogLine, ProjectStatus, ProvidersResponse, SubmitResult, TraceResponse } from "../lib/types.js";
 import styles from "./ProjectDetail.module.css";
 
 const DOT_CLASS: Record<StatusTone, string | undefined> = {
@@ -160,6 +161,8 @@ function SubmitForm({ projectId, docker }: { projectId: string; docker?: { avail
   const [fast, setFast] = useState(false);
   const [complexity, setComplexity] = useState("");
   const [useDocker, setUseDocker] = useState(false);
+  const [pushOnAccept, setPushOnAccept] = useState(false);
+  const [mergeOnAccept, setMergeOnAccept] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -185,6 +188,8 @@ function SubmitForm({ projectId, docker }: { projectId: string; docker?: { avail
           ? { initial_decisions: { complexity: effectiveComplexity, complexity_pinned: true } }
           : {}),
         ...(useDocker ? { docker: true } : {}),
+        ...(pushOnAccept ? { push: true } : {}),
+        ...(mergeOnAccept ? { squash_merge: true } : {}),
       });
       setMsg(`${r.replayed ? "already running" : "submitted"} — ${r.task_id ?? "?"} [${r.status}]`);
       // Keep the textarea so the operator can re-read / re-submit what they asked.
@@ -252,6 +257,16 @@ function SubmitForm({ projectId, docker }: { projectId: string; docker?: { avail
         )}
       </div>
       <div className={styles.row}>
+        <label className={styles.check}>
+          <input type="checkbox" checked={pushOnAccept} onChange={(e) => setPushOnAccept(e.target.checked)} />
+          push branch on accept
+        </label>
+        <label className={styles.check}>
+          <input type="checkbox" checked={mergeOnAccept} onChange={(e) => setMergeOnAccept(e.target.checked)} />
+          squash-merge on accept
+        </label>
+      </div>
+      <div className={styles.row}>
         <button className={styles.btn} disabled={busy} onClick={() => void submit()}>
           {busy ? "submitting…" : "submit"}
         </button>
@@ -313,10 +328,34 @@ function TaskControls({
   const cancel = (): Promise<void> =>
     act("cancelled", () => api("POST", `/projects/${encodeURIComponent(projectId)}/cancel`));
 
-  // A finished task: the only useful action is to archive it (free the slot).
+  // Ship: push the task branch / squash-merge it into the checkout. The server
+  // refuses cleanly (returns `{ pushed:false, reason }`) so surface the reason
+  // rather than a bare "✓". Shown on an accepted task — reviewed and ready.
+  const ship = (verb: "push" | "merge"): Promise<void> =>
+    act(verb, async () => {
+      const r = await api<{ pushed?: boolean; merged?: boolean; reason?: string }>(
+        "POST",
+        `/projects/${encodeURIComponent(projectId)}/${verb}`,
+      );
+      const ok = verb === "push" ? r.pushed : r.merged;
+      if (ok !== true) throw new ApiError(400, r.reason ?? "refused", `not ${verb}ed: ${r.reason ?? "refused"}`);
+    });
+
+  // A finished task: archive it (free the slot); and when accepted, ship it.
   if (!running) {
+    const accepted = status.verdict === "accepted";
     return (
       <div className={styles.controls}>
+        {accepted && (
+          <>
+            <button className={styles.btn} disabled={busy !== null} onClick={() => void ship("push")}>
+              {busy === "push" ? "pushing…" : "⬆ push branch"}
+            </button>
+            <button className={styles.btn} disabled={busy !== null} onClick={() => void ship("merge")}>
+              {busy === "merge" ? "merging…" : "⤵ squash & merge"}
+            </button>
+          </>
+        )}
         <button className={styles.dangerBtn} disabled={busy !== null} onClick={() => void cancel()}>
           {busy === "cancelled" ? "archiving…" : "🗄 archive (free the slot)"}
         </button>
@@ -381,6 +420,7 @@ function AnswerForm({
     <fieldset className={cx(styles.box, styles.gateBox)}>
       <legend>parked on gate: {gate.gate}</legend>
       {gate.message.length > 0 && <div className={styles.gateMsg}>{gate.message}</div>}
+      <ApprovalPreview projectId={projectId} />
       <div className={styles.row}>
         <label className={styles.policyLabel}>
           decision
@@ -422,6 +462,27 @@ function AnswerForm({
         {msg !== null && <span className={styles.msg}>{msg}</span>}
       </div>
     </fieldset>
+  );
+}
+
+// "Read what you're approving": the parked spawn's output. The store does not
+// say which spawn a gate is approving (that is bundle knowledge), so this shows
+// the MOST RECENT recorded spawn's transcript — in practice the one that just
+// produced the artifact at the gate (the plan, the implementation, the final
+// check). Domain-blind: it picks the last chain entry, no agent name hardcoded.
+function ApprovalPreview({ projectId }: { projectId: string }) {
+  const { data } = useApi<TraceResponse>(`/projects/${encodeURIComponent(projectId)}/trace`);
+  if (data === null || data.agents.length === 0) return null;
+  const last = data.agents[data.agents.length - 1];
+  if (last === undefined) return null;
+  return (
+    <div className={styles.approving}>
+      <div className={styles.approvingHead}>
+        what you're approving — {last.agent}
+        {last.model !== null && last.model.length > 0 ? ` · ${last.model}` : ""}
+      </div>
+      <SpawnTranscriptView projectId={projectId} runId={last.agent_run_id} autoOpen />
+    </div>
   );
 }
 

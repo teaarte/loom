@@ -39,7 +39,12 @@ export {
   removeClone,
   sweepOrphanWorktree,
   sweepOrphanClone,
+  branchNameFor,
+  pushTaskBranch,
+  squashMergeTaskBranch,
   type MergeBackResult,
+  type PushBranchResult,
+  type SquashMergeResult,
 } from "./worktree-lifecycle.js";
 
 export {

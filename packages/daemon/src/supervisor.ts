@@ -494,6 +494,11 @@ async function driveWithDeadline(
     onNotice: (message) => logger.warn("executor-notice", { message }),
     onUsage: (usage) =>
       logger.info("spawn-usage", {
+        // Spawn identity first so the live-log line reads "agent … model …" —
+        // an operator can see WHICH agent + model produced the run, not just its
+        // token/cost figures. Generic DATA off the usage envelope.
+        ...(usage.agent !== undefined ? { agent: usage.agent } : {}),
+        ...(usage.model !== undefined && usage.model !== "" ? { model: usage.model } : {}),
         ...(usage.cost_usd !== undefined ? { cost_usd: usage.cost_usd } : {}),
         ...(usage.tokens !== undefined
           ? { tokens_in: usage.tokens.in, tokens_out: usage.tokens.out, tokens_cached: usage.tokens.cached }

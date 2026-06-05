@@ -63,7 +63,7 @@ function isWorkTree(dir: string): boolean {
 
 // A task id is server-issued and well-formed, but keep the branch ref strict
 // regardless: anything outside a conservative ref-safe set becomes a dash.
-function branchNameFor(taskId: string): string {
+export function branchNameFor(taskId: string): string {
   const safe = taskId.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^-+/, "");
   return `loom/${safe.length > 0 ? safe : "task"}`;
 }
@@ -237,4 +237,118 @@ function parsePaths(out: string): string[] {
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
+}
+
+// ----- ship: push + squash-merge the task branch ------------------------
+//
+// Merge-back (above) integrates the isolated copy's work onto a `loom/<task>`
+// branch but NEVER touches the operator's checked-out branch — that is the
+// sandbox invariant. Push and squash-merge are the ONE sanctioned write to the
+// operator's branch / remote, taken DELIBERATELY (a button or a submit-time
+// flag), never automatically by the sandbox. Both are git-ref/path reasoning
+// only — domain-blind — and both refuse cleanly (a typed `reason`) rather than
+// throw, so a control plane surfaces an actionable message.
+
+export interface PushBranchResult {
+  pushed: boolean;
+  branch?: string;
+  remote?: string;
+  // When not pushed, why: "no-git" / "no-branch" / "no-remote" / "push-failed".
+  reason?: string;
+  // git's own message on a push failure (auth / non-fast-forward) — surfaced so
+  // the operator sees WHY, not just that it failed.
+  detail?: string;
+}
+
+// The remote to push to: an explicit override, else `origin` when present, else
+// the single configured remote, else null (no remote → cannot push).
+function resolveRemote(projectDir: string, override?: string): string | null {
+  if (override !== undefined && override.length > 0) return override;
+  const remotes = parsePaths(git(projectDir, ["remote"]).stdout);
+  if (remotes.includes("origin")) return "origin";
+  return remotes.length === 1 ? (remotes[0] as string) : remotes[0] ?? null;
+}
+
+function branchExists(projectDir: string, branch: string): boolean {
+  return git(projectDir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
+}
+
+// Push the task's `loom/<task>` branch to a remote (setting upstream), so the
+// reviewable work leaves the host. Refuses cleanly when the project is not a git
+// repo, the branch was never created (no changes / not yet merged-back), or no
+// remote is configured. Never throws.
+export function pushTaskBranch(
+  projectDir: string,
+  taskId: string | null,
+  opts: { remote?: string } = {},
+): PushBranchResult {
+  if (!isWorkTree(projectDir)) return { pushed: false, reason: "no-git" };
+  const branch = branchNameFor(taskId ?? "task");
+  if (!branchExists(projectDir, branch)) return { pushed: false, branch, reason: "no-branch" };
+  const remote = resolveRemote(projectDir, opts.remote);
+  if (remote === null) return { pushed: false, branch, reason: "no-remote" };
+  const res = git(projectDir, ["push", "--set-upstream", remote, branch]);
+  if (!res.ok) return { pushed: false, branch, remote, reason: "push-failed", detail: res.stderr.trim() };
+  return { pushed: true, branch, remote };
+}
+
+export interface SquashMergeResult {
+  merged: boolean;
+  branch?: string;
+  // The branch the work was squash-merged INTO — the operator's current checkout.
+  into?: string;
+  head_sha?: string;
+  files_changed?: string[];
+  // When not merged, why: "no-git" / "no-branch" / "detached-head" /
+  // "dirty-tree" / "no-changes" / "merge-conflict" / "commit-failed".
+  reason?: string;
+  detail?: string;
+}
+
+// Squash-merge the task's `loom/<task>` branch into the operator's CURRENT
+// checked-out branch (one commit, the change as a unit). This is the one write
+// to the operator's branch, so it is conservative: it refuses on a non-git repo,
+// a missing branch, a detached HEAD, OR a dirty working tree (never merge over
+// uncommitted operator work). On a conflict it hard-resets back to the
+// pre-merge HEAD so the tree is never left half-merged. Never throws.
+export function squashMergeTaskBranch(projectDir: string, taskId: string | null): SquashMergeResult {
+  if (!isWorkTree(projectDir)) return { merged: false, reason: "no-git" };
+  const branch = branchNameFor(taskId ?? "task");
+  if (!branchExists(projectDir, branch)) return { merged: false, branch, reason: "no-branch" };
+  const into = git(projectDir, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout;
+  if (into.length === 0) return { merged: false, branch, reason: "detached-head" };
+  if (git(projectDir, ["status", "--porcelain"]).stdout.length > 0) {
+    return { merged: false, branch, into, reason: "dirty-tree" };
+  }
+  const before = git(projectDir, ["rev-parse", "HEAD"]).stdout;
+
+  // `--squash` stages the branch's net change without recording a merge parent;
+  // `--no-commit` keeps it explicit. A conflict leaves the index dirty, so reset
+  // hard back to `before` to restore a clean tree before reporting.
+  const squashed = git(projectDir, ["merge", "--squash", "--no-commit", branch]);
+  if (!squashed.ok) {
+    git(projectDir, ["reset", "--hard", before]);
+    return { merged: false, branch, into, reason: "merge-conflict", detail: squashed.stderr.trim() };
+  }
+  // Nothing to commit → the branch added nothing over HEAD.
+  if (git(projectDir, ["diff", "--cached", "--quiet"]).ok) {
+    git(projectDir, ["reset", "--hard", before]);
+    return { merged: false, branch, into, reason: "no-changes" };
+  }
+  const committed = git(projectDir, [
+    "-c", "user.email=loom@localhost",
+    "-c", "user.name=loom",
+    "-c", "commit.gpgsign=false",
+    "-c", "core.hooksPath=/dev/null",
+    "commit",
+    "-m",
+    `loom: squash-merge ${branch}`,
+  ]);
+  if (!committed.ok) {
+    git(projectDir, ["reset", "--hard", before]);
+    return { merged: false, branch, into, reason: "commit-failed", detail: committed.stderr.trim() };
+  }
+  const head = git(projectDir, ["rev-parse", "HEAD"]).stdout;
+  const files = parsePaths(git(projectDir, ["diff", "--name-only", before, head]).stdout);
+  return { merged: true, branch, into, head_sha: head, files_changed: files };
 }

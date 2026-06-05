@@ -11,12 +11,31 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 
 import { closeDb } from "@loomfsm/kernel";
 import type { LLMProvider, PipelineState } from "@loomfsm/kernel";
 
 import { createAssembleRegistry } from "../src/bootstrap.js";
+
+// Hermetic LOOM_HOME: registry assembly composes the GLOBAL model map into the
+// provider routing (`resolveConfig` reads `$LOOM_HOME`). Without isolating it,
+// these tests pick up the dev machine's real `~/.config/loom` and the routing
+// assertions flake (green in CI, red on a machine with a configured loom). Point
+// LOOM_HOME at an empty temp dir for the suite so only the project's
+// `.claude/providers.json` decides routing.
+let loomHome: string;
+let priorLoomHome: string | undefined;
+before(() => {
+  loomHome = mkdtempSync(join(tmpdir(), "loom-prov-home-"));
+  priorLoomHome = process.env["LOOM_HOME"];
+  process.env["LOOM_HOME"] = loomHome;
+});
+after(() => {
+  if (priorLoomHome === undefined) delete process.env["LOOM_HOME"];
+  else process.env["LOOM_HOME"] = priorLoomHome;
+  rmSync(loomHome, { recursive: true, force: true });
+});
 
 function stub(name: string): LLMProvider {
   return {

@@ -66,19 +66,17 @@ async function ollamaAvailable(): Promise<{ ok: boolean; reason?: string }> {
   }
 }
 
-// Host-supplied spawn context. The kernel's prompt is the template body;
-// a real host appends the task (and would add refs / stack / CLAUDE.md).
-function withSpawnContext(templatePrompt: string): string {
-  return `${templatePrompt}\n\n## Spawn context\n\nTask description: ${TASK}\n`;
-}
-
 async function runViaOllama(agent: string, agentRunId: string, prompt: string): Promise<string> {
+  // The kernel's rendered prompt already carries the `## Spawn context` block
+  // (the task + canonical identifiers) — the spawn-context assembler appends it
+  // at build. The host passes that prompt through verbatim; an earlier host-side
+  // re-append double-built the section.
   const req: ProviderSpawnRequest = {
     agent,
     agent_run_id: agentRunId,
     phase: "context",
     model: MODEL,
-    prompt: withSpawnContext(prompt),
+    prompt,
     extras: { max_tokens: MAX_TOKENS },
   };
   const result = await ollamaProvider.spawn(req);

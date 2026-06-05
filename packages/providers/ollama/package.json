@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/provider-ollama",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "type": "module",
   "description": "Local-model provider for loom — runs agents through a local Ollama server, no API key.",
   "license": "Apache-2.0",

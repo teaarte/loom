@@ -62,8 +62,14 @@ export function ProjectDetail({
   // checkbox is simply hidden.
   const { data: providers } = useApi<ProvidersResponse>("/providers");
   const status = snapshot?.status ?? null;
+  const supervised = snapshot?.supervised ?? false;
   const badge = statusBadge(status);
   const running = status?.status === "in_progress";
+  // A task occupies the slot until it is rotated to history: while one is
+  // in_progress the submit form is hidden (it is not logical to submit over a
+  // running task); on an empty OR a finished slot the form is shown (a submit
+  // auto-archives a finished task first).
+  const activeTask = running === true;
   const now = useNow(running ?? false);
   const elapsed = status?.has_task ? elapsedFor(status.started_at, status.ended_at, now) : "";
 
@@ -98,7 +104,7 @@ export function ProjectDetail({
         </details>
       )}
 
-      <TaskControls projectId={projectId} status={status} />
+      <TaskControls projectId={projectId} status={status} supervised={supervised} />
 
       {status?.parked_gate && (
         <AnswerForm projectId={projectId} gate={status.parked_gate} />
@@ -115,7 +121,9 @@ export function ProjectDetail({
         </div>
       )}
 
-      <SubmitForm projectId={projectId} {...(providers?.docker !== undefined ? { docker: providers.docker } : {})} />
+      {!activeTask && (
+        <SubmitForm projectId={projectId} {...(providers?.docker !== undefined ? { docker: providers.docker } : {})} />
+      )}
 
       <h2>log {connected ? <span className={styles.live}>● live</span> : <span className={styles.dead}>stream closed</span>}</h2>
       <CostNote log={snapshot?.log ?? null} />
@@ -253,14 +261,32 @@ function SubmitForm({ projectId, docker }: { projectId: string; docker?: { avail
   );
 }
 
-// Pause / resume / cancel a task — first-class buttons over the SAME registry
+// Pause / resume / cancel / archive — first-class buttons over the SAME registry
 // machinery the CLI uses. Pause = unregister the project (`DELETE /projects/:id`):
 // aborts the in-flight drive, releases the lock, KEEPS the task in the store +
 // catalog. Resume = re-register (`POST /projects`) → the watcher's
-// recover-on-start re-drives the in-flight task idempotently. Cancel = the
-// first-class abort+abandon route, freeing the slot in one action. Domain-blind:
-// it reasons only about generic status, never a gate's meaning.
-function TaskControls({ projectId, status }: { projectId: string; status: ProjectStatus | null }) {
+// recover-on-start re-drives the in-flight task idempotently. Cancel/archive =
+// the abort+archive route, freeing the slot in one action. Domain-blind: it
+// reasons only about generic status + whether a watcher is attached.
+//
+// The controls shown depend on BOTH the store status and `supervised` (is a
+// watcher attached):
+//   in_progress + supervised   → ⏸ pause (a watcher is driving it) + ✕ cancel
+//   in_progress + !supervised  → ▶ resume (an in-flight task with no watcher:
+//                                 paused, or recovered-but-not-driven — resume
+//                                 actually restarts it) + ✕ cancel
+//   completed / abandoned      → 🗄 archive (free the finished slot for the next
+//                                 task) — NO resume, which was a no-op on a
+//                                 finished task and is what made the slot wedge.
+function TaskControls({
+  projectId,
+  status,
+  supervised,
+}: {
+  projectId: string;
+  status: ProjectStatus | null;
+  supervised: boolean;
+}) {
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -287,9 +313,22 @@ function TaskControls({ projectId, status }: { projectId: string; status: Projec
   const cancel = (): Promise<void> =>
     act("cancelled", () => api("POST", `/projects/${encodeURIComponent(projectId)}/cancel`));
 
+  // A finished task: the only useful action is to archive it (free the slot).
+  if (!running) {
+    return (
+      <div className={styles.controls}>
+        <button className={styles.dangerBtn} disabled={busy !== null} onClick={() => void cancel()}>
+          {busy === "cancelled" ? "archiving…" : "🗄 archive (free the slot)"}
+        </button>
+        {msg !== null && <span className={styles.msg}>{msg}</span>}
+      </div>
+    );
+  }
+
+  // An in-flight task: pause it if a watcher is driving it, else resume it.
   return (
     <div className={styles.controls}>
-      {running ? (
+      {supervised ? (
         <button className={styles.btn} disabled={busy !== null} onClick={() => void pause()}>
           {busy === "paused" ? "pausing…" : "⏸ pause"}
         </button>

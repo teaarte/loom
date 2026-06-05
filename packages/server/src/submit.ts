@@ -17,9 +17,7 @@
 // typed `PROJECT_TASK_ACTIVE` conflict (the single-task invariant: 2 tasks = 2
 // projects).
 
-import { createHash } from "node:crypto";
-
-import { createAndStart } from "@loomfsm/driver";
+import { createAndStart, deterministicUuid } from "@loomfsm/driver";
 import {
   archiveStateDb,
   captureNow,
@@ -52,15 +50,20 @@ export interface SubmitResult {
   replayed: boolean;
 }
 
-// Crash-safe, dedup-safe create id from the task text — the same scheme the
-// supervisor uses so a submit and a later watcher-seed never collide.
-export function deterministicUuid(task: string): string {
-  return `cidem-${createHash("sha256").update(task).digest("hex").slice(0, 24)}`;
-}
+// Re-exported from the driver, the single home for the create-id derivation
+// the supervisor seed and this submit path share — kept here so existing
+// importers of `@loomfsm/server` keep their entry point.
+export { deterministicUuid };
 
 export async function submitTask(
   projectDir: string,
-  registry: Registry,
+  // Resolve the project's FSM registry. Called AFTER the finished-slot rotation
+  // below, never before: rotating the store drops the bundle's
+  // installed-extensions rows, and the resolver (`assembleRegistry`) re-reconciles
+  // the manifest, so it MUST run against the FRESH store — otherwise the create
+  // refuses with NO_ENABLED_BUNDLE until a manual page reload re-runs it. This is
+  // the same archive→resolve→create order the stdio `run-task` path already uses.
+  resolveRegistry: () => Promise<Registry> | Registry,
   args: SubmitArgs,
 ): Promise<SubmitResult> {
   const task = args.task.trim();
@@ -70,6 +73,8 @@ export async function submitTask(
   const uuid = deterministicUuid(task);
 
   // Replay — a cached creation envelope means this exact task already started.
+  // Read on the CURRENT store before any rotation, so a duplicate submit of the
+  // live task replays instead of rotating it away.
   const cached = await readCachedCreation(projectDir, uuid);
   if (cached !== null) return { ...cached, replayed: true };
 
@@ -83,6 +88,9 @@ export async function submitTask(
   } catch (err) {
     throw fromKernelError(err);
   }
+
+  // Resolve (and re-reconcile the bundle into) the now-fresh store.
+  const registry = await resolveRegistry();
 
   try {
     const created = await createAndStart(projectDir, {

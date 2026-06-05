@@ -358,8 +358,11 @@ async function routeSubmit(
   }
   writeTaskExecPrefs(entry.dir, dockerFlag !== undefined ? { docker: dockerFlag } : {});
 
-  const fsm = await resolveFsm(deps, entry.dir);
-  const result = await submitTask(entry.dir, fsm, {
+  // Pass the resolver as a THUNK: submitTask invokes it AFTER it rotates any
+  // finished slot, so the bundle re-reconciles into the fresh store (otherwise
+  // the immediate next submit after a completed task fails NO_ENABLED_BUNDLE
+  // until a manual reload).
+  const result = await submitTask(entry.dir, () => resolveFsm(deps, entry.dir), {
     task,
     ...(typeof body["policy_preset"] === "string" ? { policy_preset: body["policy_preset"] } : {}),
     ...(initialDecisions !== undefined ? { initial_decisions: initialDecisions } : {}),
@@ -388,8 +391,14 @@ function parseInitialDecisions(body: Record<string, unknown>): Record<string, un
 
 async function routeListProjects(res: ServerResponse, deps: ControlServerDeps, nowMs: number): Promise<void> {
   const listings = deps.registry.list();
+  // Everything in `list()` is, by definition, currently supervised.
   const out = await Promise.all(
-    listings.map(async (p) => ({ id: p.id, dir: p.dir, status: await readProjectStatus(p.dir, nowMs) })),
+    listings.map(async (p) => ({
+      id: p.id,
+      dir: p.dir,
+      supervised: true,
+      status: await readProjectStatus(p.dir, nowMs),
+    })),
   );
   sendJson(res, 200, out);
 }
@@ -409,7 +418,11 @@ async function routeGetProject(res: ServerResponse, id: string, deps: ControlSer
   const dir = knownProjectDir(id, deps);
   if (dir === null) throw new ServerError("PROJECT_NOT_FOUND", 404, `no project ${id}`);
   const status = await readProjectStatus(dir, nowMs);
-  sendJson(res, 200, { id, dir, status });
+  // `supervised` = a watcher is attached. The dashboard reads it to distinguish
+  // a running task (pause it) from an in-flight task with no watcher — paused or
+  // recovered-but-not-yet-re-driven — which is the only case where "resume"
+  // (re-register → recover-on-start re-drives) actually does something.
+  sendJson(res, 200, { id, dir, supervised: deps.registry.get(id) !== null, status });
 }
 
 async function routeUnregister(res: ServerResponse, id: string, deps: ControlServerDeps): Promise<void> {
@@ -478,7 +491,10 @@ function streamLog(req: IncomingMessage, res: ServerResponse, id: string, deps: 
     try {
       const status = await readProjectStatus(dir, (deps.now ?? Date.now)());
       const log = readLogTail(dir, tailLines);
-      res.write(`data: ${JSON.stringify({ status, log })}\n\n`);
+      // `supervised` rides each tick so the detail view's controls stay correct
+      // as the watcher attaches/detaches (pause/resume) without a manual reload.
+      const supervised = deps.registry.get(id) !== null;
+      res.write(`data: ${JSON.stringify({ status, log, supervised })}\n\n`);
     } catch {
       /* a transient read error skips one tick */
     } finally {

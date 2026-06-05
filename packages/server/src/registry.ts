@@ -189,8 +189,11 @@ export class SupervisorRegistry {
     };
 
     // Detached watcher loop. It runs until `controller` aborts (unregister or
-    // shutdown). An unexpected throw is logged, never allowed to crash the
-    // control plane.
+    // shutdown). The supervisor now normalizes a thrown drive into an error
+    // outcome it parks on, so this catch is a true last resort (a throw from the
+    // watch scaffolding itself). It must NOT die silently: it marks the handle
+    // `stopped` so the advisory status reflects a dead watcher, never leaving a
+    // stale `driving`/`parked` phase that reads as "still working".
     const loop = Promise.resolve()
       .then(() => superviseWatch(projectDir, opts))
       .catch((err: unknown) => {
@@ -198,6 +201,7 @@ export class SupervisorRegistry {
           dir: projectDir,
           message: err instanceof Error ? err.message : String(err),
         });
+        handle.update("stopped", { detail: "watch-crash" });
       });
 
     this.entries.set(id, { id, dir: projectDir, controller, handle, loop });

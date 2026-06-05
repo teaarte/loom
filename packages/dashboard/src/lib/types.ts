@@ -62,6 +62,11 @@ export interface LogLine {
 export interface LogSnapshot {
   status: ProjectStatus;
   log: LogLine[];
+  // Whether a watcher is currently attached to the project. Distinguishes a
+  // running task (→ pause) from an in-flight task with no watcher — paused, or
+  // recovered-but-not-yet-re-driven — the only case where "resume" does anything.
+  // Optional so an older server (no field) is tolerated.
+  supervised?: boolean;
 }
 
 // The result of `POST /submit` (the create-task path) — informational; the

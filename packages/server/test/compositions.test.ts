@@ -9,10 +9,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { createAndStart, readState } from "@loomfsm/driver";
+import { createAndStart, drive, readState } from "@loomfsm/driver";
+import { archiveStateDb, KernelError, openDb, reconcileExtensions } from "@loomfsm/kernel";
 
 import { answerGate, readProjectStatus, ServerError, submitTask } from "../src/index.js";
-import { cleanup, freshProject, gateRegistry, spawnRegistry } from "./fixtures.js";
+import {
+  bundleManifest,
+  cleanup,
+  FIXED_NOW,
+  freshProject,
+  gateRegistry,
+  recordingExecutor,
+  spawnRegistry,
+} from "./fixtures.js";
 
 const NOW = Date.parse("2026-06-02T10:00:00.000Z");
 
@@ -20,7 +29,7 @@ describe("submitTask — the create-task path", () => {
   it("creates a task and reports its first directive", async () => {
     const dir = await freshProject();
     try {
-      const r = await submitTask(dir, spawnRegistry(), { task: "do the work" });
+      const r = await submitTask(dir, () => spawnRegistry(),{ task: "do the work" });
       assert.equal(r.replayed, false);
       assert.ok(r.task_id !== null);
       assert.equal(r.status, "spawn-agent");
@@ -33,8 +42,8 @@ describe("submitTask — the create-task path", () => {
   it("is idempotent — the same task text replays, never double-creates", async () => {
     const dir = await freshProject();
     try {
-      const a = await submitTask(dir, spawnRegistry(), { task: "same task" });
-      const b = await submitTask(dir, spawnRegistry(), { task: "same task" });
+      const a = await submitTask(dir, () => spawnRegistry(),{ task: "same task" });
+      const b = await submitTask(dir, () => spawnRegistry(),{ task: "same task" });
       assert.equal(b.replayed, true);
       assert.equal(a.task_id, b.task_id);
     } finally {
@@ -45,7 +54,7 @@ describe("submitTask — the create-task path", () => {
   it("refuses an empty task with a typed 400", async () => {
     const dir = await freshProject();
     try {
-      await assert.rejects(submitTask(dir, spawnRegistry(), { task: "   " }), (err: unknown) => {
+      await assert.rejects(submitTask(dir, () => spawnRegistry(),{ task: "   " }), (err: unknown) => {
         assert.ok(err instanceof ServerError);
         assert.equal(err.code, "TASK_REQUIRED");
         assert.equal(err.httpStatus, 400);
@@ -56,11 +65,72 @@ describe("submitTask — the create-task path", () => {
     }
   });
 
+  it("re-reconciles the bundle after rotating a finished slot (no NO_ENABLED_BUNDLE)", async () => {
+    // The reported bug: a completed task → the next submit hit "no enabled
+    // bundles" until a page reload. Cause: rotating the finished store drops the
+    // installed-extensions rows, and the registry was resolved BEFORE the
+    // rotation. The fix resolves AFTER — submitTask invokes the resolver thunk
+    // once the slot is rotated, so the bundle re-reconciles into the fresh store.
+    const dir = await freshProject();
+    try {
+      // Drive a first task to a terminal `completed` slot.
+      await drive(dir, {
+        executor: recordingExecutor([]),
+        resolveRegistry: () => spawnRegistry(),
+        task: "first task",
+      });
+      assert.equal((await readState(dir)).status, "completed");
+
+      // A resolver that re-reconciles (as the real assembleRegistry does) on each
+      // call. Submitting the next task rotates the completed slot, THEN calls this.
+      const resolver = async () => {
+        openDb(dir);
+        await reconcileExtensions({
+          manifests: [bundleManifest("code-fixture")],
+          project_dir: dir,
+          now: FIXED_NOW as never,
+        });
+        return spawnRegistry();
+      };
+      const r = await submitTask(dir, resolver, { task: "second task" });
+      assert.equal(r.replayed, false);
+      assert.ok(r.task_id !== null);
+      assert.equal((await readState(dir)).status, "in_progress");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  it("the ordering is load-bearing: rotating AFTER resolve leaves an empty store", async () => {
+    // The negative — proving the fix matters. Reconcile (freshProject), drive to
+    // completed, rotate the store, then create WITHOUT re-reconciling: the fresh
+    // store has no enabled bundle, exactly the failure the resolve-after order avoids.
+    const dir = await freshProject();
+    try {
+      await drive(dir, {
+        executor: recordingExecutor([]),
+        resolveRegistry: () => spawnRegistry(),
+        task: "first task",
+      });
+      await archiveStateDb(dir, FIXED_NOW as never, { reason: "auto-rotate" });
+      await assert.rejects(
+        createAndStart(dir, {
+          registry: spawnRegistry(),
+          task: "second task",
+          client_idempotency_uuid: "cidem-neg",
+        }),
+        (err: unknown) => err instanceof KernelError && err.code === "NO_ENABLED_BUNDLE",
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   it("refuses a second, different task while one is live (single-task invariant)", async () => {
     const dir = await freshProject();
     try {
-      await submitTask(dir, spawnRegistry(), { task: "first task" });
-      await assert.rejects(submitTask(dir, spawnRegistry(), { task: "second task" }), (err: unknown) => {
+      await submitTask(dir, () => spawnRegistry(),{ task: "first task" });
+      await assert.rejects(submitTask(dir, () => spawnRegistry(),{ task: "second task" }), (err: unknown) => {
         assert.ok(err instanceof ServerError);
         assert.equal(err.httpStatus, 409);
         return true;
@@ -76,7 +146,7 @@ describe("answerGate — deliver a human answer", () => {
     const dir = await freshProject();
     try {
       const registry = gateRegistry();
-      const created = await submitTask(dir, registry, { task: "gated work" });
+      const created = await submitTask(dir, () => registry, { task: "gated work" });
       assert.equal(created.status, "ask-user");
 
       const state = await readState(dir);
@@ -94,7 +164,7 @@ describe("answerGate — deliver a human answer", () => {
   it("refuses an answer when no gate is parked", async () => {
     const dir = await freshProject();
     try {
-      await submitTask(dir, spawnRegistry(), { task: "ungated" }); // parks on a spawn, not a gate
+      await submitTask(dir, () => spawnRegistry(),{ task: "ungated" }); // parks on a spawn, not a gate
       await assert.rejects(
         answerGate(dir, spawnRegistry(), { gate_event_id: "ge-x", decision: "accept" }),
         (err: unknown) => {
@@ -180,7 +250,7 @@ describe("readProjectStatus — the read-model", () => {
     const dir = await freshProject();
     try {
       const registry = gateRegistry();
-      await submitTask(dir, registry, { task: "gated" });
+      await submitTask(dir, () => registry, { task: "gated" });
       const view = await readProjectStatus(dir, NOW);
       assert.ok(view.parked_gate !== null);
       assert.equal(view.parked_gate?.gate, "gate-1");

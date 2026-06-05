@@ -239,9 +239,9 @@ describe("createContainerExecutor — clone-provision + self-diff shell (injecte
       // Self-diff fed the carrier from the clone.
       assert.ok(result.files_created?.includes("added.ts"));
       assert.ok(result.files_modified?.includes("seed.ts"));
-      // Usage rode through to the result and the sink.
-      assert.deepEqual(result.usage, { tokens: { in: 1, out: 2 }, cost_usd: 0.01 });
-      assert.deepEqual(noticedUsage, { tokens: { in: 1, out: 2 }, cost_usd: 0.01 });
+      // Usage rode through to the result and the sink, stamped with identity.
+      assert.deepEqual(result.usage, { tokens: { in: 1, out: 2 }, cost_usd: 0.01, agent: "impl-1", model: "default" });
+      assert.deepEqual(noticedUsage, { tokens: { in: 1, out: 2 }, cost_usd: 0.01, agent: "impl-1", model: "default" });
       // Blast radius: the live checkout is untouched.
       assert.equal(existsSync(join(projectDir, "added.ts")), false);
       assert.equal(readFileSync(join(projectDir, "seed.ts"), "utf8"), "export const seed = 1;\n");

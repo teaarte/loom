@@ -27,9 +27,10 @@
 // keep the provider gate (then a pending spawn on it surfaces
 // PROVIDER_NOT_IDEMPOTENT on resume rather than re-running).
 
-import type { ProviderShuttleIntent } from "@loomfsm/kernel";
+import { KernelError, type ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import type { Executor, ExecutorResult } from "./drive.js";
+import { PERMANENT_PROVIDER_ERROR_CODES } from "./provider-error.js";
 
 // Resolve the executor for one spawn. Returns the chosen backend's `Executor`;
 // may be async (a backend probe / credential read). The implementation owns any
@@ -40,17 +41,100 @@ export type ResolveExecutor = (
   spawn: ProviderShuttleIntent,
 ) => Executor | Promise<Executor>;
 
+// One link in a per-spawn fallback chain: the backend's executor plus the model
+// it must run (the kernel-resolved `intent.model` belongs to the PRIMARY ref, so
+// a fallback entry overrides it with its own ref's model). `model` omitted → run
+// the intent unchanged (the primary entry).
+export interface ChainEntry {
+  executor: Executor;
+  model?: string;
+  // A human label for the recorded notice when the dispatch advances to this
+  // entry (e.g. `openrouter:qwen`). Optional.
+  label?: string;
+}
+
+// Resolve the ORDERED fallback chain for one spawn — the primary first, then the
+// configured fallbacks. The dispatch tries each in order, advancing only on a
+// wall the same backend cannot clear (a rate-limit or a permanent provider
+// error). Async (it resolves refs → backends → credentials).
+export type ResolveExecutorChain = (
+  spawn: ProviderShuttleIntent,
+) => ChainEntry[] | Promise<ChainEntry[]>;
+
 export interface DispatchExecutorOptions {
-  resolveExecutor: ResolveExecutor;
+  // Single-backend resolution (the pre-fallback contract). Required unless a
+  // chain resolver is supplied; ignored when one is.
+  resolveExecutor?: ResolveExecutor;
+  // Per-spawn fallback chain. When supplied it takes precedence over
+  // `resolveExecutor`: the dispatch tries each entry in order and advances on a
+  // rate-limit / permanent error to the next.
+  resolveExecutorChain?: ResolveExecutorChain;
+  // Notice sink for a fallback advance (which backend failed, which is next).
+  // Generic by CODE + label — names no domain. Omitted → advances silently.
+  onNotice?: (message: string) => void;
   // Whether re-running a spawn (same agent_run_id) is safe across the backends
   // this dispatch can route to. Default true (see the idempotency note above).
   idempotent?: boolean;
 }
 
+// The executor codes a fallback advances on — the EXACT set the supervisor parks
+// on (permanent-provider-error-park): a sustained rate-limit, a bad model id, an
+// auth/billing rejection. Every OTHER throw (a generic failure, a timeout) is
+// re-thrown unchanged so the loop's same-backend retry still applies — the
+// fallback is for "this backend can't serve it", not "retry this backend".
+const FALLBACK_ADVANCE_CODES = new Set<string>(["EXECUTOR_RATE_LIMITED", ...PERMANENT_PROVIDER_ERROR_CODES]);
+
+function isAdvanceError(err: unknown): boolean {
+  return err instanceof KernelError && FALLBACK_ADVANCE_CODES.has(err.code);
+}
+
 export function createDispatchExecutor(opts: DispatchExecutorOptions): Executor {
+  const runChain = async (spawn: ProviderShuttleIntent): Promise<ExecutorResult> => {
+    const chain = await opts.resolveExecutorChain!(spawn);
+    if (chain.length === 0) {
+      throw new KernelError({
+        code: "NO_BACKEND_RESOLVED",
+        message: `no backend could be resolved for agent '${spawn.agent}'`,
+        detail: { agent: spawn.agent },
+      });
+    }
+    let lastErr: unknown;
+    for (let i = 0; i < chain.length; i += 1) {
+      const entry = chain[i];
+      if (entry === undefined) continue;
+      const intent = entry.model !== undefined ? { ...spawn, model: entry.model } : spawn;
+      try {
+        return await entry.executor.execute(intent);
+      } catch (err) {
+        lastErr = err;
+        const next = chain[i + 1];
+        // Advance ONLY on a wall the same backend cannot clear, and ONLY when a
+        // next entry exists; otherwise re-throw so the loop's policy applies.
+        if (next !== undefined && isAdvanceError(err)) {
+          opts.onNotice?.(
+            `backend for '${spawn.agent}' failed (${(err as KernelError).code})` +
+              `${entry.label !== undefined ? ` [${entry.label}]` : ""} — falling back` +
+              `${next.label !== undefined ? ` to ${next.label}` : ""}`,
+          );
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  };
+
   return {
     idempotent: opts.idempotent ?? true,
     async execute(spawn: ProviderShuttleIntent): Promise<ExecutorResult> {
+      if (opts.resolveExecutorChain !== undefined) return runChain(spawn);
+      if (opts.resolveExecutor === undefined) {
+        throw new KernelError({
+          code: "DISPATCH_MISCONFIGURED",
+          message: "createDispatchExecutor needs resolveExecutor or resolveExecutorChain",
+          detail: {},
+        });
+      }
       const executor = await opts.resolveExecutor(spawn);
       return executor.execute(spawn);
     },

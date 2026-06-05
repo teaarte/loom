@@ -64,9 +64,24 @@ describe("createProviderExecutor — plain single-shot backend", () => {
     // Plain executor: no worktree, no file delta.
     assert.equal(result.files_modified, undefined);
     assert.equal(result.files_created, undefined);
-    // Usage rides on the result AND reaches the sink.
-    assert.deepEqual(result.usage, { tokens: { in: 12, out: 3, cached: 1 } });
-    assert.deepEqual(sunk, { tokens: { in: 12, out: 3, cached: 1 } });
+    // Usage rides on the result AND reaches the sink, stamped with the spawn's
+    // identity (agent + model) for the observability line.
+    assert.deepEqual(result.usage, { agent: "decider", model: "some-model", tokens: { in: 12, out: 3, cached: 1 } });
+    assert.deepEqual(sunk, { agent: "decider", model: "some-model", tokens: { in: 12, out: 3, cached: 1 } });
+  });
+
+  it("surfaces a backend out-of-band cost_usd on the usage (M5)", async () => {
+    let sunk: SpawnUsage | undefined;
+    // A provider that attaches a dollar cost the kernel ProviderResult does not
+    // model (OpenRouter's generation cost) as an extra field on the result.
+    const provider = asyncProvider("paid", async () => {
+      const r: ProviderResult = { type: "result", output: "ok", tokens: { in: 1, out: 2 } };
+      (r as { cost_usd?: number }).cost_usd = 0.0042;
+      return r;
+    });
+    const result = await createProviderExecutor(provider, { onUsage: (u) => (sunk = u) }).execute(req());
+    assert.equal(result.usage?.cost_usd, 0.0042);
+    assert.equal(sunk?.cost_usd, 0.0042);
   });
 
   it("omits usage when the provider reports no tokens", async () => {
@@ -84,7 +99,7 @@ describe("createProviderExecutor — plain single-shot backend", () => {
     }));
     const result = await createProviderExecutor(provider).execute(req());
     assert.equal(result.agent_output, "streamed");
-    assert.deepEqual(result.usage, { tokens: { in: 5, out: 2 } });
+    assert.deepEqual(result.usage, { agent: "decider", model: "some-model", tokens: { in: 5, out: 2 } });
   });
 
   it("classifies a detected thrown error as EXECUTOR_RATE_LIMITED (the supervisor waits)", async () => {

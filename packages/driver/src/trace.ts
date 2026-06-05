@@ -92,6 +92,12 @@ export interface TraceSummary {
   started_at: string | null;
   ended_at: string | null;
   task: string | null;
+  // The bundle-supplied completion note the kernel appends to the terminal
+  // summary (a plain string in `bundle_state.completion_summary`). Read here the
+  // SAME way the kernel's finalize reads it — a generic surfaced field, never
+  // branched on — so the dashboard can show "what was done" on a completed /
+  // archived task. Null when none was written / the task has not finished.
+  completion_summary: string | null;
 }
 
 export interface TraceView {
@@ -146,6 +152,7 @@ interface SummaryRow {
   started_at: unknown;
   ended_at: unknown;
   task: unknown;
+  bundle_state: unknown;
 }
 interface AgentRow {
   agent_run_id: unknown;
@@ -194,9 +201,28 @@ interface GateRow {
 const str = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
+// Extract the kernel-surfaced `completion_summary` string from the stored
+// `bundle_state` JSON. This is the ONE field of `bundle_state` the reader looks
+// at — the same generic completion note the kernel's finalize appends — so the
+// reader stays domain-blind (it reads a plain string, names no agent / flow /
+// finding). Anything else in `bundle_state` is left untouched. Null-safe on a
+// missing column / non-object / non-string field.
+function completionSummaryOf(bundleState: unknown): string | null {
+  if (typeof bundleState !== "string" || bundleState.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bundleState);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const note = (parsed as Record<string, unknown>)["completion_summary"];
+  return typeof note === "string" && note.length > 0 ? note : null;
+}
+
 async function readTraceFromTx(tx: Transaction): Promise<TraceView> {
   const summaryRow = await tx.queryRow<SummaryRow>(
-    "SELECT task_id, status, verdict, started_at, ended_at, task FROM pipeline_state WHERE id = 1",
+    "SELECT task_id, status, verdict, started_at, ended_at, task, bundle_state FROM pipeline_state WHERE id = 1",
   );
   const summary: TraceSummary | null =
     summaryRow === null
@@ -208,6 +234,7 @@ async function readTraceFromTx(tx: Transaction): Promise<TraceView> {
           started_at: str(summaryRow.started_at),
           ended_at: str(summaryRow.ended_at),
           task: str(summaryRow.task),
+          completion_summary: completionSummaryOf(summaryRow.bundle_state),
         };
 
   const agentRows = await tx.queryAll<AgentRow>(

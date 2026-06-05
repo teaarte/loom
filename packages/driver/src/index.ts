@@ -60,6 +60,12 @@ export type {
   SpawnUsage,
 } from "./drive.js";
 
+// The per-spawn transcript sidecar — prompt + raw output + the structured parse
+// + usage, written per spawn to the HOST project so a transport (the server's
+// read route) can surface WHAT a spawn produced at the gate / in the trace.
+export { writeSpawnTranscript, spawnTranscriptDir, spawnTranscriptPath } from "./transcript.js";
+export type { SpawnTranscript } from "./transcript.js";
+
 export { createProviderExecutor } from "./provider-executor.js";
 export type {
   ProviderExecutorOptions,
@@ -69,7 +75,12 @@ export type {
 // Per-spawn executor dispatch — route each spawn to the backend resolved for it
 // (the transport builds the resolver; this shell stays backend-blind).
 export { createDispatchExecutor } from "./dispatch-executor.js";
-export type { DispatchExecutorOptions, ResolveExecutor } from "./dispatch-executor.js";
+export type {
+  DispatchExecutorOptions,
+  ResolveExecutor,
+  ResolveExecutorChain,
+  ChainEntry,
+} from "./dispatch-executor.js";
 
 // The sandboxed-executor shell (per-task isolation + self-diff) and its
 // chosen headless backends — `claude -p` on the user's subscription login,

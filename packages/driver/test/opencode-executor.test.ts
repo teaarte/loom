@@ -159,7 +159,9 @@ describe("createOpencodeExecutor — worktree isolation + self-diff + usage", ()
       assert.deepEqual(result.files_created, ["util.py"]);
       assert.deepEqual(result.files_modified, ["calc.py"]);
       assert.deepEqual(result.usage?.tokens, { in: 9940, out: 51 });
-      assert.deepEqual(usages, [{ tokens: { in: 9940, out: 51 }, cost_usd: 0 }]);
+      assert.deepEqual(usages, [
+        { tokens: { in: 9940, out: 51 }, cost_usd: 0, agent: "worker-1", model: "ollama/qwen2.5-coder:32b" },
+      ]);
     } finally {
       cleanup(projectDir);
     }

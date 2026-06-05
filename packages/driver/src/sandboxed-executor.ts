@@ -113,8 +113,13 @@ export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executo
 
       const result: ExecutorResult = { agent_output };
       if (usage !== undefined) {
-        result.usage = usage;
-        opts.onUsage?.(usage);
+        // Stamp the spawn's identity (agent + resolved model) onto the usage so
+        // the observability sink can show WHICH agent + model it was for — the
+        // sink fires here, decoupled from the intent, so the identity must ride
+        // along. The kernel delivery path reads only `tokens`.
+        const enriched: SpawnUsage = { ...usage, agent: intent.agent, model: intent.model };
+        result.usage = enriched;
+        opts.onUsage?.(enriched);
       }
       // Self-diff the isolated tree against the provision-time baseline so the
       // carrier is fed natively — no dependence on the backend to report it.

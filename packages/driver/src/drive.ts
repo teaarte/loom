@@ -50,6 +50,7 @@ import {
 } from "./compositions.js";
 import { PERMANENT_PROVIDER_ERROR_CODES } from "./provider-error.js";
 import { resumeDirective } from "./resume-directive.js";
+import { writeSpawnTranscript } from "./transcript.js";
 
 // Per-spawn resource accounting a backend can surface when its envelope
 // carries it (e.g. `claude -p --output-format json` reports `usage` +
@@ -57,7 +58,15 @@ import { resumeDirective } from "./resume-directive.js";
 // so a future delivery-input field carries it straight through to the store;
 // `cost_usd` is a backend-computed figure the kernel does not model (it tracks
 // neutral tokens), surfaced here for audit/observability only.
+//
+// `agent` / `model` are the spawn's identity, stamped at the executor boundary
+// (where the intent is in scope) so the observability sink — which fires after
+// the spawn, decoupled from the intent — can show WHICH agent + model the usage
+// was for. The kernel delivery path reads only `tokens`; the identity rides for
+// the audit line / log view and is otherwise inert.
 export interface SpawnUsage {
+  agent?: string;
+  model?: string;
   tokens?: { in: number; out: number; cached?: number };
   cost_usd?: number;
   num_turns?: number;
@@ -307,6 +316,12 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
         }
 
         executorFailures = 0;
+        // Write the per-spawn transcript sidecar (prompt + raw output + the
+        // structured parse + usage) to the HOST project before delivering — so
+        // an operator can read WHAT each spawn produced at the gate / in the
+        // trace, and diagnose a spawn that did nothing. Best-effort, never on
+        // the kernel path.
+        writeSpawnTranscripts(projectDir, intents, results);
         const delivered = await deliverAndAdvance(projectDir, {
           registry,
           input: toContinueInput(response, results),
@@ -369,6 +384,42 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
 }
 
 // ----- spawn execution ---------------------------------------------------
+
+// Write each spawn's transcript sidecar, pairing the intent (agent / model /
+// prompt — the REUSED agent_run_id) with the executor's result (raw output +
+// the self-diff file accounting + usage). One file per agent_run_id under the
+// HOST project's `.claude/loom/transcripts/`. Best-effort inside; a missing
+// pair is skipped. `captureNow()` mints the ISO stamp (transport mint point —
+// outside the kernel's replay graph).
+function writeSpawnTranscripts(
+  projectDir: string,
+  intents: ProviderShuttleIntent[],
+  results: ExecutorResult[],
+): void {
+  for (let i = 0; i < intents.length; i += 1) {
+    const intent = intents[i];
+    const result = results[i];
+    if (intent === undefined || result === undefined) continue;
+    // Prefer the model the executor REPORTS it ran (the usage sink stamps it),
+    // so a fallback that advanced to a different backend records the model that
+    // actually ran rather than the primary the kernel resolved.
+    const ranModel = result.usage?.model ?? intent.model;
+    writeSpawnTranscript(projectDir, {
+      agent: intent.agent,
+      agent_run_id: intent.agent_run_id,
+      phase: intent.phase,
+      model: ranModel === "" ? null : ranModel,
+      prompt: intent.prompt,
+      raw_output: result.agent_output,
+      parse_result: {
+        ...(result.files_modified !== undefined ? { files_modified: result.files_modified } : {}),
+        ...(result.files_created !== undefined ? { files_created: result.files_created } : {}),
+      },
+      ...(result.usage !== undefined ? { usage: result.usage } : {}),
+      recorded_at: captureNow(),
+    });
+  }
+}
 
 // Reconstruct the full shuttle intents for the named agent_run_ids from
 // canonical state: the pending row supplies agent / phase / model (REUSING

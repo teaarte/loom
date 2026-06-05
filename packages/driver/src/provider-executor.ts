@@ -43,14 +43,39 @@ export interface ProviderExecutorOptions {
   onUsage?: (usage: SpawnUsage) => void;
 }
 
+// A provider MAY attach a backend-computed dollar cost to its spawn result as an
+// out-of-band `cost_usd` — the kernel `ProviderResult` does NOT model dollars
+// (it is vendor-neutral and tracks tokens), so OpenRouter's generation cost (and
+// any future paid backend's) rides alongside, read here defensively and surfaced
+// only on the driver's observability `SpawnUsage`. Absent / non-finite → omitted
+// (free or non-reporting backends contribute no cost, never a fabricated zero).
+function readResultCost(result: unknown): number | undefined {
+  if (typeof result !== "object" || result === null) return undefined;
+  const c = (result as { cost_usd?: unknown }).cost_usd;
+  return typeof c === "number" && Number.isFinite(c) ? c : undefined;
+}
+
 export function createProviderExecutor(
   provider: LLMProvider,
   opts: ProviderExecutorOptions = {},
 ): Executor {
-  const finish = (output: string, tokens?: { in: number; out: number; cached?: number }): ExecutorResult => {
+  const finish = (
+    spawn: ProviderShuttleIntent,
+    output: string,
+    tokens?: { in: number; out: number; cached?: number },
+    cost?: number,
+  ): ExecutorResult => {
     const result: ExecutorResult = { agent_output: output };
-    if (tokens !== undefined) {
-      const usage: SpawnUsage = { tokens };
+    if (tokens !== undefined || cost !== undefined) {
+      // Stamp the spawn identity so the observability sink shows which agent +
+      // model the usage was for (M2), alongside tokens (kernel-native) and the
+      // out-of-band backend cost (M5).
+      const usage: SpawnUsage = {
+        agent: spawn.agent,
+        model: spawn.model,
+        ...(tokens !== undefined ? { tokens } : {}),
+        ...(cost !== undefined ? { cost_usd: cost } : {}),
+      };
       result.usage = usage;
       opts.onUsage?.(usage);
     }
@@ -89,10 +114,10 @@ export function createProviderExecutor(
       }
       switch (result.type) {
         case "result":
-          return finish(result.output, result.tokens);
+          return finish(spawn, result.output, result.tokens, readResultCost(result));
         case "stream": {
           const final = await result.finalize();
-          return finish(final.output, final.tokens);
+          return finish(spawn, final.output, final.tokens, readResultCost(final));
         }
         case "shuttle":
           throw new KernelError({

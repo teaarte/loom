@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
 
 import {
@@ -175,6 +176,58 @@ describe("readTraceFile — an archived store byte-copy", () => {
       assert.deepEqual(trace.agents.map((a) => a.agent), ["scout-x", "weave-y"]);
     } finally {
       if (copy.length > 0) rmSync(join(copy, ".."), { recursive: true, force: true });
+      cleanup(dir);
+    }
+  });
+});
+
+describe("readTrace — completion summary surfacing", () => {
+  it("surfaces a kernel-generic bundle_state.completion_summary on the trace summary", async () => {
+    const dir = await freshProject();
+    let copy = "";
+    try {
+      await drive(dir, {
+        executor: echoExecutor,
+        resolveRegistry: () => twoSpawnRegistry("scout-x", "weave-y"),
+        task: "summarize me",
+        client_idempotency_uuid: "cidem-summary",
+      });
+      // Stand in for the bundle's finish-summary step: write the generic note the
+      // kernel appends at finalize directly into the stored bundle_state. The
+      // reader must surface it (and ignore everything else in bundle_state).
+      closeDb(dir);
+      const live = join(dir, ".claude", "state.db");
+      const db = new DatabaseSync(live);
+      db.exec(
+        `UPDATE pipeline_state SET bundle_state = '${JSON.stringify({
+          completion_summary: "Touched 2 changed file(s). (complexity simple)",
+          some_other_field: { nested: true },
+        }).replace(/'/g, "''")}' WHERE id = 1`,
+      );
+      db.close();
+      copy = join(mkdtempSync(join(tmpdir(), "loom-trace-sum-")), "task.db");
+      copyFileSync(live, copy);
+
+      const trace = await readTraceFile(copy);
+      assert.equal(trace.summary?.completion_summary, "Touched 2 changed file(s). (complexity simple)");
+    } finally {
+      if (copy.length > 0) rmSync(join(copy, ".."), { recursive: true, force: true });
+      cleanup(dir);
+    }
+  });
+
+  it("is null when no completion note was written", async () => {
+    const dir = await freshProject();
+    try {
+      await drive(dir, {
+        executor: echoExecutor,
+        resolveRegistry: () => twoSpawnRegistry("scout-x", "weave-y"),
+        task: "no summary",
+        client_idempotency_uuid: "cidem-nosum",
+      });
+      const trace = await readTrace(dir);
+      assert.equal(trace.summary?.completion_summary, null);
+    } finally {
       cleanup(dir);
     }
   });

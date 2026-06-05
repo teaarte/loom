@@ -168,9 +168,11 @@ describe("createAiderExecutor — worktree isolation + self-diff + usage", () =>
       // the self-diff fed the carrier honestly
       assert.deepEqual(result.files_created, ["util.py"]);
       assert.deepEqual(result.files_modified, ["calc.py"]);
-      // usage forwarded to the result + the sink
+      // usage forwarded to the result + the sink, stamped with spawn identity
       assert.deepEqual(result.usage?.tokens, { in: 2400, out: 51 });
-      assert.deepEqual(usages, [{ tokens: { in: 2400, out: 51 } }]);
+      assert.deepEqual(usages, [
+        { tokens: { in: 2400, out: 51 }, agent: "worker-1", model: "ollama_chat/qwen2.5-coder:32b" },
+      ]);
     } finally {
       cleanup(projectDir);
     }

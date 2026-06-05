@@ -36,6 +36,11 @@ export interface OpenRouterChatCompletionArgs {
   model: string;
   max_tokens: number;
   messages: OpenRouterChatMessage[];
+  // OpenRouter extension: `{ include: true }` makes the response carry the
+  // request's generation `cost` (in USD) in `usage.cost`, so the figure does
+  // not need a second `/generation` round-trip. Plain OpenAI-compatible
+  // endpoints ignore it.
+  usage?: { include: boolean };
 }
 
 export interface OpenRouterChatCompletionResponseChoice {
@@ -44,7 +49,9 @@ export interface OpenRouterChatCompletionResponseChoice {
 
 export interface OpenRouterChatCompletionResponse {
   choices: OpenRouterChatCompletionResponseChoice[];
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  // `cost` is the OpenRouter generation cost in USD, present when the request
+  // asked for `usage.include`. The token fields are the standard usage shape.
+  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
 }
 
 export interface OpenRouterChatCompletionOptions {
@@ -101,6 +108,10 @@ function buildProvider(getClient: () => OpenRouterClientLike): LLMProvider {
         model: req.model,
         max_tokens: extractMaxTokens(req.extras),
         messages: buildMessages(req),
+        // Ask the router to report the generation cost on the same envelope so
+        // the headless dispatch surfaces real spend (the driver reads it as the
+        // out-of-band `cost_usd` the kernel does not model).
+        usage: { include: true },
       };
       const client = getClient();
       const response = await client.chat.completions.create(args, {
@@ -117,7 +128,16 @@ function buildProvider(getClient: () => OpenRouterClientLike): LLMProvider {
       // headers, so this provider cannot attribute cached tokens to a
       // single result envelope. Downstream roll-ups treat absent vs.
       // zero as the signal "this provider does not surface caching".
-      return { type: "result", output, tokens };
+      const result: ProviderResult = { type: "result", output, tokens };
+      // Surface the backend's generation cost out-of-band: the kernel
+      // `ProviderResult` is vendor-neutral and models no dollars, so the figure
+      // rides as an extra field the driver's executor reads for observability
+      // (never persisted to the FSM store). Absent → omitted, never a fake $0.
+      const cost = usage?.cost;
+      if (typeof cost === "number" && Number.isFinite(cost)) {
+        (result as { cost_usd?: number }).cost_usd = cost;
+      }
+      return result;
     },
   };
 }

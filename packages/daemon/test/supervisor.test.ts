@@ -219,6 +219,54 @@ describe("supervisor — retry / backoff (generic, by code + time)", () => {
   });
 });
 
+describe("supervisor — a thrown drive surfaces as a parked error, never a crash", () => {
+  it("normalizes a kernel throw (e.g. an INVARIANT_VIOLATION) to a terminal error outcome", async () => {
+    const dir = await freshProject();
+    try {
+      // `drive()` resolves the registry at the top of the tick; a throw there
+      // stands in for any kernel throw that escapes a delivery/finalize tx —
+      // the INVARIANT_VIOLATION on the post-gate finalize that used to unwind
+      // the whole watch loop and wedge the slot at `in_progress`.
+      const result = await superviseToTerminal(dir, {
+        buildExecutor: () => recordingExecutor([]),
+        resolveRegistry: () => {
+          throw new KernelError({ code: "INVARIANT_VIOLATION", message: "phase not terminal" });
+        },
+        task: "wedging work",
+        clock: immediateClock,
+        retry_policy: FAST_RETRY,
+      });
+      // It RETURNS an error (terminal → escalated at once), it does NOT throw.
+      assert.equal(result.kind, "error");
+      if (result.kind === "error") {
+        assert.equal(result.code, "INVARIANT_VIOLATION");
+        assert.equal(result.attempts, 0); // terminal → no transient retries burned
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  it("normalizes an unexpected (non-kernel) throw to DRIVE_CRASHED", async () => {
+    const dir = await freshProject();
+    try {
+      const result = await superviseToTerminal(dir, {
+        buildExecutor: () => recordingExecutor([]),
+        resolveRegistry: () => {
+          throw new Error("something exploded outside the kernel");
+        },
+        task: "crashing work",
+        clock: immediateClock,
+        retry_policy: FAST_RETRY,
+      });
+      assert.equal(result.kind, "error");
+      if (result.kind === "error") assert.equal(result.code, "DRIVE_CRASHED");
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
 describe("supervisor — rate-limit-aware wait (a time class, not a retry)", () => {
   it("waits out a rate-limit then re-drives, NOT against the retry ceiling", async () => {
     const dir = await freshProject();

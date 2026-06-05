@@ -16,8 +16,16 @@
 // the store, never from supervisor memory. The advisory status file is the
 // only thing it writes outside the store, and recovery never depends on it.
 
-import { drive, readState, type DriveOutcome, type Executor, type SpawnUsage } from "@loomfsm/driver";
 import {
+  deterministicUuid,
+  drive,
+  readState,
+  type DriveOutcome,
+  type Executor,
+  type SpawnUsage,
+} from "@loomfsm/driver";
+import {
+  KernelError,
   peekArchiveSlot,
   ZOMBIE_PENDING_MS,
   type GateRole,
@@ -25,7 +33,6 @@ import {
   type PolicyName,
   type Registry,
 } from "@loomfsm/kernel";
-import { createHash } from "node:crypto";
 
 import { type Clock, isoFrom, systemClock } from "./clock.js";
 import { type DaemonLogger, nullLogger } from "./logger.js";
@@ -320,6 +327,7 @@ export async function superviseWatch(projectDir: string, opts: SuperviseOptions)
   const logger = opts.logger ?? nullLogger;
   const notifier = opts.notifier ?? nullNotifier;
   const policy = opts.retry_policy ?? DEFAULT_RETRY_POLICY;
+  const classify = opts.classifyError ?? defaultClassifier;
   const idlePoll = opts.watch_idle_ms ?? 5_000;
   const parkAfter = opts.watch_error_park_after ?? DEFAULT_WATCH_ERROR_PARK_AFTER;
 
@@ -367,12 +375,20 @@ export async function superviseWatch(projectDir: string, opts: SuperviseOptions)
       const result = await superviseToTerminal(projectDir, { ...opts, task: undefined });
       if (result.kind === "error") {
         consecutiveErrors += 1;
-        if (consecutiveErrors >= parkAfter) {
+        // A TERMINAL error (a structural INVARIANT_VIOLATION on finalize, a
+        // permanent provider error like a bad model id) returns identically on
+        // every re-drive — park it at ONCE with a typed, notified state rather
+        // than cooling down and re-throwing it `parkAfter` times. A transient
+        // error still gets the cool-down retry budget below. This is what turns
+        // the old silent crash-loop into a single, surfaced park.
+        const terminal = classify(result.code) === "terminal";
+        if (terminal || consecutiveErrors >= parkAfter) {
           parkedTaskId = taskId;
           logger.error("watch-park", {
             code: result.code,
             message: result.message,
             after: consecutiveErrors,
+            ...(terminal ? { disposition: "terminal" } : {}),
           });
           await safeNotify(notifier, logger, clock, {
             event: "watch-park",
@@ -499,12 +515,31 @@ async function driveWithDeadline(
       signal: controller.signal,
     });
     return { outcome, timedOut };
+  } catch (err) {
+    // `drive()` returns an `{kind:"error"}` OUTCOME for a failed tick, but a
+    // kernel throw on a delivery/finalize tx — most notably an
+    // INVARIANT_VIOLATION on the post-gate finalize/merge-back path — escapes as
+    // an exception. Catch it HERE and normalize to an error outcome so the
+    // supervisor's classifier dispositions it (terminal → escalate/park) like
+    // any other error, instead of the throw unwinding the entire watch loop and
+    // leaving the slot wedged at `in_progress` with the watcher dead — the
+    // silent `watch-crash` the control plane only logged. A deadline timeout
+    // surfaces via `timedOut` exactly as before.
+    if (timedOut) {
+      return {
+        outcome: { kind: "error", driver_state_id: "d-unknown", code: "DRIVE_TIMEOUT", message: "drive timed out", recovery_options: [] },
+        timedOut,
+      };
+    }
+    const code = err instanceof KernelError ? err.code : "DRIVE_CRASHED";
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error("drive-threw", { code, message });
+    return {
+      outcome: { kind: "error", driver_state_id: "d-unknown", code, message, recovery_options: [] },
+      timedOut,
+    };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     opts.signal?.removeEventListener("abort", onShutdown);
   }
-}
-
-function deterministicUuid(task: string): string {
-  return `cidem-${createHash("sha256").update(task).digest("hex").slice(0, 24)}`;
 }

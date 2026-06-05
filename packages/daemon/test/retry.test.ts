@@ -35,6 +35,13 @@ describe("retry — error classification (by code, not domain)", () => {
     // An unknown code defaults to terminal — escalate, never loop forever.
     assert.equal(defaultClassifier("SOMETHING_NEW"), "terminal");
   });
+
+  it("dispositions a PERMANENT provider error terminal — never retried", () => {
+    // A 400 on a bad model id / an auth rejection returns identically on every
+    // attempt; retrying it 5× with backoff is the bug B4 fixes.
+    assert.equal(defaultClassifier("EXECUTOR_INVALID_MODEL"), "terminal");
+    assert.equal(defaultClassifier("EXECUTOR_AUTH_FAILED"), "terminal");
+  });
 });
 
 describe("retry — capped exponential backoff", () => {

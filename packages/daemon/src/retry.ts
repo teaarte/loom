@@ -6,6 +6,8 @@
 // meaning — it is the same "generic, by count/time" enforcement the driver
 // loop applies to a fanout, lifted to the whole-task retry.
 
+import { PERMANENT_PROVIDER_ERROR_CODES } from "@loomfsm/driver";
+
 export interface RetryPolicy {
   // Maximum transient re-drives for ONE logical task before the supervisor
   // gives up and escalates the error.
@@ -60,6 +62,11 @@ const RATE_LIMITED_CODES = new Set<string>(["EXECUTOR_RATE_LIMITED"]);
 
 export const defaultClassifier: ErrorClassifier = (code: string): ErrorDisposition => {
   if (RATE_LIMITED_CODES.has(code)) return "rate-limited";
+  // A permanent provider error (an invalid model id, an auth / billing
+  // rejection) is never cleared by retrying — disposition it terminal
+  // EXPLICITLY so a later edit cannot slip one into the transient set and
+  // re-introduce the "retried a 400 five times with backoff" bug.
+  if (PERMANENT_PROVIDER_ERROR_CODES.has(code)) return "terminal";
   // Everything not explicitly transient escalates: a structural error
   // (SPAWN_BUDGET_EXCEEDED, KERNEL_INVARIANT, NO_ACTIVE_TASK, FLOW_OVERFLOW)
   // or a deliberate shutdown (DRIVE_ABORTED) will not clear by retrying, so

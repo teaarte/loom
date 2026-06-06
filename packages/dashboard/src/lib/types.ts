@@ -270,6 +270,22 @@ export interface SpawnTranscriptResponse {
   transcript: SpawnTranscript | null;
 }
 
+// ----- folder picker (`GET /fs/list?path=`) ------------------------------
+// One directory's immediate child directories, for the add-project picker.
+// `parent` is null at the browse root (the picker cannot climb above it).
+
+export interface FsEntry {
+  name: string;
+  path: string;
+}
+
+export interface FsListResponse {
+  root: string;
+  path: string;
+  parent: string | null;
+  entries: FsEntry[];
+}
+
 // The masked secret store (`GET /secrets`) — name → masked value (`****1234`).
 // A raw value never crosses this boundary.
 export interface SecretsResponse {

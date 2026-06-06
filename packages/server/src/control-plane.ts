@@ -89,6 +89,9 @@ export interface ControlPlaneOptions {
   // Override the dashboard's built-asset directory (default: resolved from the
   // `@loomfsm/dashboard` workspace dependency). A test injects a fixture dir.
   dashboardDir?: string;
+  // The root the `GET /fs/list` folder picker is bounded to (default: resolved
+  // from `LOOM_FS_ROOT`, else the user's home dir).
+  fsBrowseRoot?: string;
 }
 
 export interface ControlPlaneHandle {
@@ -156,6 +159,7 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
     ...(opts.claudeAvailable !== undefined ? { claudeAvailable: opts.claudeAvailable } : {}),
     ...(opts.dockerCapability !== undefined ? { dockerCapability: opts.dockerCapability } : {}),
     ...(opts.dashboardDir !== undefined ? { dashboardDir: opts.dashboardDir } : {}),
+    ...(opts.fsBrowseRoot !== undefined ? { fsBrowseRoot: opts.fsBrowseRoot } : {}),
     onError: (err) => log(`loom serve: internal error: ${err instanceof Error ? err.message : String(err)}`),
   });
 

@@ -34,6 +34,7 @@
 //   POST /workspace/projects     → add a project to the catalog
 //   DELETE /workspace/projects/:id → remove a catalog entry
 //   GET  /providers              → backends + provider families + availability
+//   GET  /fs/list?path=          → the add-project folder picker (root-bounded, traversal-guarded)
 //
 // No HTTP- or kernel-specific kernel API: every body delegates to submit /
 // answer / the read-model / the config leaf. Auth (MVP) is localhost-bind + an optional bearer
@@ -71,6 +72,7 @@ import {
 } from "./config-routes.js";
 import { serveDashboard } from "./dashboard/assets.js";
 import { fromKernelError, ServerError } from "./errors.js";
+import { listDirectory, resolveBrowseRoot } from "./fs-routes.js";
 import { readLogTail } from "./log-tail.js";
 import { readProjectStatus } from "./read-model.js";
 import type { SupervisorRegistry } from "./registry.js";
@@ -109,6 +111,10 @@ export interface ConfigDeps {
   // `@loomfsm/dashboard` workspace dependency. A test injects a fixture dir so it
   // can assert serving without running the front-end build.
   dashboardDir?: string;
+  // The root the `GET /fs/list` folder picker is bounded to. Omitted → resolved
+  // from `LOOM_FS_ROOT`, else the user's home dir. The picker cannot navigate
+  // above it (a project outside it uses the form's manual-path field).
+  fsBrowseRoot?: string;
 }
 
 export interface ControlServerDeps extends ConfigDeps {
@@ -190,6 +196,12 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
     }
     if (parts[0] === "providers" && parts.length === 1 && method === "GET") {
       getProviders(res, deps);
+      return;
+    }
+    // GET /fs/list?path= — the add-project folder picker. Lists a directory's
+    // immediate child dirs, bounded to the browse root + traversal-guarded.
+    if (parts[0] === "fs" && parts[1] === "list" && parts.length === 2 && method === "GET") {
+      await listDirectory(res, url.searchParams.get("path") ?? "", resolveBrowseRoot(deps.fsBrowseRoot));
       return;
     }
     // GET /providers/:backend/models — a backend's live model list (for the

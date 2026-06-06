@@ -1,17 +1,29 @@
 // A single project's control surface: its live status + log (over SSE), a
 // submit-task form, and — when the task is parked on a human gate — the answer
-// form. Plus the model-map editor for the project's bundle. Every action is a
-// PEER of the CLI: submit → `POST /submit`, answer → `POST /projects/:id/answer`,
-// the same paths `loom run` / `/resume` drive. Domain-blind: it shows the
-// generic FSM status and carries a generic decision; it never interprets a gate.
-//
-// The lifecycle logic lives in hooks (`useSubmitTask` / `useAnswerGate` /
-// `useTaskControls`); this view composes the forms + the read-model display.
+// form. Every action is a PEER of the CLI: submit → `POST /submit`, answer →
+// `POST /projects/:id/answer`, the same paths `loom run` / `/resume` drive.
+// Domain-blind: it shows the generic FSM status and carries a generic decision;
+// it never interprets a gate. The lifecycle logic lives in hooks (`useSubmitTask`
+// / `useAnswerGate` / `useTaskControls`); this view composes the layout.
 
+import {
+  Anchor,
+  Button,
+  Checkbox,
+  Collapse,
+  Group,
+  Paper,
+  Select,
+  Spoiler,
+  Stack,
+  Text,
+  Textarea,
+  TextInput,
+  Title,
+} from "@mantine/core";
 import { useEffect, useState } from "react";
 
 import { History } from "../components/History.js";
-import { ModelMap } from "../components/ModelMap.js";
 import { SpawnTranscriptView } from "../components/SpawnTranscript.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { Trace } from "../components/Trace.js";
@@ -51,11 +63,13 @@ export function ProjectDetail({
   dir,
   label,
   onBack,
+  onOpenSettings,
 }: {
   projectId: string;
   dir: string;
   label?: string;
   onBack: () => void;
+  onOpenSettings: () => void;
 }) {
   const { snapshot, connected } = useSSE(`/projects/${encodeURIComponent(projectId)}/log`);
   // Providers carries Docker availability (for the per-task checkbox); a server
@@ -75,62 +89,98 @@ export function ProjectDetail({
   const meta = flowMeta(status);
 
   return (
-    <div>
-      <div className={styles.head}>
-        <button className={styles.back} onClick={onBack}>
-          ← projects
-        </button>
-        <h1>{label ?? projectId}</h1>
-        <StatusBadge status={status} />
-        {elapsed.length > 0 && (
-          <span className={styles.elapsed}>{running ? "⏱ " : "took "}{elapsed}</span>
+    <Stack gap="sm">
+      <Group justify="space-between" align="center" wrap="nowrap">
+        <Group gap="sm" align="center" wrap="wrap">
+          <Button variant="subtle" size="compact-sm" onClick={onBack}>
+            ← projects
+          </Button>
+          <Title order={3} m={0}>
+            {label ?? projectId}
+          </Title>
+          <StatusBadge status={status} />
+          {elapsed.length > 0 && (
+            <Text span size="sm" c="dimmed" className={styles.elapsed}>
+              {running ? "⏱ " : "took "}
+              {elapsed}
+            </Text>
+          )}
+        </Group>
+      </Group>
+
+      <div>
+        <Text size="xs" c="dimmed" style={{ wordBreak: "break-all" }}>
+          {dir}
+        </Text>
+        {meta !== null && (
+          <Text size="sm" c="dimmed">
+            {meta}
+          </Text>
         )}
       </div>
-      <div className={styles.dir}>{dir}</div>
-
-      {meta !== null && <div className={styles.meta}>{meta}</div>}
 
       {status?.task && status.task.length > 0 && (
-        <details className={styles.taskFull} open>
-          <summary>task</summary>
-          <div className={styles.taskText}>{status.task}</div>
-        </details>
+        <Paper withBorder radius="md" p="xs" bg="var(--mantine-color-default)">
+          <Text size="xs" c="dimmed" mb={4}>
+            task
+          </Text>
+          <Spoiler maxHeight={72} showLabel="show full task" hideLabel="hide">
+            <Text size="sm" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {status.task}
+            </Text>
+          </Spoiler>
+        </Paper>
       )}
 
       <TaskControls projectId={projectId} status={status} supervised={supervised} />
 
-      {status?.parked_gate && (
-        <AnswerForm projectId={projectId} gate={status.parked_gate} />
-      )}
+      {status?.parked_gate && <AnswerForm projectId={projectId} gate={status.parked_gate} />}
 
       {status && status.pending_agents.length > 0 && (
-        <div className={cx(styles.pending, status.stalled && styles.stalledBox)}>
-          {status.pending_agents.length} pending{status.stalled ? " · stalled (likely dropped transport)" : ""}
+        <Paper withBorder radius="md" p="xs" className={cx(status.stalled && styles.stalledBox)}>
+          <Text size="sm">
+            {status.pending_agents.length} pending
+            {status.stalled ? " · stalled (likely dropped transport)" : ""}
+          </Text>
           {status.pending_agents.map((p) => (
-            <div key={`${p.agent}:${p.phase}`} className={styles.pendingRow}>
+            <Text key={`${p.agent}:${p.phase}`} size="xs" c="dimmed">
               {p.agent} · {p.phase} · {Math.round(p.age_ms / 1000)}s
-            </div>
+            </Text>
           ))}
-        </div>
+        </Paper>
       )}
 
       {!activeTask && (
-        <SubmitForm projectId={projectId} {...(providers?.docker !== undefined ? { docker: providers.docker } : {})} />
+        <SubmitForm
+          projectId={projectId}
+          {...(providers?.docker !== undefined ? { docker: providers.docker } : {})}
+        />
       )}
 
-      <h2>log {connected ? <span className={styles.live}>● live</span> : <span className={styles.dead}>stream closed</span>}</h2>
-      <CostNote log={snapshot?.log ?? null} />
-      <LogTail lines={snapshot?.log ?? null} />
+      <LogPanel log={snapshot?.log ?? null} connected={connected} />
 
-      <h2>chain</h2>
-      <Trace projectId={projectId} />
+      <section>
+        <Title order={4} mb="xs">
+          chain
+        </Title>
+        <Trace projectId={projectId} />
+      </section>
 
-      <h2>history</h2>
-      <History projectId={projectId} />
+      <section>
+        <Title order={4} mb="xs">
+          history
+        </Title>
+        <History projectId={projectId} />
+      </section>
 
-      <h2>models</h2>
-      <ModelMap projectId={projectId} />
-    </div>
+      <Text size="sm" c="dimmed">
+        Models for this project's bundle are edited in{" "}
+        <Anchor component="button" type="button" onClick={onOpenSettings}>
+          Settings → models
+        </Anchor>
+        .
+      </Text>
+    </Stack>
   );
 }
 
@@ -175,90 +225,92 @@ function SubmitForm({ projectId, docker }: { projectId: string; docker?: { avail
   };
 
   return (
-    <fieldset className={styles.box}>
-      <legend>submit a task</legend>
-      <div className={styles.row}>
-        <label className={styles.policyLabel}>
-          policy
-          <select className={styles.select} value={policy} onChange={(e) => setPolicy(e.target.value)}>
-            {POLICY_PRESETS.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.policyLabel}>
-          complexity
-          <select
-            className={styles.select}
-            value={complexity}
+    <Paper withBorder radius="md" p="md">
+      <Stack gap="sm">
+        <Text fw={600}>submit a task</Text>
+        <Textarea
+          autosize
+          minRows={4}
+          maxRows={16}
+          placeholder="add a health check route"
+          value={task}
+          onChange={(e) => setTask(e.currentTarget.value)}
+        />
+        <Group gap="md" align="flex-end" wrap="wrap">
+          <Select
+            label="policy"
+            size="xs"
+            allowDeselect={false}
+            data={POLICY_PRESETS.map((p) => ({ value: p.value, label: p.label }))}
+            value={policy}
+            onChange={(v) => setPolicy(v ?? "")}
+            w={240}
+          />
+          <Select
+            label="complexity"
+            size="xs"
+            allowDeselect={false}
             disabled={fast}
-            onChange={(e) => setComplexity(e.target.value)}
-          >
-            {COMPLEXITY_OPTIONS.map((c) => (
-              <option key={c.value} value={c.value}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <textarea
-        className={styles.textarea}
-        rows={2}
-        placeholder="add a health check route"
-        value={task}
-        onChange={(e) => setTask(e.target.value)}
-      />
-      <div className={styles.row}>
-        <label className={styles.check}>
-          <input type="checkbox" checked={fast} onChange={(e) => setFast(e.target.checked)} />⚡ fast task
-        </label>
-        {docker !== undefined && (
-          <label className={cx(styles.check, !dockerAvailable && styles.checkDisabled)}>
-            <input
-              type="checkbox"
+            data={COMPLEXITY_OPTIONS}
+            value={complexity}
+            onChange={(v) => setComplexity(v ?? "")}
+            w={180}
+          />
+        </Group>
+        <Group gap="lg" wrap="wrap">
+          <Checkbox
+            label="⚡ fast task"
+            checked={fast}
+            onChange={(e) => setFast(e.currentTarget.checked)}
+          />
+          {docker !== undefined && (
+            <Checkbox
+              label="run in Docker"
               checked={useDocker && dockerAvailable}
               disabled={!dockerAvailable}
-              onChange={(e) => setUseDocker(e.target.checked)}
+              onChange={(e) => setUseDocker(e.currentTarget.checked)}
             />
-            run in Docker
-          </label>
-        )}
-        {docker !== undefined && !dockerAvailable && (
-          <span className={styles.hint}>Docker unavailable{docker.reason ? ` — ${docker.reason}` : ""}</span>
-        )}
-      </div>
-      <div className={styles.row}>
-        <label className={styles.check}>
-          <input type="checkbox" checked={pushOnAccept} onChange={(e) => setPushOnAccept(e.target.checked)} />
-          push branch on accept
-        </label>
-        <label className={styles.check}>
-          <input type="checkbox" checked={mergeOnAccept} onChange={(e) => setMergeOnAccept(e.target.checked)} />
-          squash-merge on accept
-        </label>
-      </div>
-      <div className={styles.row}>
-        <button className={styles.btn} disabled={busy} onClick={onSubmit}>
-          {busy ? "submitting…" : "submit"}
-        </button>
-        {msg !== null && <span className={styles.msg}>{msg}</span>}
-      </div>
-    </fieldset>
+          )}
+          {docker !== undefined && !dockerAvailable && (
+            <Text size="xs" c="dimmed">
+              Docker unavailable{docker.reason ? ` — ${docker.reason}` : ""}
+            </Text>
+          )}
+        </Group>
+        <Group gap="lg" wrap="wrap">
+          <Checkbox
+            label="push branch on accept"
+            checked={pushOnAccept}
+            onChange={(e) => setPushOnAccept(e.currentTarget.checked)}
+          />
+          <Checkbox
+            label="squash-merge on accept"
+            checked={mergeOnAccept}
+            onChange={(e) => setMergeOnAccept(e.currentTarget.checked)}
+          />
+        </Group>
+        <Group gap="sm" align="center">
+          <Button onClick={onSubmit} loading={busy}>
+            submit
+          </Button>
+          {msg !== null && (
+            <Text size="sm" c="dimmed">
+              {msg}
+            </Text>
+          )}
+        </Group>
+      </Stack>
+    </Paper>
   );
 }
 
 // Pause / resume / cancel / archive — first-class buttons over the SAME registry
 // machinery the CLI uses (the actions live in `useTaskControls`). The controls
 // shown depend on BOTH the store status and `supervised` (is a watcher attached):
-//   in_progress + supervised   → ⏸ pause (a watcher is driving it) + ✕ cancel
-//   in_progress + !supervised  → ▶ resume (an in-flight task with no watcher:
-//                                 paused, or recovered-but-not-driven) + ✕ cancel
-//   completed / abandoned      → 🗄 archive (free the finished slot) + ship
-//                                 buttons when accepted — NO resume (a no-op on a
-//                                 finished task, which is what wedged the slot).
+//   in_progress + supervised   → ⏸ pause + ✕ cancel
+//   in_progress + !supervised  → ▶ resume + ✕ cancel
+//   completed / abandoned      → 🗄 archive (free the slot) + ship buttons when
+//                                accepted — NO resume (a no-op on a finished task).
 function TaskControls({
   projectId,
   status,
@@ -272,47 +324,66 @@ function TaskControls({
 
   if (!status || !status.has_task) return null;
   const running = status.status === "in_progress";
+  const disabled = busy !== null;
 
   // A finished task: archive it (free the slot); and when accepted, ship it.
   if (!running) {
     const accepted = status.verdict === "accepted";
     return (
-      <div className={styles.controls}>
+      <Group gap="sm" align="center" wrap="wrap">
         {accepted && (
           <>
-            <button className={styles.btn} disabled={busy !== null} onClick={() => void ship("push")}>
-              {busy === "push" ? "pushing…" : "⬆ push branch"}
-            </button>
-            <button className={styles.btn} disabled={busy !== null} onClick={() => void ship("merge")}>
-              {busy === "merge" ? "merging…" : "⤵ squash & merge"}
-            </button>
+            <Button variant="default" disabled={disabled} loading={busy === "push"} onClick={() => void ship("push")}>
+              ⬆ push branch
+            </Button>
+            <Button
+              variant="default"
+              disabled={disabled}
+              loading={busy === "merge"}
+              onClick={() => void ship("merge")}
+            >
+              ⤵ squash &amp; merge
+            </Button>
           </>
         )}
-        <button className={styles.dangerBtn} disabled={busy !== null} onClick={() => void cancel()}>
-          {busy === "cancelled" ? "archiving…" : "🗄 archive (free the slot)"}
-        </button>
-        {msg !== null && <span className={styles.msg}>{msg}</span>}
-      </div>
+        <Button color="red" variant="outline" disabled={disabled} loading={busy === "cancelled"} onClick={() => void cancel()}>
+          🗄 archive (free the slot)
+        </Button>
+        {msg !== null && (
+          <Text size="sm" c="dimmed">
+            {msg}
+          </Text>
+        )}
+      </Group>
     );
   }
 
   // An in-flight task: pause it if a watcher is driving it, else resume it.
   return (
-    <div className={styles.controls}>
+    <Group gap="sm" align="center" wrap="wrap">
       {supervised ? (
-        <button className={styles.btn} disabled={busy !== null} onClick={() => void pause()}>
-          {busy === "paused" ? "pausing…" : "⏸ pause"}
-        </button>
+        <Button variant="default" disabled={disabled} loading={busy === "paused"} onClick={() => void pause()}>
+          ⏸ pause
+        </Button>
       ) : (
-        <button className={styles.btn} disabled={busy !== null} onClick={() => void resume(status.project_dir)}>
-          {busy === "resumed" ? "resuming…" : "▶ resume"}
-        </button>
+        <Button
+          variant="default"
+          disabled={disabled}
+          loading={busy === "resumed"}
+          onClick={() => void resume(status.project_dir)}
+        >
+          ▶ resume
+        </Button>
       )}
-      <button className={styles.dangerBtn} disabled={busy !== null} onClick={() => void cancel()}>
-        {busy === "cancelled" ? "cancelling…" : "✕ cancel"}
-      </button>
-      {msg !== null && <span className={styles.msg}>{msg}</span>}
-    </div>
+      <Button color="red" variant="outline" disabled={disabled} loading={busy === "cancelled"} onClick={() => void cancel()}>
+        ✕ cancel
+      </Button>
+      {msg !== null && (
+        <Text size="sm" c="dimmed">
+          {msg}
+        </Text>
+      )}
+    </Group>
   );
 }
 
@@ -339,72 +410,110 @@ function AnswerForm({
   };
 
   return (
-    <fieldset className={cx(styles.box, styles.gateBox)}>
-      <legend>parked on gate: {gate.gate}</legend>
-      {gate.message.length > 0 && <div className={styles.gateMsg}>{gate.message}</div>}
-      <ApprovalPreview projectId={projectId} />
-      <div className={styles.row}>
-        <label className={styles.policyLabel}>
-          decision
-          <select
-            className={styles.select}
-            value={decision}
-            onChange={(e) => setDecision(e.target.value as typeof decision)}
-          >
-            <option value="accept">accept</option>
-            <option value="reject">reject</option>
-            <option value="auto-apply">auto-apply</option>
-          </select>
-        </label>
-        {decision === "reject" && (
-          <label className={styles.policyLabel}>
-            intent
-            <select
-              className={styles.select}
-              value={rejectIntent}
-              onChange={(e) => setRejectIntent(e.target.value as typeof rejectIntent)}
-            >
-              <option value="revise">revise</option>
-              <option value="abandon">abandon</option>
-            </select>
-          </label>
+    <Paper withBorder radius="md" p="md" className={styles.gateBox}>
+      <Stack gap="sm">
+        <Text fw={600}>parked on gate: {gate.gate}</Text>
+        {gate.message.length > 0 && (
+          <Text size="sm" c="dimmed" style={{ whiteSpace: "pre-wrap" }}>
+            {gate.message}
+          </Text>
         )}
-      </div>
-      <input
-        className={styles.input}
-        type="text"
-        placeholder="optional message"
-        value={message}
-        onChange={(e) => setMessage(e.target.value)}
-      />
-      <div className={styles.row}>
-        <button className={styles.btn} disabled={busy} onClick={() => void onAnswer()}>
-          {busy ? "delivering…" : "answer gate"}
-        </button>
-        {msg !== null && <span className={styles.msg}>{msg}</span>}
-      </div>
-    </fieldset>
+        <ApprovalPreview projectId={projectId} />
+        <Group gap="md" align="flex-end" wrap="wrap">
+          <Select
+            label="decision"
+            size="xs"
+            allowDeselect={false}
+            data={["accept", "reject", "auto-apply"]}
+            value={decision}
+            onChange={(v) => setDecision((v ?? "accept") as typeof decision)}
+            w={160}
+          />
+          {decision === "reject" && (
+            <Select
+              label="intent"
+              size="xs"
+              allowDeselect={false}
+              data={["revise", "abandon"]}
+              value={rejectIntent}
+              onChange={(v) => setRejectIntent((v ?? "revise") as typeof rejectIntent)}
+              w={160}
+            />
+          )}
+        </Group>
+        <TextInput
+          placeholder="optional message"
+          value={message}
+          onChange={(e) => setMessage(e.currentTarget.value)}
+        />
+        <Group gap="sm" align="center">
+          <Button onClick={() => void onAnswer()} loading={busy}>
+            answer gate
+          </Button>
+          {msg !== null && (
+            <Text size="sm" c="dimmed">
+              {msg}
+            </Text>
+          )}
+        </Group>
+      </Stack>
+    </Paper>
   );
 }
 
-// "Read what you're approving": the parked spawn's output. The store does not
-// say which spawn a gate is approving (that is bundle knowledge), so this shows
-// the MOST RECENT recorded spawn's transcript — in practice the one that just
-// produced the artifact at the gate (the plan, the implementation, the final
-// check). Domain-blind: it picks the last chain entry, no agent name hardcoded.
+// "Read what you're approving": the parked spawn's output. The store does not say
+// which spawn a gate is approving (that is bundle knowledge), so this shows the
+// MOST RECENT recorded spawn's transcript — in practice the one that just
+// produced the artifact at the gate. Domain-blind: it picks the last chain entry.
 function ApprovalPreview({ projectId }: { projectId: string }) {
   const { data } = useTrace(projectId);
   if (data === null || data.agents.length === 0) return null;
   const last = data.agents[data.agents.length - 1];
   if (last === undefined) return null;
   return (
-    <div className={styles.approving}>
-      <div className={styles.approvingHead}>
+    <div>
+      <Text size="xs" c="dimmed" mb={4}>
         what you're approving — {last.agent}
         {last.model !== null && last.model.length > 0 ? ` · ${last.model}` : ""}
-      </div>
+      </Text>
       <SpawnTranscriptView projectId={projectId} runId={last.agent_run_id} autoOpen />
     </div>
+  );
+}
+
+// The live log — collapsible. Collapsed it shows just the last line so the
+// section stays compact while a long task runs; expanded it shows the token
+// economy line + the bounded tail.
+function LogPanel({ log, connected }: { log: LogLine[] | null; connected: boolean }) {
+  const [open, setOpen] = useState(true);
+  const lastLine = log !== null && log.length > 0 ? logParts(log[log.length - 1] as LogLine) : null;
+
+  return (
+    <section>
+      <Group gap="xs" align="center" mb="xs">
+        <Button variant="subtle" size="compact-sm" onClick={() => setOpen((o) => !o)}>
+          {open ? "▾" : "▸"} log
+        </Button>
+        {connected ? (
+          <Text span size="xs" c="green">
+            ● live
+          </Text>
+        ) : (
+          <Text span size="xs" c="dimmed">
+            stream closed
+          </Text>
+        )}
+        {!open && lastLine !== null && (
+          <Text span size="xs" c="dimmed" lineClamp={1}>
+            {lastLine.event} {lastLine.detail}
+          </Text>
+        )}
+      </Group>
+      <Collapse expanded={open}>
+        <CostNote log={log} />
+        <LogTail lines={log} />
+      </Collapse>
+    </section>
   );
 }
 
@@ -438,7 +547,8 @@ function CostNote({ log }: { log: LogLine[] | null }) {
     <div className={styles.cost}>
       <strong>{tokIn.toLocaleString()}</strong> in · <strong>{tokOut.toLocaleString()}</strong> out
       {cached > 0 && <> · {cached.toLocaleString()} cached</>}
-      {turns > 0 && <> · {turns} turns</>} <span className={styles.costApi}>· ≈ API-equiv {formatDetailValue("cost_usd", cost)}</span>
+      {turns > 0 && <> · {turns} turns</>}{" "}
+      <span className={styles.costApi}>· ≈ API-equiv {formatDetailValue("cost_usd", cost)}</span>
       <span className={styles.hint}> — subscription is flat-rate; tokens/turns/cache are the real signal</span>
     </div>
   );

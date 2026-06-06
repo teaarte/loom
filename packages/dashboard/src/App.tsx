@@ -53,6 +53,13 @@ export function App() {
     setView("projects");
   };
 
+  // Cross-view jump: the project page links its bundle's model map to Settings
+  // (the models editor lives there, not inline on the project page).
+  const goSettings = (): void => {
+    setOpen(null);
+    setView("settings");
+  };
+
   const refresh = (): void => setRefreshKey((k) => k + 1);
 
   return (
@@ -103,6 +110,7 @@ export function App() {
             dir={open.dir}
             {...(open.label !== undefined ? { label: open.label } : {})}
             onBack={goProjects}
+            onOpenSettings={goSettings}
           />
         ) : (
           <>

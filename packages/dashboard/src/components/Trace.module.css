@@ -27,62 +27,51 @@
   margin-right: 0.4rem;
 }
 
-/* The chain — a vertical list of run cards with a connector arrow between. */
-.chain {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* The chain — a HORIZONTAL strip of clickable step pills that scrolls sideways,
+   with a connector arrow between, and a detail card that opens below on click. */
+.strip {
+  /* room for the auto scrollbar so a long chain doesn't clip the pills */
+  padding-bottom: 0.35rem;
 }
-.step {
-  position: relative;
-  margin: 0.2rem 0;
-}
-.arrow {
-  display: block;
+.arrowH {
+  align-self: center;
   opacity: 0.4;
-  font-size: 0.85em;
-  line-height: 1;
-  padding-left: 0.6rem;
+  font-size: 0.9em;
+  flex: none;
 }
-
-.card {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-}
-.cardHead {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  width: 100%;
+.pill {
+  flex: none;
+  min-width: 9rem;
+  max-width: 16rem;
   text-align: left;
-  font: inherit;
-  color: inherit;
-  background: transparent;
-  border: 0;
-  padding: 0.45rem 0.7rem;
-  border-radius: 8px;
-  cursor: default;
-}
-.clickable {
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.pillActive {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.pillNum {
+  font-size: 0.72em;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+}
+.pillMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
 }
 .agent {
   font-weight: 600;
-}
-.kind {
-  font-size: 0.72em;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 0.02rem 0.32rem;
-  border-radius: 4px;
-  background: var(--accent-soft);
-  opacity: 0.85;
+  word-break: break-word;
 }
 .model {
   font-size: 0.82em;
   opacity: 0.75;
+  word-break: break-all;
 }
 .dur,
 .tokens {
@@ -90,14 +79,9 @@
   opacity: 0.65;
   font-variant-numeric: tabular-nums;
 }
-.caret {
-  margin-left: auto;
-  opacity: 0.6;
-}
 
-.drill {
-  padding: 0.2rem 0.7rem 0.6rem;
-  border-top: 1px dashed var(--line);
+.detail {
+  background: var(--panel);
 }
 .verdict {
   font-size: 0.88em;

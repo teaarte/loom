@@ -281,6 +281,13 @@ export interface SecretsResponse {
 // because the model-map editor splices into it (the same path `loom models set`
 // writes). A masked secret in any field round-trips and the server reconciles it.
 export interface LoomConfigShape {
+  // The default backend mode + CLI harness (infra, cross-bundle). Surfaced as
+  // dropdowns in Settings rather than free text.
+  backend?: string;
+  harness?: string;
+  // Per-backend credential overrides: a backend name → its `secret:<name>` (or
+  // literal) refs. Absent for backends that resolve by convention.
+  credentials?: Record<string, { key_ref?: string; base_url_ref?: string }>;
   bundles?: Record<string, { agents?: Record<string, string> } & Record<string, unknown>>;
   [key: string]: unknown;
 }

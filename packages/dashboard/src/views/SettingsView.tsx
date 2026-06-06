@@ -1,12 +1,29 @@
-// Global settings: the schema-driven config form + the write-only secrets
-// widget. The form is generated from `GET /config/schema` (so it edits any
-// bundle's config with no hardcoded field names) over the masked `GET /config`
-// value, and writes the whole document with `PUT /config` (the server validates
-// + reconciles masked secrets). Secrets are listed masked (`GET /secrets`) and
-// set write-only (`PUT /secrets/:name`) — a raw value is never shown.
+// Global settings, organised as tabs: Config (the connection dropdowns + the
+// schema-driven form for the rest), Models (the bundle model-map editor), and
+// Secrets (the write-only secret store). The schema-driven form is generated
+// from `GET /config/schema` (so it edits any bundle's config with no hardcoded
+// field names) over the masked `GET /config` value, and writes the whole
+// document with `PUT /config` (the server validates + reconciles masked
+// secrets). The connection keys (backend / harness / credentials) get the
+// purpose-built `ConnectionFields` dropdowns layered on, editing the SAME draft.
+// Secrets are listed masked (`GET /secrets`) and set write-only — a raw value is
+// never shown.
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  Anchor,
+  Button,
+  Group,
+  Paper,
+  PasswordInput,
+  Stack,
+  Tabs,
+  Text,
+  TextInput,
+  Title,
+} from "@mantine/core";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ConnectionFields } from "../components/ConnectionFields.js";
 import { ModelMap } from "../components/ModelMap.js";
 import { pruneEmpty, SchemaField } from "../components/SchemaForm.js";
 import { api, ApiError, errText } from "../lib/api.js";
@@ -18,26 +35,44 @@ import type {
   SecretsResponse,
   WorkspaceResponse,
 } from "../lib/types.js";
-import styles from "./SettingsView.module.css";
+
+// The connection keys the `ConnectionFields` widget owns — the generic form skips
+// them so they are edited once (as dropdowns) on the shared draft, not twice.
+const CONNECTION_KEYS = new Set(["backend", "harness", "credentials"]);
 
 export function SettingsView() {
   return (
     <div>
-      <h1>Settings</h1>
-      <ConfigForm />
-      <h2>models</h2>
-      <p className={styles.note}>
-        Bind each bundle agent to a model (the same <code>bundles[…].agents</code> map{" "}
-        <code>loom models set</code> writes). Pick a provider + model from the live list, or type a
-        <code> provider:model | tier</code> ref.
-      </p>
-      <ModelMapSection />
-      <h2>secrets</h2>
-      <p className={styles.note}>
-        Stored machine-local (chmod 600) and referenced from config as <code>secret:&lt;name&gt;</code>.
-        Values are write-only — set a new value to replace; existing values show masked.
-      </p>
-      <SecretsWidget />
+      <Title order={2} mb="md">
+        Settings
+      </Title>
+      <Tabs defaultValue="config" keepMounted={false}>
+        <Tabs.List>
+          <Tabs.Tab value="config">Config</Tabs.Tab>
+          <Tabs.Tab value="models">Models</Tabs.Tab>
+          <Tabs.Tab value="secrets">Secrets</Tabs.Tab>
+        </Tabs.List>
+
+        <Tabs.Panel value="config" pt="md">
+          <ConfigForm />
+        </Tabs.Panel>
+        <Tabs.Panel value="models" pt="md">
+          <Text size="sm" c="dimmed" mb="sm">
+            Bind each bundle agent to a model (the same <code>bundles[…].agents</code> map{" "}
+            <code>loom models set</code> writes). Pick a provider + model from the live list, or type a{" "}
+            <code>provider:model | tier</code> ref.
+          </Text>
+          <ModelMapSection />
+        </Tabs.Panel>
+        <Tabs.Panel value="secrets" pt="md">
+          <Text size="sm" c="dimmed" mb="sm">
+            Stored machine-local (chmod 600) and referenced from config as{" "}
+            <code>secret:&lt;name&gt;</code>. Values are write-only — set a new value to replace; existing
+            values show masked.
+          </Text>
+          <SecretsWidget />
+        </Tabs.Panel>
+      </Tabs>
     </div>
   );
 }
@@ -78,7 +113,11 @@ function ModelMapSection() {
   }, []);
 
   if (projectId !== null) return <ModelMap projectId={projectId} />;
-  return <div className={styles.note}>{note ?? "loading roster…"}</div>;
+  return (
+    <Text size="sm" c="dimmed">
+      {note ?? "loading roster…"}
+    </Text>
+  );
 }
 
 function ConfigForm() {
@@ -106,6 +145,13 @@ function ConfigForm() {
     void load();
   }, [load]);
 
+  // The generic (non-connection) top-level fields, in schema order.
+  const genericFields = useMemo(() => {
+    if (schema === null) return [];
+    const root = classify(schema);
+    return root.kind === "object" ? root.fields.filter((f) => !CONNECTION_KEYS.has(f.key)) : [];
+  }, [schema]);
+
   const save = async (): Promise<void> => {
     if (draft === null) return;
     setSaving(true);
@@ -122,22 +168,56 @@ function ConfigForm() {
     }
   };
 
-  if (error !== null) return <div className={styles.error}>{error}</div>;
-  if (schema === null || draft === null) return <div className={styles.loading}>loading config…</div>;
+  if (error !== null) {
+    return (
+      <Text c="red" size="sm">
+        {error}
+      </Text>
+    );
+  }
+  if (schema === null || draft === null) {
+    return (
+      <Text size="sm" c="dimmed">
+        loading config…
+      </Text>
+    );
+  }
+
+  const setField = (key: string, next: unknown): void => {
+    setDraft((d) => {
+      const copy = { ...(d ?? {}) };
+      if (next === undefined) delete copy[key];
+      else copy[key] = next;
+      return copy;
+    });
+  };
 
   return (
-    <div>
-      <SchemaField node={classify(schema)} value={draft} onChange={(next) => setDraft((next ?? {}) as LoomConfigShape)} />
-      <div className={styles.actions}>
-        <button className={styles.btn} disabled={saving} onClick={() => void save()}>
-          {saving ? "saving…" : "save config"}
-        </button>
-        <button className={styles.linkBtn} onClick={() => void load()}>
+    <Stack gap="lg">
+      <ConnectionFields draft={draft} onChange={(next) => setDraft(next)} />
+      {genericFields.map((f) => (
+        <SchemaField
+          key={f.key}
+          node={f.node}
+          label={f.key}
+          value={draft[f.key]}
+          onChange={(next) => setField(f.key, next)}
+        />
+      ))}
+      <Group gap="sm" align="center">
+        <Button onClick={() => void save()} loading={saving}>
+          save config
+        </Button>
+        <Anchor component="button" type="button" onClick={() => void load()}>
           revert
-        </button>
-        {msg !== null && <span className={styles.msg}>{msg}</span>}
-      </div>
-    </div>
+        </Anchor>
+        {msg !== null && (
+          <Text size="sm" c="dimmed">
+            {msg}
+          </Text>
+        )}
+      </Group>
+    </Stack>
   );
 }
 
@@ -188,53 +268,78 @@ function SecretsWidget() {
     setNewName("");
   };
 
-  if (error !== null) return <div className={styles.error}>{error}</div>;
-  if (secrets === null) return <div className={styles.loading}>loading secrets…</div>;
+  if (error !== null) {
+    return (
+      <Text c="red" size="sm">
+        {error}
+      </Text>
+    );
+  }
+  if (secrets === null) {
+    return (
+      <Text size="sm" c="dimmed">
+        loading secrets…
+      </Text>
+    );
+  }
 
   const names = Object.keys(secrets);
 
   return (
-    <div className={styles.secrets}>
-      {names.length === 0 && <div className={styles.loading}>no secrets stored yet</div>}
+    <Stack gap="sm">
+      {names.length === 0 && (
+        <Text size="sm" c="dimmed">
+          no secrets stored yet
+        </Text>
+      )}
       {names.map((name) => (
-        <div className={styles.secretRow} key={name}>
-          <span className={styles.secretName}>{name}</span>
-          <span className={styles.masked}>{secrets[name]}</span>
-          <input
-            className={styles.input}
-            type="password"
+        <Group key={name} gap="sm" align="flex-end" wrap="wrap">
+          <Text size="sm" fw={600} w={200} style={{ wordBreak: "break-all" }}>
+            {name}
+          </Text>
+          <Text size="sm" c="dimmed" ff="monospace">
+            {secrets[name]}
+          </Text>
+          <PasswordInput
             placeholder="new value"
             value={values[name] ?? ""}
-            onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))}
+            onChange={(e) => setValues((v) => ({ ...v, [name]: e.currentTarget.value }))}
+            w={220}
           />
-          <button
-            className={styles.btn}
-            disabled={busy === name || (values[name] ?? "").length === 0}
+          <Button
+            size="compact-sm"
+            loading={busy === name}
+            disabled={(values[name] ?? "").length === 0}
             onClick={() => void store(name)}
           >
-            {busy === name ? "…" : "update"}
-          </button>
-        </div>
+            update
+          </Button>
+        </Group>
       ))}
-      <div className={styles.secretRow}>
-        <input
-          className={styles.input}
-          type="text"
-          placeholder="new secret name (e.g. ANTHROPIC_API_KEY)"
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-        />
-        <input
-          className={styles.input}
-          type="password"
-          placeholder="value"
-          value={values[newName] ?? ""}
-          onChange={(e) => setValues((v) => ({ ...v, [newName]: e.target.value }))}
-        />
-        <button className={styles.btn} disabled={newName.trim().length === 0} onClick={() => void addNew()}>
-          add
-        </button>
-      </div>
-    </div>
+      <Paper withBorder radius="md" p="sm">
+        <Text size="sm" fw={600} mb="xs">
+          add a secret
+        </Text>
+        <Group gap="sm" align="flex-end" wrap="wrap">
+          <TextInput
+            label="name"
+            placeholder="ANTHROPIC_API_KEY"
+            value={newName}
+            onChange={(e) => setNewName(e.currentTarget.value)}
+            w={260}
+          />
+          <PasswordInput
+            label="value"
+            placeholder="value"
+            value={values[newName] ?? ""}
+            onChange={(e) => setValues((v) => ({ ...v, [newName]: e.currentTarget.value }))}
+            w={260}
+          />
+          <Button disabled={newName.trim().length === 0} onClick={() => void addNew()}>
+            add
+          </Button>
+        </Group>
+      </Paper>
+    </Stack>
   );
 }

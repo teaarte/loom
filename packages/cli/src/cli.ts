@@ -4,6 +4,7 @@
 // beyond what a first install needs.
 
 import { allowlistAdd, allowlistList } from "./commands/allowlist.js";
+import { bot } from "./commands/bot.js";
 import { config } from "./commands/config.js";
 import { daemon } from "./commands/daemon.js";
 import { init } from "./commands/init.js";
@@ -100,6 +101,14 @@ Usage:
       The project catalog — the projects you've worked on, with their current
       status (read even when idle). Distinct from the live supervised set.
 
+  loom bot telegram
+      Drive the pipeline from a Telegram chat: pick a project, submit a task,
+      approve/answer gates with inline buttons, read the plan and status, and
+      ship the result — all from the phone. Runs next to 'loom serve' and talks
+      to it over loopback; outbound-only (long-poll, no webhook, no inbound
+      port). Reads LOOM_TG_BOT_TOKEN + LOOM_TG_ALLOWED_USERS (allowlist by
+      Telegram user id) and the LOOM_SERVER_URL / LOOM_SERVER_TOKEN of the plane.
+
   loom --help | --version
 
 Typical first run:
@@ -161,6 +170,8 @@ export function run(argv: string[], env: CliEnv = processEnv()): number | Promis
       return models(rest, env);
     case "projects":
       return projects(rest, env);
+    case "bot":
+      return bot(rest, env);
     default:
       env.err(`loom: unknown command '${command}'`);
       env.err("run 'loom --help' for usage");

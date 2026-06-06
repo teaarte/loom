@@ -84,7 +84,7 @@ function freshGitHarness(label: string): Harness {
   gitRun(h.dir, "config", "user.email", "test@loom.test");
   gitRun(h.dir, "config", "user.name", "loom test");
   gitRun(h.dir, "checkout", "-q", "-b", "main");
-  writeFileSync(join(h.dir, ".gitignore"), ".claude/\nprojects.allow\n", "utf8");
+  writeFileSync(join(h.dir, ".gitignore"), ".loom/\nprojects.allow\n", "utf8");
   gitRun(h.dir, "add", "-A");
   gitRun(h.dir, "commit", "-q", "-m", "baseline");
   return h;
@@ -881,6 +881,112 @@ describe("first-run hardening — end to end", () => {
       assert.equal(blocked.verdict, null, "the run must not silently complete past an open blocker");
     } finally {
       h2.dispose();
+    }
+  });
+});
+
+// ============================================================================
+// Safety floor is LIVE — a real full-autonomous drive is vetoed end-to-end.
+//
+// Before bundle invariants were threaded into the commit check, the floor was
+// dormant: a `final: auto` gate auto-approved with no lint/test/typecheck veto.
+// Now the FSM tick runs the active bundle's invariants, so a real drive under
+// full-autonomy is REFUSED at the final gate (the code bundle ships the floor
+// but no deterministic writer for its status fields, so the floor finds them
+// missing and rolls the auto-approve back). The honest-baseline flows above
+// stay green — proving the wiring vetoes only where it should.
+// ============================================================================
+
+interface TerminalOut {
+  status: string;
+  code: string | null;
+  verdict: string | null;
+}
+
+// Drive every spawn/gate with the echo executor until a terminal directive
+// (complete OR error) — unlike `drive`, this tolerates an error directive and
+// returns it instead of failing, so a deliberate floor veto can be asserted.
+async function driveCapturingTerminal(
+  h: Harness,
+  task: string,
+  uuid: string,
+  opts: { policyPreset?: string; gatePolicies?: Record<string, string>; implementerFiles?: string[] },
+): Promise<TerminalOut> {
+  const deps = { resolveRegistry: assembleRegistry, allowlistPath: h.allowlistPath };
+  const run = createRunTaskTool(deps);
+  const cont = createContinueTaskTool(deps);
+
+  const first = await run({
+    project_dir: h.dir,
+    task,
+    client_idempotency_uuid: uuid,
+    ...(opts.policyPreset !== undefined ? { policy_preset: opts.policyPreset } : {}),
+    ...(opts.gatePolicies !== undefined ? { gate_policies: opts.gatePolicies } : {}),
+  });
+  const dsid = first.driver_state_id ?? "";
+  let resp: TransportResponse = first.response;
+
+  for (let step = 0; step < 120; step++) {
+    if (resp.status === "complete") return { status: "complete", code: null, verdict: resp.verdict };
+    if (resp.status === "error") return { status: "error", code: resp.code, verdict: null };
+
+    let input: Parameters<ReturnType<typeof createContinueTaskTool>>[0]["input"];
+    if (resp.status === "spawn-agent") {
+      const wantFiles = resp.agent === "implementer" && opts.implementerFiles !== undefined;
+      input = {
+        type: "agent-result",
+        agent_run_id: resp.agent_run_id,
+        agent_output: CANONICAL_AGENT_OUTPUT,
+        ...(wantFiles ? { files_modified: opts.implementerFiles } : {}),
+      };
+    } else if (resp.status === "spawn-agents-parallel") {
+      input = {
+        type: "agents-results",
+        results: resp.spawns.map((s) => ({ agent_run_id: s.agent_run_id, agent_output: CANONICAL_AGENT_OUTPUT })),
+      };
+    } else if (resp.status === "ask-user") {
+      input = { type: "user-answer", gate_event_id: resp.gate_event_id, decision: "accept" };
+    } else {
+      throw new Error(`driveCapturingTerminal cannot answer status '${(resp as { status: string }).status}'`);
+    }
+    const next = await cont({ project_dir: h.dir, driver_state_id: dsid, input });
+    resp = next.response;
+  }
+  assert.fail("driveCapturingTerminal did not terminate");
+}
+
+describe("safety floor — live end to end", () => {
+  it("a full-autonomous drive is VETOED at the final gate (the floor now runs)", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("floor-auto");
+    try {
+      // Real source change so the empty-diff no-op park (INV_CODE_105) does not
+      // also fire — the refusal below is specifically the deterministic floor
+      // finding lint/test/typecheck unproven.
+      const out = await driveCapturingTerminal(h, "implement the feature", "floor-auto-1", {
+        policyPreset: "full-autonomous",
+        implementerFiles: ["src/feature.ts"],
+      });
+      assert.equal(out.status, "error", "full-autonomy must not silently complete past the floor");
+      assert.equal(out.code, "INVARIANT_VIOLATION", "the safety floor rolls the auto-approve back");
+      assert.notEqual(out.verdict, "accepted", "the run must not reach an accepted verdict");
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("the same task under on-blockers completes accepted (the floor stays dormant)", async () => {
+    _resetRegistryCacheForTest();
+    const h = freshHarness("floor-onblockers");
+    try {
+      const out = await driveCapturingTerminal(h, "implement the feature", "floor-ob-1", {
+        gatePolicies: { classify: "on-blockers", plan: "on-blockers", final: "on-blockers" },
+        implementerFiles: ["src/feature.ts"],
+      });
+      assert.equal(out.status, "complete", "the honest baseline completes a clean run");
+      assert.equal(out.verdict, "accepted");
+    } finally {
+      h.dispose();
     }
   });
 });

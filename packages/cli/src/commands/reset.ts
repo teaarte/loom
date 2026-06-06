@@ -1,5 +1,5 @@
 // `loom reset [path] [--force] [--dry-run]` — archive this project's
-// finished task into .claude/history/ and free the single-task slot, so the
+// finished task into .loom/history/ and free the single-task slot, so the
 // next task starts clean. The everyday unblock for a project whose previous
 // task finished (or jammed in a terminal-but-uncleared state) and is now
 // refusing a new task. A genuinely in-progress task is refused without
@@ -21,10 +21,6 @@ import type { CliEnv } from "../lib/env.js";
 
 const RESET_KNOWN_FLAGS = ["force", "dry-run"] as const;
 
-function stateDbPath(target: string): string {
-  return join(target, ".claude", "state.db");
-}
-
 export async function reset(argv: string[], env: CliEnv): Promise<number> {
   const { positionals, flags } = parseArgs(argv);
   const unknown = firstUnknownFlag(flags, RESET_KNOWN_FLAGS);
@@ -39,14 +35,15 @@ export async function reset(argv: string[], env: CliEnv): Promise<number> {
       ? resolve(env.cwd, positionals[0])
       : env.cwd;
 
-  if (!existsSync(stateDbPath(target))) {
+  // Resolving the footprint dir also migrates any legacy `.claude/` store into
+  // `.loom/` (one-shot), so the existsSync check below sees the real location.
+  const { archiveAndReset, captureNow, peekArchiveSlot, projectFootprintDir, KernelError } =
+    await import("@loomfsm/kernel");
+
+  if (!existsSync(join(projectFootprintDir(target), "state.db"))) {
     env.out(`no active task in ${target} — nothing to reset`);
     return 0;
   }
-
-  const { archiveAndReset, captureNow, peekArchiveSlot, KernelError } = await import(
-    "@loomfsm/kernel"
-  );
 
   if (dryRun) {
     const slot = await peekArchiveSlot(target);
@@ -61,7 +58,7 @@ export async function reset(argv: string[], env: CliEnv): Promise<number> {
     }
     env.out(
       `[dry-run] would archive ${slot.task_id ?? "(unknown)"} (status ${slot.status ?? "?"}) ` +
-        `into .claude/history/ and free the slot`,
+        `into .loom/history/ and free the slot`,
     );
     return 0;
   }
@@ -105,7 +102,14 @@ export function history(argv: string[], env: CliEnv): number {
     positionals.length > 0 && positionals[0] !== undefined
       ? resolve(env.cwd, positionals[0])
       : env.cwd;
-  const indexPath = join(target, ".claude", "history", "index.jsonl");
+  // `loom history` runs without the SQLite flag, so it cannot import the kernel
+  // to trigger the footprint migration; it reads the new `.loom/` location and
+  // falls back to a legacy `.claude/` index a sqlite command has not migrated
+  // yet (the next `reset`/`run`/`status` relocates it).
+  const loomIndex = join(target, ".loom", "history", "index.jsonl");
+  const indexPath = existsSync(loomIndex)
+    ? loomIndex
+    : join(target, ".claude", "history", "index.jsonl");
   if (!existsSync(indexPath)) {
     env.out(`no archived tasks in ${target}`);
     return 0;

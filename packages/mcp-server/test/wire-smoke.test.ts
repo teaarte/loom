@@ -368,15 +368,15 @@ describe("wire smoke — boot (child-process stdio binary)", () => {
     const binPath = join(here, "..", "src", "bin", "stdio.js");
     const projectDir = mkdtempSync(join(tmpdir(), "loom-wire-boot-"));
 
-    // The binary resolves the allowlist at $HOME/.claude/projects.allow.
+    // The binary resolves the allowlist at $HOME/.loom/projects.allow.
     // Point HOME at a temp dir that allowlists the project, so the
     // active-task call clears the allowlist gate and reaches the wired
     // registry — proving the binary assembles the installed bundle and
     // returns a real first directive over its actual stdio pipes.
     const fakeHome = mkdtempSync(join(tmpdir(), "loom-wire-home-"));
-    mkdirSync(join(fakeHome, ".claude"), { recursive: true });
+    mkdirSync(join(fakeHome, ".loom"), { recursive: true });
     writeFileSync(
-      join(fakeHome, ".claude", "projects.allow"),
+      join(fakeHome, ".loom", "projects.allow"),
       `${realpathSync(projectDir)}\n`,
       "utf8",
     );

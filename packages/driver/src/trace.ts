@@ -7,9 +7,9 @@
 // what did each produce".
 //
 // Two entry points share ONE reader so the live and archived paths can never
-// drift: `readTrace(projectDir)` reads the live `<dir>/.claude/state.db` through
+// drift: `readTrace(projectDir)` reads the live `<dir>/.loom/state.db` through
 // the kernel pool exactly as `readState` does; `readTraceFile(dbPath)` opens an
-// arbitrary archived store (`<dir>/.claude/history/<task_id>.db`, the same
+// arbitrary archived store (`<dir>/.loom/history/<task_id>.db`, the same
 // schema rotated aside on finish) read-only and reads it with the same SELECTs.
 // A finished task is therefore inspectable exactly like the active one.
 //
@@ -22,10 +22,10 @@
 // kernel's replay graph, the same posture `readState` and the read-model take.
 
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { captureNow, openDb, TransactionImpl, type Transaction } from "@loomfsm/kernel";
+import { captureNow, openDb, projectFootprintDir, TransactionImpl, type Transaction } from "@loomfsm/kernel";
 
 // One recorded agent run — the `agent_records` row, narrowed to the fields a
 // reader renders. `agent` / `output_kind` are opaque DATA.
@@ -113,7 +113,7 @@ export interface TraceView {
 const EMPTY_TRACE: TraceView = { summary: null, agents: [], findings: [], verdicts: [], gates: [] };
 
 function stateDbPath(projectDir: string): string {
-  return join(resolve(projectDir), ".claude", "state.db");
+  return join(projectFootprintDir(projectDir), "state.db");
 }
 
 // Read the live store's trace. Mirrors `readState`: it borrows the project's

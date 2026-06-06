@@ -91,8 +91,8 @@ describe("loom reset", () => {
     const code = await run(["reset"], env);
     assert.equal(code, 0);
     assert.ok(out.some((l) => l.includes("archived") && l.includes(taskId)), out.join("\n"));
-    assert.equal(existsSync(join(dir, ".claude", "state.db")), false);
-    assert.equal(existsSync(join(dir, ".claude", "history", `${taskId}.db`)), true);
+    assert.equal(existsSync(join(dir, ".loom", "state.db")), false);
+    assert.equal(existsSync(join(dir, ".loom", "history", `${taskId}.db`)), true);
   });
 
   it("refuses an in-progress task without --force, leaving the store intact", async () => {
@@ -102,7 +102,7 @@ describe("loom reset", () => {
     const code = await run(["reset"], env);
     assert.equal(code, 1);
     assert.ok(err.some((l) => /force/.test(l)), err.join("\n"));
-    assert.equal(existsSync(join(dir, ".claude", "state.db")), true);
+    assert.equal(existsSync(join(dir, ".loom", "state.db")), true);
   });
 
   it("archives an in-progress task with --force", async () => {
@@ -111,7 +111,7 @@ describe("loom reset", () => {
 
     const code = await run(["reset", "--force"], env);
     assert.equal(code, 0);
-    assert.equal(existsSync(join(dir, ".claude", "state.db")), false);
+    assert.equal(existsSync(join(dir, ".loom", "state.db")), false);
   });
 
   it("reports nothing to reset for a project with no state DB", async () => {
@@ -132,7 +132,7 @@ describe("loom reset", () => {
     assert.equal(code, 0);
     assert.ok(out.some((l) => l.startsWith("[dry-run]") && l.includes(taskId)), out.join("\n"));
     // The store is untouched by a dry run.
-    assert.equal(existsSync(join(dir, ".claude", "state.db")), true);
+    assert.equal(existsSync(join(dir, ".loom", "state.db")), true);
   });
 
   it("rejects an unknown flag", async () => {

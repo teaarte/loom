@@ -24,7 +24,7 @@ if command -v jq >/dev/null 2>&1; then
 fi
 [ -n "$cwd" ] || cwd="$(pwd)"
 
-db="$cwd/.claude/state.db"
+db="$cwd/.loom/state.db"
 
 note() { printf 'pipeline: %s\n' "$1"; exit 0; }
 

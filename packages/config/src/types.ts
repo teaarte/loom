@@ -65,7 +65,7 @@ export interface BackendCredentialConfig {
   base_url_ref?: string;
 }
 
-// The global / project config document (config.json and <repo>/.claude/loom.json
+// The global / project config document (config.json and <repo>/.loom/loom.json
 // share this shape). All fields optional — an absent file is the empty config.
 export interface LoomConfig {
   // `auto` (default) | a backend name. Stored here and validated against the
@@ -119,7 +119,7 @@ export interface BundleRoster {
 
 // What `resolveConfig` returns. `merged` is global ← project (for reads, and for
 // the non-model settings). `layers` keeps the two model-map sources SEPARATE so
-// the caller can slot the legacy `.claude/providers.json` between them at the
+// the caller can slot the legacy `.loom/providers.json` between them at the
 // project rung (built-in ← bundle ← global ← [providers.json ← loom.json] ← env).
 // `envOverlay` is a `LOOM_*` map derived from merged notify+resilience, to be
 // merged UNDER the real environment so existing env readers see config as

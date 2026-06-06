@@ -23,10 +23,6 @@ import type { CliEnv } from "../lib/env.js";
 
 const STATUS_KNOWN_FLAGS = [] as const;
 
-function stateDbPath(target: string): string {
-  return join(target, ".claude", "state.db");
-}
-
 export async function status(
   argv: string[],
   env: CliEnv,
@@ -43,12 +39,14 @@ export async function status(
       ? resolve(env.cwd, positionals[0])
       : env.cwd;
 
-  if (!existsSync(stateDbPath(target))) {
+  const { withReadTransaction, loadState, projectFootprintDir, ZOMBIE_PENDING_MS } =
+    await import("@loomfsm/kernel");
+
+  // Resolving the footprint migrates any legacy `.claude/` store into place.
+  if (!existsSync(join(projectFootprintDir(target), "state.db"))) {
     env.out(`no active task in ${target}`);
     return 0;
   }
-
-  const { withReadTransaction, loadState, ZOMBIE_PENDING_MS } = await import("@loomfsm/kernel");
 
   let state: Awaited<ReturnType<typeof loadState>>;
   try {

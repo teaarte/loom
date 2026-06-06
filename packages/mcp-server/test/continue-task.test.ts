@@ -286,7 +286,7 @@ async function freshGitHarness(): Promise<Harness> {
   git(dir, "config", "user.email", "test@loom.test");
   git(dir, "config", "user.name", "loom test");
   git(dir, "checkout", "-q", "-b", "main");
-  writeFile(dir, ".gitignore", ".claude/\nprojects.allow\n");
+  writeFile(dir, ".gitignore", ".loom/\nprojects.allow\n");
   git(dir, "add", "-A");
   git(dir, "commit", "-q", "-m", "baseline");
 

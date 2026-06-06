@@ -85,7 +85,7 @@ export function provisionClone(
     });
   }
   // Fresh copy only — strip loom's own state + a prior task's stale artifacts
-  // so the containerized spawn sees a clean `.claude/` working set (the reuse
+  // so the containerized spawn sees a clean `.loom/` working set (the reuse
   // path above returns before here, keeping the in-flight working set intact).
   cleanLoomArtifacts(dest);
   clearGitLocks(dest);

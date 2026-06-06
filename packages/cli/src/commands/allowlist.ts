@@ -14,8 +14,26 @@ import type { CliEnv } from "../lib/env.js";
 
 const ALLOWLIST_KNOWN_FLAGS = ["dry-run"] as const;
 
+// The allowlist lives at `~/.loom/projects.allow`. This is a flag-free install
+// command in the launcher's eager import chain, so it must NOT pull the kernel
+// (and `node:sqlite`) in to resolve the footprint — it mirrors the literal the
+// kernel's `userFootprintDir` produces, and falls back to / seeds from a legacy
+// `~/.claude/projects.allow` so an upgrading operator's entries are never lost.
 export function allowlistFilePath(home: string): string {
+  return join(home, ".loom", "projects.allow");
+}
+
+function legacyAllowlistFilePath(home: string): string {
   return join(home, ".claude", "projects.allow");
+}
+
+// The path to READ entries from: the new location if present, else a legacy
+// `.claude/projects.allow` a kernel-side migration has not relocated yet.
+function allowlistReadPath(home: string): string {
+  const current = allowlistFilePath(home);
+  if (existsSync(current)) return current;
+  const legacy = legacyAllowlistFilePath(home);
+  return existsSync(legacy) ? legacy : current;
 }
 
 // The live (non-comment, non-blank) entries, trimmed. Mirrors the gate's
@@ -58,7 +76,7 @@ export function allowlistAdd(argv: string[], env: CliEnv): number {
   const realTarget = realpathSync(target);
 
   const filePath = allowlistFilePath(env.home);
-  const entries = readAllowlistEntries(filePath);
+  const entries = readAllowlistEntries(allowlistReadPath(env.home));
   const already = entries.some((entry) => resolveOrLiteral(entry) === realTarget);
 
   if (already) {
@@ -73,21 +91,23 @@ export function allowlistAdd(argv: string[], env: CliEnv): number {
   }
 
   mkdirSync(dirname(filePath), { recursive: true });
-  // Append a single newline-terminated line; never rewrite the existing
-  // content so an operator's comments and ordering survive.
-  const existing = existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
+  // Preserve the existing content verbatim (comments + ordering), seeding from a
+  // legacy `.claude/projects.allow` when the new file is absent so an upgrade
+  // never drops prior entries, then write it back with the new line appended.
+  const readPath = allowlistReadPath(env.home);
+  const existing = existsSync(readPath) ? readFileSync(readPath, "utf8") : "";
   const needsLeadingNewline = existing.length > 0 && !existing.endsWith("\n");
-  writeFileSync(filePath, `${needsLeadingNewline ? "\n" : ""}${realTarget}\n`, { flag: "a" });
+  writeFileSync(filePath, `${existing}${needsLeadingNewline ? "\n" : ""}${realTarget}\n`);
   env.out(`allowlisted: ${realTarget}`);
   env.out(`  (${filePath})`);
   return 0;
 }
 
 export function allowlistList(env: CliEnv): number {
-  const filePath = allowlistFilePath(env.home);
+  const filePath = allowlistReadPath(env.home);
   const entries = readAllowlistEntries(filePath);
   if (entries.length === 0) {
-    env.out(`no projects allowlisted (${filePath})`);
+    env.out(`no projects allowlisted (${allowlistFilePath(env.home)})`);
     return 0;
   }
   for (const entry of entries) env.out(entry);

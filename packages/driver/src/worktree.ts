@@ -100,7 +100,7 @@ export function provisionWorktree(
     });
   }
   // Fresh copy only — strip loom's own state + a prior task's stale artifacts
-  // so the spawn sees a clean `.claude/` working set (the reuse path above
+  // so the spawn sees a clean `.loom/` working set (the reuse path above
   // returns before here, keeping the in-flight task's own working set intact).
   cleanLoomArtifacts(dest);
   clearGitLocks(dest);

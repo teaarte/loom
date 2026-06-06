@@ -1,8 +1,8 @@
 // `loom init` — the friendly per-project entry point: ensure the project's
-// `.claude/` directory exists and authorize the current directory for tasks.
-// Authorization is the same operator action as `loom allowlist add` (cwd), so
-// init delegates to it rather than forking the dedup/realpath logic, then
-// points the user at `/task`.
+// `.loom/` footprint directory exists and authorize the current directory for
+// tasks. Authorization is the same operator action as `loom allowlist add`
+// (cwd), so init delegates to it rather than forking the dedup/realpath logic,
+// then points the user at `/task`.
 
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -21,13 +21,13 @@ export function init(argv: string[], env: CliEnv): number {
     return 1;
   }
   const dryRun = flags.has("dry-run");
-  const claudeDir = join(env.cwd, ".claude");
+  const footprintDir = join(env.cwd, ".loom");
 
   if (dryRun) {
-    if (!existsSync(claudeDir)) env.out(`[dry-run] would create ${claudeDir}`);
-  } else if (!existsSync(claudeDir)) {
-    mkdirSync(claudeDir, { recursive: true });
-    env.out(`created ${claudeDir}`);
+    if (!existsSync(footprintDir)) env.out(`[dry-run] would create ${footprintDir}`);
+  } else if (!existsSync(footprintDir)) {
+    mkdirSync(footprintDir, { recursive: true });
+    env.out(`created ${footprintDir}`);
   }
 
   // Allowlist the current directory (its own dedup keeps a re-run a no-op).

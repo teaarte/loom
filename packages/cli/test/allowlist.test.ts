@@ -105,7 +105,7 @@ describe("loom allowlist add", () => {
     const h = freshHarness("comments");
     try {
       const filePath = allowlistFilePath(h.home);
-      mkdirSync(join(h.home, ".claude"), { recursive: true });
+      mkdirSync(join(h.home, ".loom"), { recursive: true });
       writeFileSync(filePath, "# my projects\n\n/some/other/path\n", "utf8");
       assert.equal(allowlistAdd([], makeEnv(h.home, h.cwd).env), 0);
       const raw = readFileSync(filePath, "utf8");
@@ -121,7 +121,7 @@ describe("loom allowlist add", () => {
     const h = freshHarness("nonewline");
     try {
       const filePath = allowlistFilePath(h.home);
-      mkdirSync(join(h.home, ".claude"), { recursive: true });
+      mkdirSync(join(h.home, ".loom"), { recursive: true });
       writeFileSync(filePath, "/some/other/path", "utf8"); // no trailing newline
       assert.equal(allowlistAdd([], makeEnv(h.home, h.cwd).env), 0);
       const entries = readAllowlistEntries(filePath);
@@ -144,12 +144,12 @@ describe("loom allowlist add", () => {
 });
 
 describe("loom init", () => {
-  it("creates .claude/ and allowlists the current directory", () => {
+  it("creates .loom/ and allowlists the current directory", () => {
     const h = freshHarness("init");
     try {
       const { env } = makeEnv(h.home, h.cwd);
       assert.equal(init([], env), 0);
-      assert.ok(existsSync(join(h.cwd, ".claude")), ".claude created");
+      assert.ok(existsSync(join(h.cwd, ".loom")), ".loom created");
       assert.deepEqual(readAllowlistEntries(allowlistFilePath(h.home)), [realpathSync(h.cwd)]);
     } finally {
       h.dispose();
@@ -161,7 +161,7 @@ describe("loom init", () => {
     try {
       const { env } = makeEnv(h.home, h.cwd);
       assert.equal(init(["--dry-run"], env), 0);
-      assert.ok(!existsSync(join(h.cwd, ".claude")));
+      assert.ok(!existsSync(join(h.cwd, ".loom")));
       assert.ok(!existsSync(allowlistFilePath(h.home)));
     } finally {
       h.dispose();

@@ -136,7 +136,7 @@ async function abandon(dir: string, allowlistPath: string, driverStateId: string
 }
 
 function historyTaskIds(dir: string): string[] {
-  const indexPath = join(dir, ".claude", "history", "index.jsonl");
+  const indexPath = join(dir, ".loom", "history", "index.jsonl");
   if (!existsSync(indexPath)) return [];
   return readFileSync(indexPath, "utf8")
     .split("\n")
@@ -167,7 +167,7 @@ describe("pipeline_archive_and_reset", () => {
       assert.equal(res.error, undefined);
       assert.equal(res.archived, true);
       assert.equal(res.task_id, a.task_id);
-      assert.equal(existsSync(join(dir, ".claude", "state.db")), false);
+      assert.equal(existsSync(join(dir, ".loom", "state.db")), false);
       assert.deepEqual(historyTaskIds(dir), [a.task_id]);
 
       // A second task in the same project now starts clean.
@@ -188,12 +188,12 @@ describe("pipeline_archive_and_reset", () => {
       const refused = await reset({ project_dir: dir });
       assert.equal(refused.archived, false);
       assert.equal(refused.error?.code, "PROJECT_TASK_ACTIVE");
-      assert.equal(existsSync(join(dir, ".claude", "state.db")), true);
+      assert.equal(existsSync(join(dir, ".loom", "state.db")), true);
 
       const forced = await reset({ project_dir: dir, force: true });
       assert.equal(forced.error, undefined);
       assert.equal(forced.archived, true);
-      assert.equal(existsSync(join(dir, ".claude", "state.db")), false);
+      assert.equal(existsSync(join(dir, ".loom", "state.db")), false);
     } finally {
       cleanup(dir);
     }
@@ -256,7 +256,7 @@ describe("pipeline_run_task — sequential tasks in one project", () => {
         assert.equal(res.response.code, "PROJECT_TASK_ACTIVE");
       }
       // The live task is untouched.
-      assert.equal(existsSync(join(dir, ".claude", "state.db")), true);
+      assert.equal(existsSync(join(dir, ".loom", "state.db")), true);
       assert.deepEqual(historyTaskIds(dir), []);
     } finally {
       cleanup(dir);

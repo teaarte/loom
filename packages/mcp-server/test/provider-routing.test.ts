@@ -1,6 +1,6 @@
 // Per-agent provider routing through the production registry assembly.
 //
-// Proves the wired path: a project's `.claude/providers.json` is read at
+// Proves the wired path: a project's `.loom/providers.json` is read at
 // registry build and threaded into the kernel router, so `resolve(agent)`
 // returns the routed provider + model. Uses `createAssembleRegistry` — the
 // injectable factory the entrypoint uses — with stub providers, so no real
@@ -23,7 +23,7 @@ import { createAssembleRegistry } from "../src/bootstrap.js";
 // these tests pick up the dev machine's real `~/.config/loom` and the routing
 // assertions flake (green in CI, red on a machine with a configured loom). Point
 // LOOM_HOME at an empty temp dir for the suite so only the project's
-// `.claude/providers.json` decides routing.
+// `.loom/providers.json` decides routing.
 let loomHome: string;
 let priorLoomHome: string | undefined;
 before(() => {
@@ -59,13 +59,13 @@ function dispose(dir: string): void {
   rmSync(dir, { recursive: true, force: true });
 }
 function writeProvidersJson(dir: string, config: unknown): void {
-  mkdirSync(join(dir, ".claude"), { recursive: true });
-  writeFileSync(join(dir, ".claude", "providers.json"), JSON.stringify(config), "utf8");
+  mkdirSync(join(dir, ".loom"), { recursive: true });
+  writeFileSync(join(dir, ".loom", "providers.json"), JSON.stringify(config), "utf8");
 }
 
 const anyState = {} as unknown as PipelineState;
 
-describe("assembleRegistry — per-agent provider routing from .claude/providers.json", () => {
+describe("assembleRegistry — per-agent provider routing from .loom/providers.json", () => {
   it("routes the configured agent to its provider + tier model; others use the default", async () => {
     const dir = freshDir("route");
     try {
@@ -101,8 +101,8 @@ describe("assembleRegistry — per-agent provider routing from .claude/providers
   it("surfaces a malformed providers.json as an error rather than ignoring it", async () => {
     const dir = freshDir("bad");
     try {
-      mkdirSync(join(dir, ".claude"), { recursive: true });
-      writeFileSync(join(dir, ".claude", "providers.json"), "{ not valid json", "utf8");
+      mkdirSync(join(dir, ".loom"), { recursive: true });
+      writeFileSync(join(dir, ".loom", "providers.json"), "{ not valid json", "utf8");
       const assemble = createAssembleRegistry([stub("solo")]);
       await assert.rejects(assemble(dir), /invalid provider routing config/);
     } finally {

@@ -167,7 +167,7 @@ describe("readTraceFile — an archived store byte-copy", () => {
       // Checkpoint the WAL into the main file (close the pool), then byte-copy —
       // the same copy → verify the archival path performs.
       closeDb(dir);
-      const live = join(dir, ".claude", "state.db");
+      const live = join(dir, ".loom", "state.db");
       copy = join(mkdtempSync(join(tmpdir(), "loom-trace-archive-")), "task.db");
       copyFileSync(live, copy);
 
@@ -196,7 +196,7 @@ describe("readTrace — completion summary surfacing", () => {
       // kernel appends at finalize directly into the stored bundle_state. The
       // reader must surface it (and ignore everything else in bundle_state).
       closeDb(dir);
-      const live = join(dir, ".claude", "state.db");
+      const live = join(dir, ".loom", "state.db");
       const db = new DatabaseSync(live);
       db.exec(
         `UPDATE pipeline_state SET bundle_state = '${JSON.stringify({
@@ -241,7 +241,7 @@ describe("readTrace — store-less project", () => {
       assert.equal(trace.summary, null);
       assert.deepEqual(trace.agents, []);
       // A mere read must not materialize a store (no openDb side effect).
-      assert.equal(existsSync(join(dir, ".claude", "state.db")), false);
+      assert.equal(existsSync(join(dir, ".loom", "state.db")), false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

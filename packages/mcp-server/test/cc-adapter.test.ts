@@ -83,7 +83,7 @@ describe("pipeline-guard.sh (advisory PreToolUse hook)", () => {
   it("denies a direct rm of the state DB (non-zero + deny decision)", () => {
     const r = runHookJson(GUARD, {
       tool_name: "Bash",
-      tool_input: { command: "rm -f /proj/.claude/state.db" },
+      tool_input: { command: "rm -f /proj/.loom/state.db" },
     });
     assert.notEqual(r.status, 0);
     assert.match(r.stdout, /"permissionDecision":"deny"/);
@@ -92,7 +92,7 @@ describe("pipeline-guard.sh (advisory PreToolUse hook)", () => {
   it("denies an mv of the state DB", () => {
     const r = runHookJson(GUARD, {
       tool_name: "Bash",
-      tool_input: { command: "mv ./.claude/state.db /tmp/x" },
+      tool_input: { command: "mv ./.loom/state.db /tmp/x" },
     });
     assert.notEqual(r.status, 0);
     assert.match(r.stdout, /deny/);
@@ -101,7 +101,7 @@ describe("pipeline-guard.sh (advisory PreToolUse hook)", () => {
   it("denies an output-redirect onto the state DB", () => {
     const r = runHookJson(GUARD, {
       tool_name: "Bash",
-      tool_input: { command: "echo corrupt > ./.claude/state.db" },
+      tool_input: { command: "echo corrupt > ./.loom/state.db" },
     });
     assert.notEqual(r.status, 0);
     assert.match(r.stdout, /deny/);
@@ -110,7 +110,7 @@ describe("pipeline-guard.sh (advisory PreToolUse hook)", () => {
   it("denies an in-place sed of the state DB", () => {
     const r = runHookJson(GUARD, {
       tool_name: "Bash",
-      tool_input: { command: "sed -i 's/a/b/' some/.claude/state.db" },
+      tool_input: { command: "sed -i 's/a/b/' some/.loom/state.db" },
     });
     assert.notEqual(r.status, 0);
   });
@@ -124,7 +124,7 @@ describe("pipeline-guard.sh (advisory PreToolUse hook)", () => {
   it("passes a read of the state DB through (only mutations are denied)", () => {
     const r = runHookJson(GUARD, {
       tool_name: "Bash",
-      tool_input: { command: "sqlite3 .claude/state.db .tables" },
+      tool_input: { command: "sqlite3 .loom/state.db .tables" },
     });
     assert.equal(r.status, 0);
   });
@@ -190,7 +190,7 @@ describe("pipeline-stop.sh (advisory Stop hook)", () => {
       const upd = spawnSync(
         "sqlite3",
         [
-          join(dir, ".claude", "state.db"),
+          join(dir, ".loom", "state.db"),
           "UPDATE pending_agents SET started_at = '2020-01-01T00:00:00.000Z';",
         ],
         { encoding: "utf8" },

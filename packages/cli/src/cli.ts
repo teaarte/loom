@@ -41,10 +41,10 @@ Usage:
       Show the authorized project directories.
 
   loom init [--dry-run]
-      Ensure this project's .claude/ exists and authorize it, then point at /task.
+      Ensure this project's .loom/ exists and authorize it, then point at /task.
 
   loom reset [path] [--force] [--dry-run]
-      Archive this project's finished task into .claude/history/ and free the
+      Archive this project's finished task into .loom/history/ and free the
       slot so the next task starts clean (default: current directory).
       An in-progress task is refused unless --force is given.
   loom history [path]

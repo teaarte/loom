@@ -1,6 +1,6 @@
 // Read the tail of a project's daemon audit log for the dashboard's live log
 // view. The supervisor's `createFileLogger` appends one JSON object per line
-// to `<projectDir>/.claude/daemon/log.jsonl`; this reads the last `n` lines
+// to `<projectDir>/.loom/daemon/log.jsonl`; this reads the last `n` lines
 // back as parsed events. A project with no log yet (an in-memory logger, or a
 // just-registered project) reads as an empty tail — never an error.
 //
@@ -8,6 +8,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { projectFootprintDir } from "@loomfsm/kernel";
 
 export interface LogLine {
   ts?: string;
@@ -17,7 +19,7 @@ export interface LogLine {
 }
 
 export function daemonLogPath(projectDir: string): string {
-  return join(projectDir, ".claude", "daemon", "log.jsonl");
+  return join(projectFootprintDir(projectDir), "daemon", "log.jsonl");
 }
 
 export function readLogTail(projectDir: string, n: number): LogLine[] {

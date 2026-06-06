@@ -13,8 +13,9 @@
 // project: a self-enrolling transport would defeat the gate.
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+
+import { userFootprintDir } from "@loomfsm/kernel";
 
 import { assembleRegistry } from "../bootstrap.js";
 import { runStdioServer } from "../server.js";
@@ -22,8 +23,7 @@ import { runStdioServer } from "../server.js";
 // Mirror the kernel's default allowlist location so the path the gate
 // reads and the path this entrypoint seeds are the same file.
 function resolveAllowlistPath(): string {
-  const home = process.env.HOME ?? homedir();
-  return join(home, ".claude", "projects.allow");
+  return join(userFootprintDir(), "projects.allow");
 }
 
 function ensureAllowlistExists(path: string): void {

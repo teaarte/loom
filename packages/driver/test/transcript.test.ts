@@ -1,5 +1,5 @@
 // The per-spawn transcript writer — writes to the HOST project's
-// `.claude/loom/transcripts/<run_id>.json`, caps the prompt + output, drops a
+// `.loom/transcripts/<run_id>.json`, caps the prompt + output, drops a
 // self-ignoring `.gitignore`, and keys the filename strictly. No mocks: a real
 // temp tree.
 

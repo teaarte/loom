@@ -9,8 +9,8 @@
 // avoided (executor-usage-capture-no-kernel-persist) — this is a plain file at
 // the SAME capture boundary the usage sink fires at.
 //
-// It is written to the HOST project's `.claude/loom/transcripts/`, NOT the
-// sandbox copy: a fresh sandbox copy has `.claude/loom/` stripped by
+// It is written to the HOST project's `.loom/transcripts/`, NOT the sandbox
+// copy: a fresh sandbox copy has loom's `.loom/` state stripped by
 // `cleanLoomArtifacts`, so a sandbox-side write would be cleaned out from under
 // the next task. The host sidecar survives the sandbox discard, so the server
 // reads it consistently for a live task and an archived one alike.
@@ -19,7 +19,9 @@
 // replay graph, the same posture `readState` / the audit log take.
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+
+import { projectFootprintDir } from "@loomfsm/kernel";
 
 import type { SpawnUsage } from "./drive.js";
 
@@ -50,11 +52,11 @@ const TRANSCRIPTS_DIRNAME = "transcripts";
 // sidecar — a transcript is for reading, not for byte-exact replay.
 const MAX_FIELD_CHARS = 100_000;
 
-// `<project>/.claude/loom/transcripts` — the HOST sidecar dir (NOT the sandbox
-// copy). Exported so a transport (the server's read route) locates it the same
-// way for both the live and the archived path.
+// `<project>/.loom/transcripts` — the HOST sidecar dir (NOT the sandbox copy).
+// Exported so a transport (the server's read route) locates it the same way for
+// both the live and the archived path.
 export function spawnTranscriptDir(projectDir: string): string {
-  return join(resolve(projectDir), ".claude", "loom", TRANSCRIPTS_DIRNAME);
+  return join(projectFootprintDir(projectDir), TRANSCRIPTS_DIRNAME);
 }
 
 // The per-spawn file path, keyed by the kernel's `agent_run_id` (unique per

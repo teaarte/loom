@@ -2,7 +2,7 @@
 # pipeline-guard.sh — Claude Code PreToolUse hook (ADVISORY ONLY).
 #
 # Blocks the obvious accidental shell mutations of the pipeline state DB
-# (`.claude/state.db`): a direct `rm`, `mv`, output-redirect (`>`), or
+# (`.loom/state.db`): a direct `rm`, `mv`, output-redirect (`>`), or
 # in-place `sed -i`. It is belt-and-suspenders for fat-fingered keystrokes
 # — NOT a security boundary. It is trivially bypassed by any non-shell
 # write path (a Python/Node one-liner, a symlink, a wrapper script). The
@@ -13,7 +13,7 @@
 #
 # Contract: reads Claude Code's PreToolUse JSON on stdin, inspects only the
 # Bash tool's command string, and denies the four mutations above when the
-# target path ends in `.claude/state.db`. Everything else passes through.
+# target path ends in `.loom/state.db`. Everything else passes through.
 # Parsing is defensive — a missing/unknown field falls back to allow.
 
 set -u
@@ -33,21 +33,21 @@ fi
 
 # Only the state DB is in scope. No mention → allow.
 case "$command_str" in
-  *".claude/state.db"*) : ;;
+  *".loom/state.db"*) : ;;
   *) exit 0 ;;
 esac
 
 # Match the four accidental-mutation shapes against the state DB path.
 is_mutation=0
 case "$command_str" in
-  *"rm "*".claude/state.db"*)     is_mutation=1 ;;
-  *"mv "*".claude/state.db"*)     is_mutation=1 ;;
-  *">"*".claude/state.db"*)       is_mutation=1 ;;
-  *"sed -i"*".claude/state.db"*)  is_mutation=1 ;;
+  *"rm "*".loom/state.db"*)     is_mutation=1 ;;
+  *"mv "*".loom/state.db"*)     is_mutation=1 ;;
+  *">"*".loom/state.db"*)       is_mutation=1 ;;
+  *"sed -i"*".loom/state.db"*)  is_mutation=1 ;;
 esac
 
 if [ "$is_mutation" -eq 1 ]; then
-  reason="refused: direct shell mutation of .claude/state.db — use pipeline_recover. (advisory guard; the real boundary is the kernel's transactional invariants)"
+  reason="refused: direct shell mutation of .loom/state.db — use pipeline_recover. (advisory guard; the real boundary is the kernel's transactional invariants)"
   # Emit Claude Code's structured deny decision on stdout AND exit non-zero,
   # so either contract interpretation treats this as a block.
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"

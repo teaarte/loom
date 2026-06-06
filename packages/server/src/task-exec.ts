@@ -14,6 +14,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { projectFootprintDir } from "@loomfsm/kernel";
+
 export interface TaskExecPrefs {
   // true → run this task's spawns in the container; false → force the worktree;
   // absent → the deployment default (the server-wide --docker/--no-docker plan).
@@ -28,7 +30,7 @@ export interface TaskExecPrefs {
 }
 
 export function taskExecPath(projectDir: string): string {
-  return join(projectDir, ".claude", "loom", "task-exec.json");
+  return join(projectFootprintDir(projectDir), "task-exec.json");
 }
 
 export function writeTaskExecPrefs(projectDir: string, prefs: TaskExecPrefs): void {

@@ -2,7 +2,7 @@
 // bookkeeping for the one control-plane process, plus the DURABLE set of
 // registered project dirs that recovery re-attaches.
 //
-// Two files under a server state dir (default `~/.claude/loom-server/`):
+// Two files under a server state dir (default `~/.loom/server/`):
 //
 //   server.json   — ADVISORY: pid, bind host/port, phase, project count.
 //                   A `stop` reads it to signal; a `status` reads it to
@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from "node:path";
 
 import { isAlive, isoFrom, systemClock, type Clock } from "@loomfsm/daemon";
+import { userFootprintDir } from "@loomfsm/kernel";
 
 export type ServerPhase = "starting" | "serving" | "stopping" | "stopped";
 
@@ -45,9 +46,9 @@ export class ServerControlError extends Error {
 }
 
 // Default state dir under the user's home. `home` is passed explicitly so a
-// test points it at a temp dir without touching the real `~/.claude`.
+// test points it at a temp dir without touching the real `~/.loom`.
 export function defaultServerStateDir(home: string): string {
-  return join(home, ".claude", "loom-server");
+  return join(userFootprintDir(home), "server");
 }
 
 export function serverStatusPath(stateDir: string): string {

@@ -284,7 +284,7 @@ const TOOL_DESCRIPTORS = [
   {
     name: "pipeline_archive_and_reset",
     description:
-      "Archives this project's finished task into .claude/history/ and frees " +
+      "Archives this project's finished task into .loom/history/ and frees " +
       "the single-task slot so the next task starts clean. A terminal task " +
       "archives cleanly; an in-progress task is refused (PROJECT_TASK_ACTIVE) " +
       "unless force:true. Works even when the slot is jammed (a finished task " +

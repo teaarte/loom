@@ -173,7 +173,7 @@ describe("ollama loop (opt-in: requires a local Ollama + model)", () => {
   );
 
   it(
-    "routes ONLY the classifier to ollama via .claude/providers.json; the rest use the shuttle",
+    "routes ONLY the classifier to ollama via .loom/providers.json; the rest use the shuttle",
     { timeout: 900_000 },
     async (t) => {
       if (MODEL === "") {
@@ -194,10 +194,10 @@ describe("ollama loop (opt-in: requires a local Ollama + model)", () => {
       // Project routing: classifier → ollama (real model), everything else
       // → the shuttle default (the host echoes those). The provider SET is
       // the deployment's choice (injected below); the per-agent mapping is
-      // this project's `.claude/providers.json`.
-      mkdirSync(join(dir, ".claude"), { recursive: true });
+      // this project's `.loom/providers.json`.
+      mkdirSync(join(dir, ".loom"), { recursive: true });
       writeFileSync(
-        join(dir, ".claude", "providers.json"),
+        join(dir, ".loom", "providers.json"),
         JSON.stringify({
           agent_routing: { classifier: { provider: "ollama", tier: "local" } },
           tier_aliases: { local: { model: MODEL } },

@@ -26,6 +26,7 @@ import {
   closeDb,
   KernelError,
   parseRestoreSql,
+  projectFootprintDir,
   withStateTransaction,
 } from "@loomfsm/kernel";
 
@@ -69,7 +70,7 @@ export function createRestoreTool(
       // Operator-explicit file swap — no kernel validation.
       try {
         closeDb(input.project_dir);
-        const dest = join(input.project_dir, ".claude", "state.db");
+        const dest = join(projectFootprintDir(input.project_dir), "state.db");
         copyFileSync(from, dest);
       } catch (err) {
         return refusal(err, now);

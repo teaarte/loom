@@ -1,11 +1,11 @@
 // The one layered resolver every face reads. It merges the config layers in the
 // git/VS-Code precedence order and hands back both the merged view (for reads
 // and for the non-model settings) and the per-layer model maps kept SEPARATE,
-// so a caller can slot the legacy `.claude/providers.json` between global and
+// so a caller can slot the legacy `.loom/providers.json` between global and
 // project at the project rung:
 //
 //   built-in ← bundle defaults ← global (~/.config/loom/config.json)
-//            ← [ .claude/providers.json ← .claude/loom.json ]   (project rung)
+//            ← [ .loom/providers.json ← .loom/loom.json ]   (project rung)
 //            ← env (LOOM_*)
 //
 // The environment wins for the non-model settings via `envOverlay`: a `LOOM_*`

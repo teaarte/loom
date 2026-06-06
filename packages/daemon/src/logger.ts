@@ -4,7 +4,7 @@
 // (driving, parking, waking, retrying, recovering) are visible after the
 // fact, not lost.
 //
-// The default writes one JSON object per line to `.claude/daemon/log.jsonl`
+// The default writes one JSON object per line to `.loom/daemon/log.jsonl`
 // AND a terse human line to stderr, so an operator watching the terminal and
 // a later forensic read both work. It is injectable — a test captures events
 // in memory; a deployment can route them elsewhere.
@@ -14,6 +14,8 @@
 
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+
+import { projectFootprintDir } from "@loomfsm/kernel";
 
 import { type Clock, isoFrom, systemClock } from "./clock.js";
 
@@ -34,18 +36,19 @@ export interface DaemonLogger {
 
 export interface FileLoggerOptions {
   clock?: Clock;
-  // Where the JSONL log is appended. Default `<projectDir>/.claude/daemon/log.jsonl`.
+  // Where the JSONL log is appended. Default `<projectDir>/.loom/daemon/log.jsonl`.
   logPath?: string;
   // Mirror a human line to this sink (default `process.stderr.write`). Pass a
   // no-op to silence the terminal and keep only the JSONL trail.
   echo?: (line: string) => void;
 }
 
-// Build the default logger for a project: JSONL trail under `.claude/daemon/`
+// Build the default logger for a project: JSONL trail under `.loom/daemon/`
 // plus a one-line stderr echo.
 export function createFileLogger(projectDir: string, opts: FileLoggerOptions = {}): DaemonLogger {
   const clock = opts.clock ?? systemClock;
-  const logPath = opts.logPath ?? join(projectDir, ".claude", "daemon", "log.jsonl");
+  const daemonDir = join(projectFootprintDir(projectDir), "daemon");
+  const logPath = opts.logPath ?? join(daemonDir, "log.jsonl");
   const echo = opts.echo ?? ((line: string) => void process.stderr.write(line));
   let dirReady = false;
 
@@ -58,7 +61,7 @@ export function createFileLogger(projectDir: string, opts: FileLoggerOptions = {
     };
     try {
       if (!dirReady) {
-        mkdirSync(join(projectDir, ".claude", "daemon"), { recursive: true });
+        mkdirSync(daemonDir, { recursive: true });
         dirReady = true;
       }
       appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf8");

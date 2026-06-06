@@ -60,12 +60,24 @@ describe("global + project config stores", () => {
     assert.equal(back.bundles?.["demo"]?.agents?.["a"], "x:y");
   });
 
-  it("round-trips a project config under <repo>/.claude/loom.json", () => {
+  it("round-trips a project config under <repo>/.loom/loom.json", () => {
     const proj = tmp();
     assert.deepEqual(readProjectConfig(proj), {});
     writeProjectConfig(proj, { bundles: { demo: { agents: { b: "tier" } } } });
-    assert.equal(projectConfigPath(proj), join(proj, ".claude", "loom.json"));
+    assert.equal(projectConfigPath(proj), join(proj, ".loom", "loom.json"));
     assert.equal(readProjectConfig(proj).bundles?.["demo"]?.agents?.["b"], "tier");
+  });
+
+  it("reads a legacy <repo>/.claude/loom.json when no .loom/ override exists", () => {
+    const proj = tmp();
+    mkdirSync(join(proj, ".claude"), { recursive: true });
+    writeFileSync(
+      join(proj, ".claude", "loom.json"),
+      JSON.stringify({ bundles: { demo: { agents: { b: "legacy" } } } }),
+      "utf8",
+    );
+    // No `.loom/loom.json` written → the reader falls back to the legacy path.
+    assert.equal(readProjectConfig(proj).bundles?.["demo"]?.agents?.["b"], "legacy");
   });
 
   it("throws a clear, sourced error on a malformed global config", () => {

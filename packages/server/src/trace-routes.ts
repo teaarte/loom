@@ -26,7 +26,7 @@ import {
   worktreePathFor,
   type TraceView,
 } from "@loomfsm/driver";
-import { resolveSafePath } from "@loomfsm/kernel";
+import { projectFootprintDir, resolveSafePath } from "@loomfsm/kernel";
 import type { ServerResponse } from "node:http";
 
 import { ServerError } from "./errors.js";
@@ -55,7 +55,7 @@ const MAX_ARTIFACT_BYTES = 512 * 1024;
 // ----- GET /projects/:id/trace (live or ?task=<archived id>) -------------
 
 // Project a task's recorded agent chain. With no `task` query the LIVE store is
-// read; with `?task=<archived id>` the matching `<dir>/.claude/history/<id>.db`
+// read; with `?task=<archived id>` the matching `<dir>/.loom/history/<id>.db`
 // is read by the SAME domain-blind reader (same schema, rotated aside on finish).
 export async function getTrace(
   res: ServerResponse,
@@ -67,7 +67,7 @@ export async function getTrace(
     if (!SAFE_ARCHIVE_ID.test(archivedTaskId)) {
       throw new ServerError("BAD_TASK_ID", 400, "the archived task id is not a valid identifier");
     }
-    const dbPath = join(dir, ".claude", HISTORY_DIRNAME, `${archivedTaskId}.db`);
+    const dbPath = join(projectFootprintDir(dir), HISTORY_DIRNAME, `${archivedTaskId}.db`);
     if (!existsSync(dbPath)) {
       throw new ServerError("ARCHIVE_NOT_FOUND", 404, `no archived task ${archivedTaskId}`);
     }
@@ -151,7 +151,7 @@ const s = (v: unknown): string | null => (typeof v === "string" && v.length > 0 
 // `.db` snapshot present without an index line is peeked with the same reader so
 // the list never silently drops a task the index missed.
 export async function getHistory(res: ServerResponse, dir: string): Promise<void> {
-  const historyDir = join(dir, ".claude", HISTORY_DIRNAME);
+  const historyDir = join(projectFootprintDir(dir), HISTORY_DIRNAME);
   if (!existsSync(historyDir)) {
     sendJson(res, 200, { tasks: [] });
     return;

@@ -558,7 +558,7 @@ export default defineBundle({
 
   // Tier → concrete model for the default Claude Code backend, so a
   // zero-config install resolves each agent's declared tier to a real model.
-  // A project's `.claude/providers.json` overrides per agent.
+  // A project's `.loom/providers.json` overrides per agent.
   default_model_tiers: {
     fast: "haiku",
     balanced: "sonnet",

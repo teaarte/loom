@@ -41,6 +41,7 @@ import {
   captureNow,
   loadBundle,
   openDb,
+  projectFootprintDir,
   reconcileExtensions,
   type LLMProvider,
   type ProviderRoute,
@@ -69,7 +70,7 @@ const BUNDLE_MANIFEST_SOURCE = "@loomfsm/bundle-code:manifest";
 // wants other backends (a local model, a hosted API) injects them here
 // rather than the server hardcoding every provider package. Per-agent /
 // per-phase routing among the registered set is then a project-level
-// `.claude/providers.json` (read at build).
+// `.loom/providers.json` (read at build).
 //
 // Concurrent first calls share one in-flight build via the cached promise;
 // a rejected build is evicted so a transient failure does not poison later
@@ -171,13 +172,13 @@ async function buildRegistry(
   });
 }
 
-// Optional per-project provider routing, read from `.claude/providers.json`
-// (the same `.claude/` dir the state DB lives in). Absent → no routing
+// Optional per-project provider routing, read from `.loom/providers.json`
+// (the same `.loom/` footprint the state DB lives in). Absent → no routing
 // (every agent resolves to the default provider). Present-but-malformed is
 // surfaced as an error rather than silently ignored; the kernel router
 // validates the parsed shape and refuses unknown providers/tiers.
 function readProvidersConfig(projectDir: string): ProvidersConfig | undefined {
-  const path = join(projectDir, ".claude", "providers.json");
+  const path = join(projectFootprintDir(projectDir), "providers.json");
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");

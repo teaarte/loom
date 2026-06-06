@@ -206,7 +206,7 @@ describe("pipeline_backup / pipeline_restore", () => {
       // grab the binary state.db as the backup artifact.
       closeDb(src.dir);
       const binPath = join(bkDir, "state.db");
-      copyFileSync(join(src.dir, ".claude", "state.db"), binPath);
+      copyFileSync(join(src.dir, ".loom", "state.db"), binPath);
 
       const restore = createRestoreTool({ allowlistPath: tgt.allowlistPath });
       const res = await restore({ project_dir: tgt.dir, from: binPath, format: "binary", confirm: true });

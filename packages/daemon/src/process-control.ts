@@ -12,6 +12,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { projectFootprintDir } from "@loomfsm/kernel";
+
 import { type Clock, isoFrom, systemClock } from "./clock.js";
 
 export type DaemonPhase =
@@ -46,7 +48,7 @@ export class DaemonError extends Error {
 }
 
 export function daemonDir(projectDir: string): string {
-  return join(projectDir, ".claude", "daemon");
+  return join(projectFootprintDir(projectDir), "daemon");
 }
 
 export function statusFilePath(projectDir: string): string {

@@ -118,6 +118,13 @@ async function start(argv: string[], env: CliEnv, overrides: ServeOverrides): Pr
     return 1;
   }
 
+  // Relocate any legacy `~/.claude/` operator files (allowlist, hmac key,
+  // server state) into `~/.loom/` before the control plane reads its state dir.
+  // `serve` re-execs with the SQLite flag, so the dynamic kernel import is safe
+  // here even though a static one would not be (it would poison flag-free
+  // commands in the eager import chain).
+  (await import("@loomfsm/kernel")).userFootprintDir(env.home.length > 0 ? env.home : homedir());
+
   const stateDir = resolveStateDir(env, overrides);
   const token = flags.token ?? envToken();
   const host = flags.host ?? process.env["LOOM_SERVER_HOST"];
@@ -300,7 +307,12 @@ function resolveStateDir(env: CliEnv, overrides: ServeOverrides): string {
   const fromEnv = process.env["LOOM_SERVER_STATE_DIR"];
   if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
   const home = env.home.length > 0 ? env.home : homedir();
-  return resolve(home, ".claude", "loom-server");
+  // Mirror the kernel's `userFootprintDir(home) + "server"` without importing
+  // the kernel here — `serve` sits in the launcher's eager import chain, so a
+  // static kernel import would pull `node:sqlite` into every flag-free command.
+  // The legacy `~/.claude/loom-server` is relocated by the migration trigger in
+  // `serve()` before the control plane reads this dir.
+  return resolve(home, ".loom", "server");
 }
 
 function envToken(): string | undefined {

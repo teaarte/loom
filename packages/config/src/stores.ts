@@ -16,6 +16,7 @@ import { dirname } from "node:path";
 
 import {
   configPath,
+  legacyProjectConfigPath,
   projectConfigPath,
   secretsPath,
   workspacePath,
@@ -68,12 +69,19 @@ export function writeGlobalConfig(loomHome: string, config: LoomConfig): void {
   writeJsonAtomic(configPath(loomHome), config);
 }
 
-// ----- project config (<repo>/.claude/loom.json) ----------------------------
+// ----- project config (<repo>/.loom/loom.json) ------------------------------
 
 export function readProjectConfig(projectDir: string): LoomConfig {
-  const raw = readJson(projectConfigPath(projectDir));
+  // Prefer the new `.loom/` location; fall back to a legacy `.claude/loom.json`
+  // a kernel-side footprint migration has not relocated yet.
+  let raw = readJson(projectConfigPath(projectDir));
+  let source = "<repo>/.loom/loom.json";
+  if (raw === undefined) {
+    raw = readJson(legacyProjectConfigPath(projectDir));
+    source = "<repo>/.claude/loom.json";
+  }
   if (raw === undefined) return {};
-  return parseLoomConfig(raw, "<repo>/.claude/loom.json");
+  return parseLoomConfig(raw, source);
 }
 
 export function writeProjectConfig(projectDir: string, config: LoomConfig): void {

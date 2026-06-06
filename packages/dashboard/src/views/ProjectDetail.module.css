@@ -28,33 +28,6 @@
   margin-bottom: 0.8rem;
 }
 
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.85em;
-}
-.dot {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  display: inline-block;
-  flex: none;
-  background: var(--muted);
-}
-.idle {
-  background: var(--muted);
-}
-.ok {
-  background: var(--ok);
-}
-.warn {
-  background: var(--warn);
-}
-.bad {
-  background: var(--bad);
-}
-
 .box {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -174,26 +147,6 @@
   color: var(--muted);
   font-size: 0.7em;
   vertical-align: middle;
-}
-
-/* A pulsing status dot — applied ONLY while a task is actively in_progress,
-   so a completed-accepted (also tone "ok") dot stays steady. */
-@keyframes loomPulse {
-  0% {
-    box-shadow: 0 0 0 0 var(--ok);
-    opacity: 1;
-  }
-  70% {
-    box-shadow: 0 0 0 0.35rem transparent;
-    opacity: 0.7;
-  }
-  100% {
-    box-shadow: 0 0 0 0 transparent;
-    opacity: 1;
-  }
-}
-.pulse {
-  animation: loomPulse 1.4s ease-out infinite;
 }
 
 .elapsed {

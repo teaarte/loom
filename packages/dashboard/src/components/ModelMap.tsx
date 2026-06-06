@@ -15,14 +15,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { api, ApiError } from "../lib/api.js";
+import { useModelList } from "../hooks/useModelList.js";
+import { api, errText } from "../lib/api.js";
 import { validateModelRef } from "../lib/validatePair.js";
-import type {
-  AgentsResponse,
-  BackendModelsResponse,
-  LoomConfigShape,
-  ProvidersResponse,
-} from "../lib/types.js";
+import type { AgentsResponse, LoomConfigShape, ProvidersResponse } from "../lib/types.js";
 import styles from "./ModelMap.module.css";
 
 export function ModelMap({ projectId }: { projectId: string }) {
@@ -31,9 +27,10 @@ export function ModelMap({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
-  // The per-agent provider dropdown selection + a per-backend model-list cache.
+  // The per-agent provider dropdown selection.
   const [providerSel, setProviderSel] = useState<Record<string, string>>({});
-  const [modelsByBackend, setModelsByBackend] = useState<Record<string, BackendModelsResponse>>({});
+  // The per-backend model-list cache + lazy loader (shared hook).
+  const { modelsByBackend, loadModels } = useModelList();
   // Per-agent model-dropdown search (OpenRouter lists hundreds — a substring
   // filter keeps the picker usable without a heavier combobox).
   const [modelSearch, setModelSearch] = useState<Record<string, string>>({});
@@ -48,28 +45,13 @@ export function ModelMap({ projectId }: { projectId: string }) {
       setProviders(p);
       setError(null);
     } catch (err) {
-      setError(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
+      setError(errText(err));
     }
   }, [projectId]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
-
-  // Lazily fetch (and cache) a backend's model list when its dropdown is first
-  // chosen. A failed/empty list is cached too — the row falls back to free-text.
-  const loadModels = useCallback(
-    async (backend: string): Promise<void> => {
-      if (backend.length === 0 || modelsByBackend[backend] !== undefined) return;
-      try {
-        const r = await api<BackendModelsResponse>("GET", `/providers/${encodeURIComponent(backend)}/models`);
-        setModelsByBackend((m) => ({ ...m, [backend]: r }));
-      } catch {
-        setModelsByBackend((m) => ({ ...m, [backend]: { backend, models: [], reason: "could not list models" } }));
-      }
-    },
-    [modelsByBackend],
-  );
 
   const save = async (agent: string, ref: string): Promise<void> => {
     if (agents === null) return;
@@ -92,7 +74,7 @@ export function ModelMap({ projectId }: { projectId: string }) {
       });
       await reload();
     } catch (err) {
-      setError(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
+      setError(errText(err));
     } finally {
       setSaving(null);
     }

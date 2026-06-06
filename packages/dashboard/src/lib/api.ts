@@ -69,6 +69,16 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   return data as T;
 }
 
+// The display string for an error surfaced from `api()` — the single home for the
+// `instanceof ApiError ? \`${code}: ${message}\` : …` shape every view repeated
+// (the R3 de-dup). An `ApiError` shows the server's typed envelope code+message;
+// any other `Error` shows its message; a non-Error is stringified.
+export function errText(err: unknown): string {
+  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
 // The URL for an SSE subscription, with the token in the query string (an
 // EventSource cannot set the Authorization header). Mirrors the vanilla page.
 export function sseUrl(path: string): string {

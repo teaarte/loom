@@ -4,29 +4,29 @@
 // PEER of the CLI: submit → `POST /submit`, answer → `POST /projects/:id/answer`,
 // the same paths `loom run` / `/resume` drive. Domain-blind: it shows the
 // generic FSM status and carries a generic decision; it never interprets a gate.
+//
+// The lifecycle logic lives in hooks (`useSubmitTask` / `useAnswerGate` /
+// `useTaskControls`); this view composes the forms + the read-model display.
 
 import { useEffect, useState } from "react";
 
-import { api, ApiError } from "../lib/api.js";
 import { History } from "../components/History.js";
 import { ModelMap } from "../components/ModelMap.js";
 import { SpawnTranscriptView } from "../components/SpawnTranscript.js";
+import { StatusBadge } from "../components/StatusBadge.js";
 import { Trace } from "../components/Trace.js";
-import { useApi } from "../hooks/useApi.js";
+import { useAnswerGate } from "../hooks/useAnswerGate.js";
+import { useProviders } from "../hooks/useProviders.js";
 import { useSSE } from "../hooks/useSSE.js";
+import { useSubmitTask } from "../hooks/useSubmitTask.js";
+import { useTaskControls } from "../hooks/useTaskControls.js";
+import { useTrace } from "../hooks/useTrace.js";
 import { cx } from "../lib/cx.js";
 import { elapsedFor, formatDetailValue, logParts } from "../lib/format.js";
 import { POLICY_PRESETS } from "../lib/policies.js";
-import { statusBadge, type StatusTone } from "../lib/status.js";
-import type { LogLine, ProjectStatus, ProvidersResponse, SubmitResult, TraceResponse } from "../lib/types.js";
+import { flowMeta } from "../lib/status.js";
+import type { LogLine, ProjectStatus } from "../lib/types.js";
 import styles from "./ProjectDetail.module.css";
-
-const DOT_CLASS: Record<StatusTone, string | undefined> = {
-  idle: styles.idle,
-  ok: styles.ok,
-  warn: styles.warn,
-  bad: styles.bad,
-};
 
 const LEVEL_CHIP: Record<string, string | undefined> = {
   info: styles.lvlInfo,
@@ -61,10 +61,9 @@ export function ProjectDetail({
   // Providers carries Docker availability (for the per-task checkbox); a server
   // without the config API answers 501 → `providers` stays null and the Docker
   // checkbox is simply hidden.
-  const { data: providers } = useApi<ProvidersResponse>("/providers");
+  const { data: providers } = useProviders();
   const status = snapshot?.status ?? null;
   const supervised = snapshot?.supervised ?? false;
-  const badge = statusBadge(status);
   const running = status?.status === "in_progress";
   // A task occupies the slot until it is rotated to history: while one is
   // in_progress the submit form is hidden (it is not logical to submit over a
@@ -73,6 +72,7 @@ export function ProjectDetail({
   const activeTask = running === true;
   const now = useNow(running ?? false);
   const elapsed = status?.has_task ? elapsedFor(status.started_at, status.ended_at, now) : "";
+  const meta = flowMeta(status);
 
   return (
     <div>
@@ -81,22 +81,14 @@ export function ProjectDetail({
           ← projects
         </button>
         <h1>{label ?? projectId}</h1>
-        <span className={styles.badge}>
-          <span className={cx(styles.dot, DOT_CLASS[badge.tone], running && styles.pulse)} />
-          {badge.label}
-        </span>
+        <StatusBadge status={status} />
         {elapsed.length > 0 && (
           <span className={styles.elapsed}>{running ? "⏱ " : "took "}{elapsed}</span>
         )}
       </div>
       <div className={styles.dir}>{dir}</div>
 
-      {status?.flow && (
-        <div className={styles.meta}>
-          {status.flow.name} @ step {status.flow.step_index}
-          {status.active_phase ? ` · ${status.active_phase}` : ""}
-        </div>
-      )}
+      {meta !== null && <div className={styles.meta}>{meta}</div>}
 
       {status?.task && status.task.length > 0 && (
         <details className={styles.taskFull} open>
@@ -163,41 +155,23 @@ function SubmitForm({ projectId, docker }: { projectId: string; docker?: { avail
   const [useDocker, setUseDocker] = useState(false);
   const [pushOnAccept, setPushOnAccept] = useState(false);
   const [mergeOnAccept, setMergeOnAccept] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, msg, submit } = useSubmitTask(projectId);
 
   // Fast-task is the trivial flow — it pins complexity=trivial, so it wins over
   // (and disables) the complexity dropdown.
   const effectiveComplexity = fast ? "trivial" : complexity;
   const dockerAvailable = docker?.available === true;
 
-  const submit = async (): Promise<void> => {
-    const trimmed = task.trim();
-    if (trimmed.length === 0) {
-      setMsg("enter a task");
-      return;
-    }
-    setBusy(true);
-    setMsg(null);
-    try {
-      const r = await api<SubmitResult>("POST", "/submit", {
-        project: projectId,
-        task: trimmed,
-        ...(policy.length > 0 ? { policy_preset: policy } : {}),
-        ...(effectiveComplexity.length > 0
-          ? { initial_decisions: { complexity: effectiveComplexity, complexity_pinned: true } }
-          : {}),
-        ...(useDocker ? { docker: true } : {}),
-        ...(pushOnAccept ? { push: true } : {}),
-        ...(mergeOnAccept ? { squash_merge: true } : {}),
-      });
-      setMsg(`${r.replayed ? "already running" : "submitted"} — ${r.task_id ?? "?"} [${r.status}]`);
-      // Keep the textarea so the operator can re-read / re-submit what they asked.
-    } catch (err) {
-      setMsg(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
-    } finally {
-      setBusy(false);
-    }
+  const onSubmit = (): void => {
+    // Keep the textarea so the operator can re-read / re-submit what they asked.
+    void submit({
+      task,
+      policy,
+      complexity: effectiveComplexity,
+      docker: useDocker && dockerAvailable,
+      push: pushOnAccept,
+      squashMerge: mergeOnAccept,
+    });
   };
 
   return (
@@ -267,7 +241,7 @@ function SubmitForm({ projectId, docker }: { projectId: string; docker?: { avail
         </label>
       </div>
       <div className={styles.row}>
-        <button className={styles.btn} disabled={busy} onClick={() => void submit()}>
+        <button className={styles.btn} disabled={busy} onClick={onSubmit}>
           {busy ? "submitting…" : "submit"}
         </button>
         {msg !== null && <span className={styles.msg}>{msg}</span>}
@@ -277,22 +251,14 @@ function SubmitForm({ projectId, docker }: { projectId: string; docker?: { avail
 }
 
 // Pause / resume / cancel / archive — first-class buttons over the SAME registry
-// machinery the CLI uses. Pause = unregister the project (`DELETE /projects/:id`):
-// aborts the in-flight drive, releases the lock, KEEPS the task in the store +
-// catalog. Resume = re-register (`POST /projects`) → the watcher's
-// recover-on-start re-drives the in-flight task idempotently. Cancel/archive =
-// the abort+archive route, freeing the slot in one action. Domain-blind: it
-// reasons only about generic status + whether a watcher is attached.
-//
-// The controls shown depend on BOTH the store status and `supervised` (is a
-// watcher attached):
+// machinery the CLI uses (the actions live in `useTaskControls`). The controls
+// shown depend on BOTH the store status and `supervised` (is a watcher attached):
 //   in_progress + supervised   → ⏸ pause (a watcher is driving it) + ✕ cancel
 //   in_progress + !supervised  → ▶ resume (an in-flight task with no watcher:
-//                                 paused, or recovered-but-not-driven — resume
-//                                 actually restarts it) + ✕ cancel
-//   completed / abandoned      → 🗄 archive (free the finished slot for the next
-//                                 task) — NO resume, which was a no-op on a
-//                                 finished task and is what made the slot wedge.
+//                                 paused, or recovered-but-not-driven) + ✕ cancel
+//   completed / abandoned      → 🗄 archive (free the finished slot) + ship
+//                                 buttons when accepted — NO resume (a no-op on a
+//                                 finished task, which is what wedged the slot).
 function TaskControls({
   projectId,
   status,
@@ -302,44 +268,10 @@ function TaskControls({
   status: ProjectStatus | null;
   supervised: boolean;
 }) {
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const { busy, msg, pause, resume, cancel, ship } = useTaskControls(projectId);
 
   if (!status || !status.has_task) return null;
   const running = status.status === "in_progress";
-
-  const act = async (verb: string, run: () => Promise<unknown>): Promise<void> => {
-    setBusy(verb);
-    setMsg(null);
-    try {
-      await run();
-      setMsg(`${verb} ✓`);
-    } catch (err) {
-      setMsg(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const pause = (): Promise<void> =>
-    act("paused", () => api("DELETE", `/projects/${encodeURIComponent(projectId)}`));
-  const resume = (): Promise<void> =>
-    act("resumed", () => api("POST", "/projects", { dir: status.project_dir }));
-  const cancel = (): Promise<void> =>
-    act("cancelled", () => api("POST", `/projects/${encodeURIComponent(projectId)}/cancel`));
-
-  // Ship: push the task branch / squash-merge it into the checkout. The server
-  // refuses cleanly (returns `{ pushed:false, reason }`) so surface the reason
-  // rather than a bare "✓". Shown on an accepted task — reviewed and ready.
-  const ship = (verb: "push" | "merge"): Promise<void> =>
-    act(verb, async () => {
-      const r = await api<{ pushed?: boolean; merged?: boolean; reason?: string }>(
-        "POST",
-        `/projects/${encodeURIComponent(projectId)}/${verb}`,
-      );
-      const ok = verb === "push" ? r.pushed : r.merged;
-      if (ok !== true) throw new ApiError(400, r.reason ?? "refused", `not ${verb}ed: ${r.reason ?? "refused"}`);
-    });
 
   // A finished task: archive it (free the slot); and when accepted, ship it.
   if (!running) {
@@ -372,7 +304,7 @@ function TaskControls({
           {busy === "paused" ? "pausing…" : "⏸ pause"}
         </button>
       ) : (
-        <button className={styles.btn} disabled={busy !== null} onClick={() => void resume()}>
+        <button className={styles.btn} disabled={busy !== null} onClick={() => void resume(status.project_dir)}>
           {busy === "resumed" ? "resuming…" : "▶ resume"}
         </button>
       )}
@@ -394,26 +326,16 @@ function AnswerForm({
   const [decision, setDecision] = useState<"accept" | "reject" | "auto-apply">("accept");
   const [rejectIntent, setRejectIntent] = useState<"revise" | "abandon">("revise");
   const [message, setMessage] = useState("");
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, msg, answer } = useAnswerGate(projectId);
 
-  const answer = async (): Promise<void> => {
-    setBusy(true);
-    setMsg(null);
-    try {
-      await api("POST", `/projects/${encodeURIComponent(projectId)}/answer`, {
-        gate_event_id: gate.gate_event_id,
-        decision,
-        ...(decision === "reject" ? { reject_intent: rejectIntent } : {}),
-        ...(message.trim().length > 0 ? { message: message.trim() } : {}),
-      });
-      setMsg("delivered");
-      setMessage("");
-    } catch (err) {
-      setMsg(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
-    } finally {
-      setBusy(false);
-    }
+  const onAnswer = async (): Promise<void> => {
+    const ok = await answer({
+      gateEventId: gate.gate_event_id,
+      decision,
+      ...(decision === "reject" ? { rejectIntent } : {}),
+      message,
+    });
+    if (ok) setMessage("");
   };
 
   return (
@@ -456,7 +378,7 @@ function AnswerForm({
         onChange={(e) => setMessage(e.target.value)}
       />
       <div className={styles.row}>
-        <button className={styles.btn} disabled={busy} onClick={() => void answer()}>
+        <button className={styles.btn} disabled={busy} onClick={() => void onAnswer()}>
           {busy ? "delivering…" : "answer gate"}
         </button>
         {msg !== null && <span className={styles.msg}>{msg}</span>}
@@ -471,7 +393,7 @@ function AnswerForm({
 // produced the artifact at the gate (the plan, the implementation, the final
 // check). Domain-blind: it picks the last chain entry, no agent name hardcoded.
 function ApprovalPreview({ projectId }: { projectId: string }) {
-  const { data } = useApi<TraceResponse>(`/projects/${encodeURIComponent(projectId)}/trace`);
+  const { data } = useTrace(projectId);
   if (data === null || data.agents.length === 0) return null;
   const last = data.agents[data.agents.length - 1];
   if (last === undefined) return null;

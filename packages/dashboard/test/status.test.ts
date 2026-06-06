@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { statusBadge } from "../src/lib/status.js";
+import { flowMeta, statusBadge } from "../src/lib/status.js";
 import type { ProjectStatus } from "../src/lib/types.js";
 
 function status(over: Partial<ProjectStatus>): ProjectStatus {
@@ -62,5 +62,23 @@ describe("statusBadge", () => {
 
   it("marks an abandoned task bad", () => {
     assert.deepEqual(statusBadge(status({ status: "abandoned" })), { tone: "bad", label: "abandoned" });
+  });
+});
+
+describe("flowMeta", () => {
+  it("is null with no status or no flow", () => {
+    assert.equal(flowMeta(null), null);
+    assert.equal(flowMeta(status({ flow: null })), null);
+  });
+
+  it("renders the flow name + step, carrying both as generic data", () => {
+    assert.equal(flowMeta(status({ flow: { name: "simple", step_index: 12 }, active_phase: null })), "simple @ step 12");
+  });
+
+  it("appends the active phase when present", () => {
+    assert.equal(
+      flowMeta(status({ flow: { name: "complex", step_index: 3 }, active_phase: "review" })),
+      "complex @ step 3 · review",
+    );
   });
 });

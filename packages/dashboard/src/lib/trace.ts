@@ -2,7 +2,7 @@
 // unit-test under tsconfig.node.json. Domain-blind: they operate on the generic
 // trace shape and name no bundle vocabulary.
 
-import type { TraceAgent, TraceFinding, TraceVerdict } from "./types.js";
+import type { TraceAgent, TraceFinding, TraceResponse, TraceVerdict } from "./types.js";
 
 export interface TimedAgent extends TraceAgent {
   // Wall-clock from the previous run's persist time (or the task `started_at`
@@ -26,10 +26,26 @@ export function deriveAgentDurations(agents: TraceAgent[], startedAt: string | n
   });
 }
 
-function parseMs(iso: string | null): number | null {
+// Parse an ISO-8601 stamp to epoch-ms, or null when absent / unparseable. Shared
+// by the derived-duration anchor above and `totalTime` below (the R3 de-dup of
+// the byte-identical copy that lived in `Trace.tsx`).
+export function parseMs(iso: string | null): number | null {
   if (iso === null || iso.length === 0) return null;
   const ms = Date.parse(iso);
   return Number.isNaN(ms) ? null : ms;
+}
+
+// Total wall-clock for the task: `started_at` → `ended_at` when terminal, else to
+// the last run's persist time so an in-flight chain still shows elapsed-so-far.
+// null when no usable start is known or the bounds invert (clock skew). Pure, so
+// it is unit-tested without a DOM (moved out of `Trace.tsx` for the R3 de-dup).
+export function totalTime(t: TraceResponse): number | null {
+  const start = parseMs(t.summary?.started_at ?? null);
+  if (start === null) return null;
+  const lastRun = t.agents.length > 0 ? parseMs(t.agents[t.agents.length - 1]?.recorded_at ?? null) : null;
+  const end = parseMs(t.summary?.ended_at ?? null) ?? lastRun;
+  if (end === null || end < start) return null;
+  return end - start;
 }
 
 // The findings a given run produced — matched on the agent name + phase the run

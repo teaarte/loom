@@ -10,9 +10,10 @@ import {
   deriveAgentDurations,
   findingsForAgent,
   tokenSummary,
+  totalTime,
   verdictsForAgent,
 } from "../src/lib/trace.js";
-import type { TraceAgent, TraceFinding, TraceVerdict } from "../src/lib/types.js";
+import type { TraceAgent, TraceFinding, TraceResponse, TraceSummary, TraceVerdict } from "../src/lib/types.js";
 
 function agent(over: Partial<TraceAgent> & Pick<TraceAgent, "agent_run_id" | "recorded_at">): TraceAgent {
   return {
@@ -72,6 +73,47 @@ describe("findingsForAgent / verdictsForAgent", () => {
     assert.deepEqual(findingsForAgent(findings, "rev", "other-phase"), []);
     assert.equal(verdictsForAgent(verdicts, "rev", "review").length, 1);
     assert.equal(verdictsForAgent(verdicts, "rev", "elsewhere").length, 0);
+  });
+});
+
+describe("totalTime", () => {
+  function trace(summary: Partial<TraceSummary> | null, agents: TraceAgent[]): TraceResponse {
+    const base: TraceSummary = {
+      task_id: "t1",
+      status: null,
+      verdict: null,
+      started_at: null,
+      ended_at: null,
+      task: null,
+    };
+    return {
+      archived: false,
+      summary: summary === null ? null : { ...base, ...summary },
+      agents,
+      findings: [],
+      verdicts: [],
+      gates: [],
+    };
+  }
+
+  it("uses started_at → ended_at when terminal", () => {
+    const t = trace({ started_at: "2026-06-04T00:00:00.000Z", ended_at: "2026-06-04T00:01:00.000Z" }, []);
+    assert.equal(totalTime(t), 60_000);
+  });
+
+  it("falls back to the last run's persist time while in flight", () => {
+    const t = trace({ started_at: "2026-06-04T00:00:00.000Z" }, [
+      agent({ agent_run_id: "r1", recorded_at: "2026-06-04T00:00:10.000Z" }),
+      agent({ agent_run_id: "r2", recorded_at: "2026-06-04T00:00:25.000Z" }),
+    ]);
+    assert.equal(totalTime(t), 25_000);
+  });
+
+  it("is null when there is no usable start or the bounds invert", () => {
+    assert.equal(totalTime(trace(null, [])), null);
+    assert.equal(totalTime(trace({ started_at: null }, [])), null);
+    const inverted = trace({ started_at: "2026-06-04T00:01:00.000Z", ended_at: "2026-06-04T00:00:00.000Z" }, []);
+    assert.equal(totalTime(inverted), null);
   });
 });
 

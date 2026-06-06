@@ -10,8 +10,9 @@
 
 import { useState } from "react";
 
-import { api, ApiError } from "../lib/api.js";
+import { api, errText } from "../lib/api.js";
 import { useApi } from "../hooks/useApi.js";
+import { useTrace } from "../hooks/useTrace.js";
 import { cx } from "../lib/cx.js";
 import { SpawnTranscriptView } from "./SpawnTranscript.js";
 import { formatDuration } from "../lib/format.js";
@@ -19,6 +20,7 @@ import {
   deriveAgentDurations,
   findingsForAgent,
   tokenSummary,
+  totalTime,
   verdictsForAgent,
   type TimedAgent,
 } from "../lib/trace.js";
@@ -27,7 +29,6 @@ import type {
   ArtifactsResponse,
   TraceFinding,
   TraceGate,
-  TraceResponse,
   TraceVerdict,
 } from "../lib/types.js";
 import styles from "./Trace.module.css";
@@ -39,13 +40,7 @@ const SEV_CLASS: Record<string, string | undefined> = {
 };
 
 export function Trace({ projectId, archivedTaskId }: { projectId: string; archivedTaskId?: string }) {
-  const path =
-    archivedTaskId !== undefined
-      ? `/projects/${encodeURIComponent(projectId)}/trace?task=${encodeURIComponent(archivedTaskId)}`
-      : `/projects/${encodeURIComponent(projectId)}/trace`;
-  // The live chain may grow as spawns complete, so poll it; an archived chain is
-  // static — fetch it once.
-  const { data, error } = useApi<TraceResponse>(path, archivedTaskId === undefined ? 4000 : undefined);
+  const { data, error } = useTrace(projectId, archivedTaskId);
 
   if (error !== null) {
     return <div className={styles.note}>could not read the chain: {error.message}</div>;
@@ -83,23 +78,6 @@ export function Trace({ projectId, archivedTaskId }: { projectId: string; archiv
       {archivedTaskId === undefined && <Artifacts projectId={projectId} />}
     </div>
   );
-}
-
-// Total wall-clock for the task: started_at → ended_at when terminal, else to the
-// last run's persist time so an in-flight chain still shows elapsed-so-far.
-function totalTime(t: TraceResponse): number | null {
-  const start = parse(t.summary?.started_at ?? null);
-  if (start === null) return null;
-  const last = t.agents.length > 0 ? parse(t.agents[t.agents.length - 1]?.recorded_at ?? null) : null;
-  const end = parse(t.summary?.ended_at ?? null) ?? last;
-  if (end === null || end < start) return null;
-  return end - start;
-}
-
-function parse(iso: string | null): number | null {
-  if (iso === null || iso.length === 0) return null;
-  const ms = Date.parse(iso);
-  return Number.isNaN(ms) ? null : ms;
 }
 
 function AgentCard({
@@ -209,7 +187,7 @@ function Artifacts({ projectId }: { projectId: string }) {
       );
       setContent(c);
     } catch (e) {
-      setErr(e instanceof ApiError ? `${e.code}: ${e.message}` : String(e));
+      setErr(errText(e));
     }
   };
 

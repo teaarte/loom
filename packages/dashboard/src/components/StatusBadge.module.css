@@ -1,0 +1,48 @@
+/* The shared status dot + label — the one home for the byte-identical dot CSS +
+   pulse keyframes that lived in both ProjectsView and ProjectDetail (R3 de-dup). */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85em;
+}
+.dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+  background: var(--muted);
+}
+.idle {
+  background: var(--muted);
+}
+.ok {
+  background: var(--ok);
+}
+.warn {
+  background: var(--warn);
+}
+.bad {
+  background: var(--bad);
+}
+
+/* A pulsing dot — applied ONLY while a task is actively in_progress, so a
+   completed-accepted (also tone "ok") dot stays steady. */
+@keyframes loomPulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--ok);
+    opacity: 1;
+  }
+  70% {
+    box-shadow: 0 0 0 0.35rem transparent;
+    opacity: 0.7;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    opacity: 1;
+  }
+}
+.pulse {
+  animation: loomPulse 1.4s ease-out infinite;
+}

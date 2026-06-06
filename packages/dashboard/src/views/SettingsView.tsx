@@ -9,7 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ModelMap } from "../components/ModelMap.js";
 import { pruneEmpty, SchemaField } from "../components/SchemaForm.js";
-import { api, ApiError } from "../lib/api.js";
+import { api, ApiError, errText } from "../lib/api.js";
 import { classify } from "../lib/schemaForm.js";
 import type {
   JsonSchema,
@@ -69,7 +69,7 @@ function ModelMapSection() {
         if (id === undefined) setNote("Add a project to edit its bundle's model map.");
         else setProjectId(id);
       } catch (err) {
-        if (!cancelled) setNote(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
+        if (!cancelled) setNote(errText(err));
       }
     })();
     return () => {
@@ -98,7 +98,7 @@ function ConfigForm() {
       setDraft(c);
       setError(null);
     } catch (err) {
-      setError(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
+      setError(errText(err));
     }
   }, []);
 
@@ -116,7 +116,7 @@ function ConfigForm() {
       setDraft(stored);
       setMsg("saved");
     } catch (err) {
-      setMsg(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
+      setMsg(errText(err));
     } finally {
       setSaving(false);
     }
@@ -154,7 +154,7 @@ function SecretsWidget() {
       setSecrets(r.secrets);
       setError(null);
     } catch (err) {
-      setError(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
+      setError(errText(err));
     }
   }, []);
 
@@ -175,7 +175,7 @@ function SecretsWidget() {
       });
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
+      setError(errText(err));
     } finally {
       setBusy(null);
     }

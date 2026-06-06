@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 
-import { api, ApiError } from "../lib/api.js";
+import { api, errText } from "../lib/api.js";
 import { cx } from "../lib/cx.js";
 import type { SpawnTranscript, SpawnTranscriptResponse } from "../lib/types.js";
 import styles from "./SpawnTranscript.module.css";
@@ -39,7 +39,7 @@ export function SpawnTranscriptView({
       );
       setData(r.transcript);
     } catch (e) {
-      setErr(e instanceof ApiError ? `${e.code}: ${e.message}` : String(e));
+      setErr(errText(e));
     } finally {
       setLoaded(true);
       setLoading(false);

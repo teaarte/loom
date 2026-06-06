@@ -14,7 +14,7 @@
 
 import { useState } from "react";
 
-import { api, ApiError } from "../lib/api.js";
+import { api, errText } from "../lib/api.js";
 import styles from "./AddProjectView.module.css";
 
 export function AddProjectView({ onAdded }: { onAdded: () => void }) {
@@ -23,9 +23,6 @@ export function AddProjectView({ onAdded }: { onAdded: () => void }) {
   const [bundle, setBundle] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<"catalog" | "supervise" | null>(null);
-
-  const errText = (err: unknown): string =>
-    err instanceof ApiError ? `${err.code}: ${err.message}` : String(err);
 
   const addToCatalog = async (): Promise<void> => {
     const d = dir.trim();

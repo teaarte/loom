@@ -59,14 +59,26 @@ function bundleStateField(state: BundleStateView, key: string): unknown {
 // A generic phase-status assertion that names a NON-code phase — the same
 // machinery the first bundle uses over its own phases, proving the
 // substrate's phase reasoning carries no code-domain assumption.
+//
+// Record-time safety (same contract as the first bundle's gate→phase rules):
+// the substrate runs invariants at EVERY commit, including the gate-approval
+// tick itself, where the gate's own phase (`review-spec`) is legitimately
+// still `in_progress` — the FSM settles it on the NEXT tick when the flow
+// leaves the phase. So this tolerates the transient non-terminal states and
+// fires only on a terminal-but-WRONG status. Within the current PhaseStatus
+// union both terminal states (`completed`, `skipped`) are allowed, so this is
+// a forward-compat guard; it is kept so the gate→phase contract stays
+// documented and rolls back rather than papering over a future terminal
+// status outside that set.
 export const invSpec201: Invariant = defineInvariant(["gates", "phases"], (state) => {
   if (!isApproved(state.gates["gate-approval"]?.status)) return null;
   const review = phaseStatus(state, "review-spec");
   if (review === null) return null; // no review-spec row yet — nothing to assert
-  if (review === "completed" || review === "skipped") return null;
+  if (review === "pending" || review === "in_progress") return null; // transient
+  if (review === "completed" || review === "skipped") return null; // allowed terminals
   return {
     code: "INV_SPEC_201",
-    message: `gate-approval approved but review-spec phase is '${review}'`,
+    message: `gate-approval approved but review-spec phase settled to '${review}'`,
     detail: { review_spec_status: review },
   };
 });

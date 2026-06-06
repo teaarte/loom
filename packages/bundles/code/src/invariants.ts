@@ -65,29 +65,54 @@ function bundleStateField(state: BundleStateView, key: string): unknown {
 // Domain rules — INV_CODE_101..104
 // ============================================================================
 
-// Once the plan gate is approved, the planning phase must be closed.
+// Record-time safety: every invariant here runs at EVERY tx (the substrate
+// has one commit-time invariant call site), including the gate-approval tick
+// itself. At that tick a gate's own phase is legitimately still `in_progress`
+// — the FSM settles it on the NEXT tick, when the flow leaves the phase. So a
+// rule that asserts "gate approved → its phase completed" must TOLERATE the
+// transient non-terminal states (`pending` / `in_progress` / not-yet-
+// materialized) and fire only on a genuinely terminal-but-WRONG state. Asserting
+// on the transient state false-fires on every clean gated flow.
+function isTerminalPhase(status: string | null): boolean {
+  return status === "completed" || status === "skipped";
+}
+
+// Once the plan gate is approved, the planning phase must be closed. The spec
+// allows planning to be `completed` OR `skipped`; the only failing states are
+// the transient ones (`pending` / `in_progress`), which legitimately occur at
+// the approval tick and are tolerated. Within the current PhaseStatus union no
+// terminal-but-wrong state exists, so this rule is a forward-compat guard (it
+// would fire only if a future migration introduced a terminal status outside
+// {completed, skipped}); it is kept in the catalog so the gate→phase contract
+// stays documented and rolls back rather than papering over such a status.
 export const invCode101: Invariant = defineInvariant(["gates", "phases"], (state) => {
   if (!isApproved(state.gates["gate-plan"]?.status)) return null;
   const planning = phaseStatus(state, "planning");
   if (planning === null) return null; // no planning row yet — nothing to assert
-  if (planning === "completed" || planning === "skipped") return null;
+  if (planning === "pending" || planning === "in_progress") return null; // transient
+  if (isTerminalPhase(planning)) return null; // spec allows completed | skipped
   return {
     code: "INV_CODE_101",
-    message: `gate-plan approved but planning phase is '${planning}'`,
+    message: `gate-plan approved but planning phase settled to '${planning}'`,
     detail: { planning_status: planning },
   };
 });
 
-// Once the final gate is approved, both the implementation and validation
-// phases must be completed.
+// Once the final gate is approved, neither implementation nor validation may
+// have been SKIPPED — shipping past a phase that ran nothing is the failure
+// this catches. `completed` is the success state; `pending` / `in_progress` /
+// not-yet-materialized are tolerated transient states at the approval tick
+// (the FSM settles the gate's own phase on the next tick). Only a terminal
+// `skipped` is a genuine violation.
 export const invCode102: Invariant = defineInvariant(["gates", "phases"], (state) => {
   if (!isApproved(state.gates["gate-final"]?.status)) return null;
   const impl = phaseStatus(state, "implementation");
   const validation = phaseStatus(state, "validation");
-  if (impl === "completed" && validation === "completed") return null;
+  const skipped = (s: string | null): boolean => s === "skipped";
+  if (!skipped(impl) && !skipped(validation)) return null;
   return {
     code: "INV_CODE_102",
-    message: `gate-final approved but implementation='${impl ?? "missing"}' validation='${validation ?? "missing"}'`,
+    message: `gate-final approved but a required phase was skipped (implementation='${impl ?? "missing"}' validation='${validation ?? "missing"}')`,
     detail: { implementation_status: impl, validation_status: validation },
   };
 });
@@ -145,29 +170,33 @@ export const invCode104: Invariant = defineInvariant(["agent_verdicts"], (state)
 });
 
 // A no-op outcome — the implementer produced an EMPTY diff (zero files changed
-// or created) — must not be silently auto-accepted. The final gate may close a
-// zero-change implementation only with explicit HUMAN approval, so a mis-scoped /
-// did-nothing run PARKS for a human to judge rather than completing as "accepted"
-// with nothing done (the token-economy guard's terminal half; the review panel is
-// already skipped on the empty diff via `source_changed`). Reads `diff_snapshot`,
-// the file-accounting the `git-diff` step records in every flow; absent → no
-// assertion (the diff has not been snapshotted yet).
+// or created) — must not be silently auto-accepted UNDER FULL AUTONOMY. Like the
+// safety floor below, this engages only when the final role's policy is literally
+// `auto`: there is then no human and no blocker-escalation to catch a did-nothing
+// run, so a mis-scoped / empty result PARKS (the auto-approve tx rolls back) for a
+// human to judge rather than completing as "accepted" with nothing done. Under the
+// honest baseline (`on-blockers` / `human`) a no-op completes and M8's "No file
+// changes were recorded" completion summary is the visible signal — a clean run
+// the operator chose to gate-on-blockers must not be vetoed for doing little. The
+// review panel is independently skipped on the empty diff via `source_changed`.
+// Reads `diff_snapshot`, the file-accounting the `git-diff` step records in every
+// flow; absent → no assertion (the diff has not been snapshotted yet).
 export const invCode105: Invariant = defineInvariant(
-  ["bundle_state.diff_snapshot", "gates"],
+  ["gate_policies", "bundle_state.diff_snapshot", "gates"],
   (state) => {
+    if (!atFinalAutoApprove(state)) return null;
+    const g = state.gates["gate-final"];
+    if (g?.decided_by === "human") return null; // a human override-approve is deliberate
     const snap = bundleStateField(state, "diff_snapshot");
     if (typeof snap !== "object" || snap === null) return null;
     const modified = Number((snap as { modified_count?: unknown }).modified_count ?? NaN);
     const created = Number((snap as { created_count?: unknown }).created_count ?? NaN);
     if (!Number.isFinite(modified) || !Number.isFinite(created)) return null;
     if (modified + created > 0) return null; // there were changes — nothing to assert
-    const g = state.gates["gate-final"];
-    if (!g || !isApproved(g.status)) return null;
-    if (g.decided_by === "human") return null;
     return {
       code: "INV_CODE_105",
-      message: `the implementation produced no file changes; an empty (no-op) result must be human-approved, not '${g.decided_by}'`,
-      detail: { decided_by: g.decided_by },
+      message: `the implementation produced no file changes; an empty (no-op) result must not auto-approve under full autonomy (decided_by '${g?.decided_by}')`,
+      detail: { decided_by: g?.decided_by ?? null },
     };
   },
 );

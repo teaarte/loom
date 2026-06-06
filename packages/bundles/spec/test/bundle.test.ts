@@ -258,14 +258,17 @@ describe("@loomfsm/bundle-spec — domain invariants", () => {
     );
   });
 
-  it("the sign-off rule fires when sign-off is approved but the review phase is open", () => {
+  it("the sign-off rule tolerates the transient open phase at the approval tick, and passes when closed", () => {
+    // Record-time safety: at the gate-approval tick the review phase is
+    // legitimately still in_progress (the FSM settles it on the next tick), so
+    // the rule must NOT fire there — asserting on the transient state would
+    // false-fire on every clean signed-off flow (the genericity harness drives
+    // catch this if it regresses).
     const open = viewWith({
       gates: { "gate-approval": { name: "gate-approval", status: "auto-approved", decided_by: "auto-policy", feedback: null, decided_at: null } },
       phases: [{ name: "review-spec", status: "in_progress", skipped_reason: null, phase_extension: null, updated_at: "t" }],
     });
-    const violation = invSpec201(open, NO_SNAPSHOTS);
-    assert.ok(violation !== null);
-    assert.equal(violation?.code, "INV_SPEC_201");
+    assert.equal(invSpec201(open, NO_SNAPSHOTS), null);
 
     const closed = viewWith({
       gates: { "gate-approval": { name: "gate-approval", status: "auto-approved", decided_by: "auto-policy", feedback: null, decided_at: null } },

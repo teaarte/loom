@@ -24,7 +24,13 @@ import type {
 } from "@loomfsm/kernel";
 
 import codeBundle from "../src/bundle.js";
-import { invCode105 } from "../src/invariants.js";
+import {
+  invCode105,
+  invLintClean,
+  invSafetyFloorFinal,
+  invTestsPass,
+  invTypecheckClean,
+} from "../src/invariants.js";
 import codeManifest from "../manifest.js";
 
 // The compiled test lives at dist/test/; the package root (where agents/,
@@ -605,6 +611,9 @@ describe("@loomfsm/bundle-code — INV_CODE_105 no-op guard", () => {
     created_count?: number;
     final?: { status: string; decided_by: string };
     snapshot?: boolean;
+    // Defaults to the full-autonomous posture the guard engages under; pass
+    // "on-blockers" to assert the honest baseline does NOT park a no-op.
+    finalPolicy?: string;
   }): BundleStateView {
     const bundle_state: Record<string, unknown> = {};
     if (opts.snapshot !== false) {
@@ -617,15 +626,26 @@ describe("@loomfsm/bundle-code — INV_CODE_105 no-op guard", () => {
     }
     return {
       bundle_state,
+      gate_policies: { final: opts.finalPolicy ?? "auto" },
       gates: opts.final !== undefined ? { "gate-final": opts.final } : {},
     } as unknown as BundleStateView;
   }
   const snaps = {} as never;
 
-  it("fires when an empty diff is auto-approved at the final gate", () => {
+  it("fires when an empty diff is auto-approved at a full-autonomous final gate", () => {
     const v = invCode105(stateWith({ final: { status: "auto-approved", decided_by: "policy" } }), snaps);
     assert.ok(v !== null);
     assert.equal(v?.code, "INV_CODE_105");
+  });
+
+  it("does NOT park a no-op under the on-blockers baseline (the M8 summary is the signal)", () => {
+    // The honest baseline auto-approves a clean run — including a no-op — and
+    // the completion summary surfaces "No file changes were recorded". Parking
+    // here would falsely veto every did-little on-blockers run.
+    assert.equal(
+      invCode105(stateWith({ finalPolicy: "on-blockers", final: { status: "auto-approved", decided_by: "policy" } }), snaps),
+      null,
+    );
   });
 
   it("passes when a HUMAN approved the empty result (a deliberate no-op accept)", () => {
@@ -640,5 +660,80 @@ describe("@loomfsm/bundle-code — INV_CODE_105 no-op guard", () => {
   it("does not assert before the diff is snapshotted, or before the final gate is approved", () => {
     assert.equal(invCode105(stateWith({ snapshot: false, final: { status: "auto-approved", decided_by: "policy" } }), snaps), null);
     assert.equal(invCode105(stateWith({}), snaps), null); // no gate-final yet (e.g. the trivial flow)
+  });
+});
+
+// ============================================================================
+// safety floor — the deterministic boundary that makes `final: auto` defensible
+// ============================================================================
+
+describe("@loomfsm/bundle-code — safety floor (INV_lint_clean / INV_tests_pass / INV_typecheck_clean)", () => {
+  // A state at a full-autonomous final-gate approval, with the floor's status
+  // fields set to whatever the case under test needs. `finalPolicy` defaults to
+  // `auto` (the only posture the floor engages under).
+  function floorState(opts: {
+    finalPolicy?: string;
+    lint?: unknown;
+    test_run?: unknown;
+    typecheck?: unknown;
+  }): BundleStateView {
+    const bundle_state: Record<string, unknown> = {};
+    if (opts.lint !== undefined) bundle_state["lint_result"] = opts.lint;
+    if (opts.test_run !== undefined) bundle_state["test_run"] = opts.test_run;
+    if (opts.typecheck !== undefined) bundle_state["typecheck"] = opts.typecheck;
+    return {
+      bundle_state,
+      gate_policies: { final: opts.finalPolicy ?? "auto" },
+      gates: { "gate-final": { status: "auto-approved", decided_by: "policy" } },
+    } as unknown as BundleStateView;
+  }
+  const snaps = {} as never;
+  const ok = { status: "ok" };
+
+  it("vetoes a full-autonomous final approve when lint_result is MISSING", () => {
+    // The code bundle ships no writer for lint_result, so a real `final: auto`
+    // run reaches the gate with the field absent — and the floor must veto it.
+    // Before the wiring landed this invariant never ran, so the auto gate
+    // closed regardless. This is the dormant-floor regression.
+    const v = invLintClean(floorState({}), snaps);
+    assert.equal(v?.code, "INV_lint_clean");
+  });
+
+  it("vetoes a full-autonomous final approve when lint FAILED", () => {
+    const v = invLintClean(floorState({ lint: { status: "failed" } }), snaps);
+    assert.equal(v?.code, "INV_lint_clean");
+  });
+
+  it("passes when lint is ok", () => {
+    assert.equal(invLintClean(floorState({ lint: ok }), snaps), null);
+  });
+
+  it("test/typecheck floor mirror lint", () => {
+    assert.equal(invTestsPass(floorState({ test_run: { status: "failed" } }), snaps)?.code, "INV_tests_pass");
+    assert.equal(invTestsPass(floorState({ test_run: ok }), snaps), null);
+    assert.equal(invTypecheckClean(floorState({ typecheck: { status: "failed" } }), snaps)?.code, "INV_typecheck_clean");
+    assert.equal(invTypecheckClean(floorState({ typecheck: ok }), snaps), null);
+  });
+
+  it("stays DORMANT under the honest baseline (final policy on-blockers)", () => {
+    // The whole point of the baseline: the human-or-blocker gate is the
+    // boundary, so the floor must not demand status fields the bundle never
+    // wrote. A clean on-blockers run with no lint_result still completes.
+    assert.equal(invLintClean(floorState({ finalPolicy: "on-blockers" }), snaps), null);
+    assert.equal(invTestsPass(floorState({ finalPolicy: "on-blockers" }), snaps), null);
+    assert.equal(invTypecheckClean(floorState({ finalPolicy: "on-blockers" }), snaps), null);
+    assert.equal(invSafetyFloorFinal(floorState({ finalPolicy: "on-blockers" }), snaps), null);
+  });
+
+  it("the composite INV_safety_floor_final surfaces the first failing check", () => {
+    // All three missing → the composite returns the lint failure first (the
+    // single registered anchor the loader matches by function name).
+    const v = invSafetyFloorFinal(floorState({}), snaps);
+    assert.equal(v?.code, "INV_lint_clean");
+    // All three ok → clean.
+    assert.equal(
+      invSafetyFloorFinal(floorState({ lint: ok, test_run: ok, typecheck: ok }), snaps),
+      null,
+    );
   });
 });

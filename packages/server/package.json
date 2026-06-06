@@ -11,6 +11,10 @@
       "types": "./dist/src/index.d.ts",
       "import": "./dist/src/index.js"
     },
+    "./bot": {
+      "types": "./dist/src/intake/bot.d.ts",
+      "import": "./dist/src/intake/bot.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

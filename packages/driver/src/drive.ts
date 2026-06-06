@@ -23,6 +23,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  archiveAndReset,
   archiveStateDb,
   buildPrompt,
   captureNow,
@@ -119,6 +120,12 @@ export interface DriveOptions {
   // Present → start a fresh task (or rotate a finished slot and start one).
   // Absent → attach to the active task and resume it.
   task?: string;
+  // How to treat an IN-PROGRESS incumbent when a `task` is given. The headless
+  // loop's default is to RESUME it (crash-recovery / re-attach is the point).
+  // "archive" force-archives the incumbent and starts the new task instead —
+  // the `loom run --replace` "discard the throwaway, start over" case. Never a
+  // silent clobber: it only fires when the operator explicitly asked.
+  on_active_task?: "resume" | "archive";
   policy_preset?: string;
   gate_policies?: Partial<Record<GateRole, PolicyName>>;
   complexity_hint?: "simple" | "medium" | "complex";
@@ -231,6 +238,14 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
       response = created.response;
       driverStateId = created.driver_state_id;
     }
+  } else if (opts.on_active_task === "archive" && opts.task !== undefined) {
+    // Explicit discard-and-restart: force-archive the in-progress incumbent
+    // (it is preserved in history + its branch stays for review), then start
+    // the new task. Only ever reached when the operator asked (`--replace`).
+    await archiveAndReset(projectDir, captureNow(), { force: true });
+    const created = await createAndStart(projectDir, createArgs(registry, uuid, opts));
+    response = created.response;
+    driverStateId = created.driver_state_id;
   } else {
     const loaded = await readState(projectDir);
     driverStateId = loaded.driver_state_id;
@@ -388,7 +403,7 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
 // Write each spawn's transcript sidecar, pairing the intent (agent / model /
 // prompt — the REUSED agent_run_id) with the executor's result (raw output +
 // the self-diff file accounting + usage). One file per agent_run_id under the
-// HOST project's `.claude/loom/transcripts/`. Best-effort inside; a missing
+// HOST project's `.loom/transcripts/`. Best-effort inside; a missing
 // pair is skipped. `captureNow()` mints the ISO stamp (transport mint point —
 // outside the kernel's replay graph).
 function writeSpawnTranscripts(

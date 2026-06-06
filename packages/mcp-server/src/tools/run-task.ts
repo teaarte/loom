@@ -23,6 +23,7 @@
 // errors throw.
 
 import {
+  archiveAndReset,
   archiveStateDb,
   assertProjectDirAllowed,
   captureNow,
@@ -34,6 +35,7 @@ import {
   type GateRole,
   type PolicyName,
   type Registry,
+  type SlotPeek,
 } from "@loomfsm/kernel";
 import { createAndStart } from "@loomfsm/driver";
 import type { TransportResponse } from "@loomfsm/transport-types";
@@ -85,11 +87,23 @@ export function createRunTaskTool(
     const cached = await readCachedCreation(input.project_dir, input.client_idempotency_uuid);
     if (cached !== null) return cached;
 
-    // 3b. Free a finished slot before creating the next task.
+    // 3b. Resolve an occupied single-task slot before creating the next task.
+    // A FINISHED incumbent is always rotated (belt-and-suspenders). An
+    // IN-PROGRESS incumbent is resolved per `on_active_task`: force-archive on
+    // "archive"; otherwise a GUIDED refusal that names the incumbent and offers
+    // archive / resume — never a silent clobber of live work.
     try {
       const slot = await peekArchiveSlot(input.project_dir);
-      if (slot !== null && (slot.status === "completed" || slot.status === "abandoned")) {
-        await archiveStateDb(input.project_dir, captureNow(), { reason: "auto-rotate" });
+      if (slot !== null) {
+        if (slot.status === "completed" || slot.status === "abandoned") {
+          await archiveStateDb(input.project_dir, captureNow(), { reason: "auto-rotate" });
+        } else if (slot.status === "in_progress") {
+          if (input.on_active_task === "archive") {
+            await archiveAndReset(input.project_dir, captureNow(), { force: true });
+          } else {
+            return occupiedSlotRefusal(slot);
+          }
+        }
       }
     } catch (err) {
       return refusal(err);
@@ -171,6 +185,33 @@ async function readCachedCreation(
     out.driver_state_id = String(ps.driver_state_id);
   }
   return out;
+}
+
+// A GUIDED refusal for an in-progress incumbent: names the task being held and
+// carries the two resolutions as `recovery_options`, so the human (or the
+// `/task` skill) can pick rather than hitting a flat "task active" wall. The
+// resume option leads when the operator asked to resume; archive otherwise.
+function occupiedSlotRefusal(slot: SlotPeek): RunTaskResponse {
+  const held = slot.task_id !== null ? `task '${slot.task_id}'` : "a task";
+  const archive = {
+    choice: "archive",
+    label: "Discard the in-progress task and start fresh (loom run --replace, or on_active_task: \"archive\")",
+  };
+  const resume = {
+    choice: "resume",
+    label: "Resume the in-progress task instead (loom resume / pipeline_resume)",
+  };
+  return {
+    response: {
+      status: "error",
+      driver_state_id: UNKNOWN_DRIVER,
+      code: "PROJECT_TASK_ACTIVE",
+      message:
+        `${held} is already in progress in this project — it changed files or holds a branch, ` +
+        "so it is not discarded automatically. Resume it, or archive it and start fresh.",
+      recovery_options: [resume, archive],
+    },
+  };
 }
 
 // Map a thrown KernelError into an error-shaped wire envelope; rethrow

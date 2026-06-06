@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -134,7 +134,18 @@ function cleanup(dir: string): void {
 
 function makeTool(h: Harness) {
   return createRunTaskTool({
-    resolveRegistry: () => h.registry,
+    // Mirror production's assembleRegistry: re-reconcile the bundle manifest on
+    // every call so a slot archived since the last create (the rotation drops
+    // installed-extensions rows with the store) is restored before the next
+    // task's create reads them. Idempotent.
+    resolveRegistry: async () => {
+      await reconcileExtensions({
+        manifests: [bundleManifest("code-fixture")],
+        project_dir: h.dir,
+        now: FIXED_NOW as never,
+      });
+      return h.registry;
+    },
     allowlistPath: h.allowlistPath,
   });
 }
@@ -278,6 +289,58 @@ describe("pipeline_run_task", () => {
       assert.deepEqual(explicit.gate_policies, resolvePreset("full-supervised"));
     } finally {
       cleanup(h2.dir);
+    }
+  });
+});
+
+describe("pipeline_run_task — occupied-slot resolution (on_active_task)", () => {
+  it("an IN-PROGRESS incumbent → a GUIDED refusal with resume + archive options (default)", async () => {
+    const h = await freshHarness();
+    try {
+      const run = makeTool(h);
+      const first = await run({ project_dir: h.dir, task: "first task", client_idempotency_uuid: "occ-1" });
+      assert.equal(first.response.status, "spawn-agent"); // leaves the slot in_progress
+
+      // A new task under a fresh uuid → not a silent clobber: a guided refusal.
+      const second = await run({ project_dir: h.dir, task: "second task", client_idempotency_uuid: "occ-2" });
+      assert.equal(second.response.status, "error");
+      if (second.response.status === "error") {
+        assert.equal(second.response.code, "PROJECT_TASK_ACTIVE");
+        const choices = second.response.recovery_options.map((o) => o.choice);
+        assert.deepEqual(choices, ["resume", "archive"], "the refusal must offer resume + archive");
+      }
+      // The incumbent is untouched (still the only live store, not archived).
+      assert.ok(existsSync(join(h.dir, ".loom", "state.db")), "the in-progress store is intact");
+      assert.ok(!existsSync(join(h.dir, ".loom", "history")), "nothing was archived on a refuse");
+    } finally {
+      cleanup(h.dir);
+    }
+  });
+
+  it("on_active_task:'archive' force-archives the incumbent and starts the new task", async () => {
+    const h = await freshHarness();
+    try {
+      const run = makeTool(h);
+      const first = await run({ project_dir: h.dir, task: "throwaway", client_idempotency_uuid: "occ-3" });
+      assert.equal(first.response.status, "spawn-agent");
+      const firstTaskId = first.task_id;
+
+      const replaced = await run({
+        project_dir: h.dir,
+        task: "the real task",
+        client_idempotency_uuid: "occ-4",
+        on_active_task: "archive",
+      });
+      // A fresh task started (a new spawn, a different task id).
+      assert.equal(replaced.response.status, "spawn-agent");
+      assert.notEqual(replaced.task_id, firstTaskId);
+
+      // The incumbent was preserved in history (force-archive, not destroyed).
+      const historyDir = join(h.dir, ".loom", "history");
+      assert.ok(existsSync(historyDir), "the discarded incumbent is archived to history");
+      assert.ok(readdirSync(historyDir).some((f) => f.endsWith(".db")), "a history .db snapshot exists");
+    } finally {
+      cleanup(h.dir);
     }
   });
 });

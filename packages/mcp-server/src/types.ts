@@ -136,6 +136,15 @@ export interface RunTaskInput {
   // transport names none of its keys.
   initial_decisions?: Record<string, unknown>;
   owner_id?: string;
+  // How to resolve an occupied single-task slot. A FINISHED incumbent is
+  // always rotated first (belt-and-suspenders). For an IN-PROGRESS incumbent:
+  //   "refuse" (default) → a GUIDED refusal that surfaces the incumbent + the
+  //                        archive / resume options (never silent data loss).
+  //   "archive"          → force-archive the in-progress incumbent, then start
+  //                        fresh (the "I killed a throwaway, start over" case).
+  //   "resume"           → not a create action; the refusal leads with resume
+  //                        (the resume tool / `loom resume` does the work).
+  on_active_task?: "refuse" | "resume" | "archive";
   // Opaque, unverified caller string — captured in audit only (see
   // pipeline_meta). Never an identity claim.
   client_identifier_unverified?: string;

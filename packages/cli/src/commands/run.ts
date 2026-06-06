@@ -60,13 +60,18 @@ export async function runTask(
   // string (the CLI interprets nothing else about the task — it rides verbatim).
   const dockerFlag = argv.includes("--docker");
   const noDockerFlag = argv.includes("--no-docker");
+  // `--replace`: discard an in-progress incumbent and start fresh, instead of
+  // the default resume-the-active-task behaviour (the "I killed a throwaway,
+  // start over" case). The incumbent is force-archived (kept in history), not
+  // destroyed.
+  const replaceFlag = argv.includes("--replace");
   const modeResult = containerModeFrom({ docker: dockerFlag, noDocker: noDockerFlag });
   if ("error" in modeResult) {
     env.err(`loom run: ${modeResult.error}`);
     return 1;
   }
   const raw = argv
-    .filter((a) => a !== "--docker" && a !== "--no-docker")
+    .filter((a) => a !== "--docker" && a !== "--no-docker" && a !== "--replace")
     .join(" ")
     .trim();
   if (raw.length === 0) {
@@ -162,6 +167,7 @@ export async function runTask(
     resolveRegistry: () => registry,
     task,
     ...(policy_preset !== undefined ? { policy_preset } : {}),
+    ...(replaceFlag ? { on_active_task: "archive" as const } : {}),
   });
 
   return report(outcome, env);

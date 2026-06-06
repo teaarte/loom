@@ -2,7 +2,7 @@
 //
 // Two refusals, both BEFORE any disk touch: (1) the shared path discipline
 // (`resolveSafePath` against `ctx.project_dir`), and (2) the substrate's own
-// state database. The kernel owns `<project>/.claude/state.db` and its WAL
+// state database. The kernel owns `<project>/.loom/state.db` and its WAL
 // siblings; a tool write there would tear the transaction journal out from
 // under the FSM, so it is refused with a distinct reason rather than left to
 // SQLite to detect after the damage. Each call emits exactly one audit
@@ -20,10 +20,10 @@ import type { ToolContext, ToolDefinition, ToolResult } from "../types/tool.js";
 // The kernel's state DB plus the SQLite sidecar files that share its
 // integrity. A write to any of these would corrupt live FSM state.
 const PROTECTED_DB_SUFFIXES = [
-  `${sep}.claude${sep}state.db`,
-  `${sep}.claude${sep}state.db-wal`,
-  `${sep}.claude${sep}state.db-shm`,
-  `${sep}.claude${sep}state.db-journal`,
+  `${sep}.loom${sep}state.db`,
+  `${sep}.loom${sep}state.db-wal`,
+  `${sep}.loom${sep}state.db-shm`,
+  `${sep}.loom${sep}state.db-journal`,
 ];
 
 function isProtectedStateDb(resolvedPath: string): boolean {
@@ -82,7 +82,7 @@ export const fileWriteTool: ToolDefinition = {
       });
       return {
         error:
-          "path refused: state-db-protected (the kernel owns .claude/state.db)",
+          "path refused: state-db-protected (the kernel owns .loom/state.db)",
       };
     }
 

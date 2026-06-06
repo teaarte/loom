@@ -1,7 +1,7 @@
 // Project-dir allowlist gate — every transport routes a `project_dir`
 // through here BEFORE any state access.
 //
-// The allowlist is operator-authored (`~/.claude/projects.allow`, one
+// The allowlist is operator-authored (`~/.loom/projects.allow`, one
 // absolute path per line; `#` comments, blank lines ignored). The
 // kernel NEVER auto-populates it — a missing or non-matching file
 // refuses every path (default-deny), so a client cannot self-enroll a
@@ -10,14 +10,14 @@
 // compare on their resolved identity, closing the path-traversal hole.
 
 import { readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { KernelError } from "../state/db.js";
+import { userFootprintDir } from "./footprint.js";
 
 export interface AssertProjectDirAllowedOptions {
   // Override the allowlist file location. Production callers omit it and
-  // get `~/.claude/projects.allow`; tests point at a tmpfile so they
+  // get `~/.loom/projects.allow`; tests point at a tmpfile so they
   // never read user-machine state.
   allowlistPath?: string;
 }
@@ -70,8 +70,7 @@ export async function assertProjectDirAllowed(
 }
 
 function defaultAllowlistPath(): string {
-  const home = process.env.HOME ?? homedir();
-  return join(home, ".claude", "projects.allow");
+  return join(userFootprintDir(), "projects.allow");
 }
 
 function refusal(

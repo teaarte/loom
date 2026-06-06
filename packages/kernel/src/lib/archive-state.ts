@@ -6,10 +6,10 @@
 // tables are single-row by construction (the `id = 1` identity CHECK), so
 // one project store holds exactly one task at a time. Finishing a task
 // therefore means MOVING its store aside, not clearing a row — the live
-// `<project>/.claude/state.db` is copied to
-// `<project>/.claude/history/<task_id>.db` and the live file removed; the
+// `<project>/.loom/state.db` is copied to
+// `<project>/.loom/history/<task_id>.db` and the live file removed; the
 // next task creates a fresh store in the freed slot. A one-line summary is
-// appended to `<project>/.claude/history/index.jsonl` so the set of past
+// appended to `<project>/.loom/history/index.jsonl` so the set of past
 // tasks is browsable without opening each archived store.
 //
 // Consistency: closing the connection pool first checkpoints the
@@ -33,10 +33,11 @@ import {
   appendFileSync,
   rmSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { closeAll, KernelError, readArchivedTaskId } from "../state/db.js";
 import { withReadTransaction } from "../state/transaction.js";
+import { projectFootprintDir } from "./footprint.js";
 import type { NowToken } from "../types/now.js";
 import type { Transaction } from "../types/transaction.js";
 
@@ -69,7 +70,7 @@ export interface ArchiveStateResult {
   // nothing to archive (no live store), with `reason` explaining the no-op.
   archived: boolean;
   task_id: string | null;
-  // The history file name (relative to `.claude/history/`) and its
+  // The history file name (relative to `.loom/history/`) and its
   // absolute path, present only when `archived` is true.
   db_file: string | null;
   history_path: string | null;
@@ -86,7 +87,7 @@ export interface SlotPeek {
 }
 
 function stateDbPathFor(projectDir: string): string {
-  return join(resolve(projectDir), ".claude", "state.db");
+  return join(projectFootprintDir(projectDir), "state.db");
 }
 
 // Returns null when there is no live task to act on — either no store at
@@ -116,9 +117,8 @@ export async function archiveStateDb(
   now: NowToken,
   meta?: ArchiveStateMeta,
 ): Promise<ArchiveStateResult> {
-  const resolvedDir = resolve(projectDir);
-  const claudeDir = join(resolvedDir, ".claude");
-  const stateDbPath = join(claudeDir, "state.db");
+  const footprintDir = projectFootprintDir(projectDir);
+  const stateDbPath = join(footprintDir, "state.db");
 
   // Nothing to archive — already rotated, or never created.
   if (!existsSync(stateDbPath)) {
@@ -144,7 +144,7 @@ export async function archiveStateDb(
   // and the subsequent byte copy is a consistent snapshot.
   closeAll(projectDir);
 
-  const historyDir = join(claudeDir, "history");
+  const historyDir = join(footprintDir, "history");
   mkdirSync(historyDir, { recursive: true });
   const historyPath = join(historyDir, dbFile);
 

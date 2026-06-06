@@ -32,7 +32,7 @@ export interface Bundle {
   // Bundle-author defaults mapping each abstract model TIER an agent declares
   // (`agent.default_model`, e.g. "fast" / "balanced" / "premium") to a concrete
   // model name for the default backend — so a zero-config install resolves a
-  // tier to a real model. A project's `.claude/providers.json` (the UI-editable
+  // tier to a real model. A project's `.loom/providers.json` (the UI-editable
   // routing config) overrides per agent; an unknown/concrete value passes
   // through unchanged. The bundle stays backend-abstract by naming tiers; only
   // these defaults name concrete models.

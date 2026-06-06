@@ -16,6 +16,7 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 
 import { runInvariants } from "../invariants.js";
+import type { Invariant } from "../types/invariants.js";
 import type { NowToken } from "../types/now.js";
 import type { Transaction } from "../types/transaction.js";
 import { captureNow, getPool, KernelError, mapMissingSchemaError } from "./db.js";
@@ -113,7 +114,7 @@ export async function withStateTransaction<T>(
   projectDir: string,
   now: NowToken,
   fn: (tx: Transaction) => Promise<T>,
-  opts?: { busyTimeoutMs?: number },
+  opts?: { busyTimeoutMs?: number; invariants?: readonly Invariant[] },
 ): Promise<T> {
   const pool = getPool(projectDir, opts);
   const db = await pool.acquire();
@@ -141,7 +142,11 @@ export async function withStateTransaction<T>(
   try {
     const result = await fn(tx);
     await validateState(tx);
-    const violations = await runInvariants(tx);
+    // Bundle invariants are threaded per-call (the active registry's set) so
+    // the running bundle's rules — its safety floor included — veto this
+    // commit alongside the kernel-generic invariants. Absent (utility txs
+    // that hold no registry) → kernel-only, as before.
+    const violations = await runInvariants(tx, opts?.invariants);
     if (violations.length > 0) {
       throw new KernelError({
         code: "INVARIANT_VIOLATION",

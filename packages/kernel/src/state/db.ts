@@ -21,6 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
+import { projectFootprintDir } from "../lib/footprint.js";
 import type { NowToken } from "../types/now.js";
 
 // ============================================================================
@@ -186,9 +187,11 @@ class ConnectionPool {
     this.busyTimeoutMs = busyTimeoutMs;
     this.cap = cap;
 
-    const claudeDir = join(resolvedDir, ".claude");
-    mkdirSync(claudeDir, { recursive: true });
-    this.dbPath = join(claudeDir, "state.db");
+    // Resolving the footprint dir migrates any legacy footprint into place
+    // (one-shot, idempotent) before the store is opened.
+    const footprintDir = projectFootprintDir(resolvedDir);
+    mkdirSync(footprintDir, { recursive: true });
+    this.dbPath = join(footprintDir, "state.db");
 
     // First connection sets WAL once, then runs migrations under the
     // serialized window. It is parked in the free-list afterwards — a

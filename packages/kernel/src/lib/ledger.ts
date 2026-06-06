@@ -10,13 +10,13 @@
 // `last_seen_ts` and refreshes the blob; `COALESCE` keeps a
 // previously-cached blob when the caller passes nothing.
 //
-// Wall-clock discipline: every timestamp comes from `tx.now`. The only
-// `Date` use is `addMs`, which parses the supplied NowToken string to
-// derive the TTL expiry — it never reads the host clock.
+// Wall-clock discipline: every timestamp comes from `tx.now`. The TTL expiry
+// is derived with `offsetNowToken` (the single NowToken-arithmetic home), which
+// parses the supplied token string — it never reads the host clock.
 
 import type { IdempotencyKey, IdempotencyLedgerEntry } from "../types/idempotency.js";
-import type { NowToken } from "../types/now.js";
 import type { Transaction } from "../types/transaction.js";
+import { offsetNowToken } from "./now-arith.js";
 import { LEDGER_COLUMNS, mapLedgerRow, type LedgerRow } from "./row-mappers.js";
 
 // 24h per-entry TTL. The replay-after-TTL and eviction passes that act
@@ -43,7 +43,7 @@ export async function writeLedgerRow(
   opts: WriteLedgerRowOptions,
 ): Promise<void> {
   const now = tx.now;
-  const expiresAt = addMs(now, LEDGER_TTL_MS);
+  const expiresAt = offsetNowToken(now, LEDGER_TTL_MS);
   await tx.exec(
     "INSERT INTO kernel_idempotency_ledger " +
       "(key, first_seen_ts, last_seen_ts, response_blob, hook_results_json, " +
@@ -77,12 +77,4 @@ export async function readLedgerRow(
   );
   if (row === null) return null;
   return mapLedgerRow(row);
-}
-
-// Add `ms` to a NowToken. The `Date` constructor here parses the
-// supplied ISO-8601 string only — it never reads the host clock, which
-// is why the allow-marker is the precise exception.
-function addMs(now: NowToken, ms: number): string {
-  const epoch = Date.parse(now);
-  return new Date(epoch + ms).toISOString(); // allow-ambient-clock: parses the supplied NowToken string only; never reads the host clock
 }

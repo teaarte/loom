@@ -1122,6 +1122,80 @@ describe("runInvariants — real-DB integration", () => {
     });
     assert.equal(calls, 0, "probe should not have run after reset");
   });
+
+  // The per-call threading is the production path: the FSM tick passes the
+  // active registry's invariants through `withStateTransaction(..., {invariants})`
+  // (NOT the module-global) so the fleet server never cross-contaminates one
+  // project's commit with another bundle's rules. These run on a FABRICATED
+  // roster — no code-bundle dependency — so the runner stays domain-blind.
+  it("per-call invariants threaded through withStateTransaction veto a commit", async () => {
+    await seedPipelineRow(projectDir);
+    const fabricated: Invariant = Object.assign(
+      (_state: BundleStateView, _snapshots: KernelSnapshots): Violation | null => ({
+        code: "INV_FABRICATED_FLOOR",
+        message: "deliberate per-call violation",
+      }),
+      { reads: ["phases"] },
+    );
+
+    await assert.rejects(
+      withStateTransaction(
+        projectDir,
+        captureNow(),
+        async (tx) => {
+          await tx.exec("UPDATE pipeline_state SET task_short = ? WHERE id = 1", ["nope"]);
+        },
+        { invariants: [fabricated] },
+      ),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError);
+        assert.equal((err as KernelError).code, "INVARIANT_VIOLATION");
+        const violations = ((err as KernelError).detail?.["violations"] ?? []) as Array<{ code: string }>;
+        assert.ok(
+          violations.some((v) => v.code === "INV_FABRICATED_FLOOR"),
+          `the per-call invariant should fire; got: ${violations.map((v) => v.code).join(", ")}`,
+        );
+        return true;
+      },
+    );
+
+    // The write rolled back — the per-call veto rolls the tx back exactly like
+    // a kernel-generic violation does. (No reset needed: the module-global is
+    // untouched, so this verification tx runs only the kernel set.)
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      const row = await tx.queryRow<{ task_short: string | null }>(
+        "SELECT task_short FROM pipeline_state WHERE id = 1",
+      );
+      assert.equal(row?.task_short, null, "the vetoed write must not persist");
+    });
+  });
+
+  it("per-call invariants that pass let the commit through (no false veto)", async () => {
+    await seedPipelineRow(projectDir);
+    let calls = 0;
+    const passing: Invariant = Object.assign(
+      (_state: BundleStateView, _snapshots: KernelSnapshots): Violation | null => {
+        calls += 1;
+        return null;
+      },
+      { reads: ["phases"] },
+    );
+    await withStateTransaction(
+      projectDir,
+      captureNow(),
+      async (tx) => {
+        await tx.exec("UPDATE pipeline_state SET task_short = ? WHERE id = 1", ["kept"]);
+      },
+      { invariants: [passing] },
+    );
+    assert.equal(calls, 1, "the per-call invariant runs once at commit");
+    await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      const row = await tx.queryRow<{ task_short: string | null }>(
+        "SELECT task_short FROM pipeline_state WHERE id = 1",
+      );
+      assert.equal(row?.task_short, "kept", "a passing per-call invariant lets the write commit");
+    });
+  });
 });
 
 // ============================================================================

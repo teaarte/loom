@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 function stateDbPath(dir: string): string {
-  return join(dir, ".claude", "state.db");
+  return join(dir, ".loom", "state.db");
 }
 
 // Open ONLY the main db file (the copy carries no WAL side-file) and report

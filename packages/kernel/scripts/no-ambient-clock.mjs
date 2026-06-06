@@ -18,9 +18,10 @@
 // readers see the exception in context rather than chasing an
 // external allow-list. The current exceptions are the mint-time
 // fallback in ids.ts, the captureNow read in state/db.ts, and the
-// migration applied_at stamp also in state/db.ts; plus the
-// NowToken-parsing helpers in invariants.ts and guards.ts whose
-// `Date` use operates on the supplied string, not the host clock.
+// migration applied_at stamp also in state/db.ts; plus the SINGLE
+// NowToken-arithmetic helper `offsetNowToken` in lib/now-arith.ts,
+// whose `Date` use operates on the supplied token string, not the
+// host clock (every ±ms shift now routes through it).
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";

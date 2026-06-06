@@ -91,12 +91,12 @@ describe("archiveStateDb", () => {
     assert.equal(result.db_file, `${taskId}.db`);
 
     // The live slot is freed and the snapshot landed in history.
-    assert.equal(existsSync(join(dir, ".claude", "state.db")), false);
+    assert.equal(existsSync(join(dir, ".loom", "state.db")), false);
     assert.ok(result.history_path !== null && existsSync(result.history_path));
-    assert.equal(existsSync(join(dir, ".claude", "history", `${taskId}.db`)), true);
+    assert.equal(existsSync(join(dir, ".loom", "history", `${taskId}.db`)), true);
 
     // The index carries the summary read from the about-to-be-archived store.
-    const indexPath = join(dir, ".claude", "history", "index.jsonl");
+    const indexPath = join(dir, ".loom", "history", "index.jsonl");
     const lines = readFileSync(indexPath, "utf8").split("\n").filter((l) => l.trim().length > 0);
     assert.equal(lines.length, 1);
     const entry = JSON.parse(lines[0] as string) as Record<string, unknown>;
@@ -151,7 +151,7 @@ describe("archiveStateDb", () => {
     assert.equal(second.archived, false);
     assert.equal(second.reason, "no-live-state");
 
-    const lines = readFileSync(join(dir, ".claude", "history", "index.jsonl"), "utf8")
+    const lines = readFileSync(join(dir, ".loom", "history", "index.jsonl"), "utf8")
       .split("\n")
       .filter((l) => l.trim().length > 0);
     assert.equal(lines.length, 1);
@@ -170,15 +170,15 @@ describe("archiveStateDb", () => {
     // shape: history copy + index line exist, state.db still present).
     const first = await archiveStateDb(dir, NOW);
     const { copyFileSync } = await import("node:fs");
-    copyFileSync(first.history_path as string, join(dir, ".claude", "state.db"));
-    assert.equal(existsSync(join(dir, ".claude", "state.db")), true);
+    copyFileSync(first.history_path as string, join(dir, ".loom", "state.db"));
+    assert.equal(existsSync(join(dir, ".loom", "state.db")), true);
 
     const second = await archiveStateDb(dir, NOW);
     assert.equal(second.archived, true);
     assert.equal(second.task_id, taskId);
     // Slot freed again; the index still has exactly one line for this file.
-    assert.equal(existsSync(join(dir, ".claude", "state.db")), false);
-    const lines = readFileSync(join(dir, ".claude", "history", "index.jsonl"), "utf8")
+    assert.equal(existsSync(join(dir, ".loom", "state.db")), false);
+    const lines = readFileSync(join(dir, ".loom", "history", "index.jsonl"), "utf8")
       .split("\n")
       .filter((l) => l.trim().length > 0);
     assert.equal(lines.length, 1);
@@ -209,7 +209,7 @@ describe("archiveAndReset", () => {
     const result = await archiveAndReset(dir, NOW);
     assert.equal(result.archived, true);
     assert.equal(result.task_id, taskId);
-    assert.equal(existsSync(join(dir, ".claude", "state.db")), false);
+    assert.equal(existsSync(join(dir, ".loom", "state.db")), false);
   });
 
   it("refuses an in-progress slot without force (PROJECT_TASK_ACTIVE), leaving the store intact", async () => {
@@ -221,7 +221,7 @@ describe("archiveAndReset", () => {
       (err: unknown) => err instanceof KernelError && err.code === "PROJECT_TASK_ACTIVE",
     );
     // The live run survived the refusal.
-    assert.equal(existsSync(join(dir, ".claude", "state.db")), true);
+    assert.equal(existsSync(join(dir, ".loom", "state.db")), true);
   });
 
   it("archives an in-progress slot when force is set", async () => {
@@ -230,6 +230,6 @@ describe("archiveAndReset", () => {
 
     const result = await archiveAndReset(dir, NOW, { force: true });
     assert.equal(result.archived, true);
-    assert.equal(existsSync(join(dir, ".claude", "state.db")), false);
+    assert.equal(existsSync(join(dir, ".loom", "state.db")), false);
   });
 });

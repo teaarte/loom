@@ -160,8 +160,8 @@ describe("migration 005 — drop stack column", () => {
     // stack column) with 001–004 already recorded, so the runner applies
     // ONLY 005 when the pool opens it. A populated stack value is discarded;
     // every other column survives the drop.
-    const dbPath = join(projectDir, ".claude", "state.db");
-    mkdirSync(join(projectDir, ".claude"), { recursive: true });
+    const dbPath = join(projectDir, ".loom", "state.db");
+    mkdirSync(join(projectDir, ".loom"), { recursive: true });
     const raw = new DatabaseSync(dbPath);
     raw.exec(
       "CREATE TABLE kernel_schema_versions (component TEXT PRIMARY KEY, " +
@@ -549,7 +549,7 @@ describe("STATE_BUSY surfacing", () => {
     openDb(projectDir);
     await seedBaseline(projectDir);
 
-    const dbPath = join(projectDir, ".claude", "state.db");
+    const dbPath = join(projectDir, ".loom", "state.db");
     const blocker = new DatabaseSync(dbPath);
     blocker.exec("PRAGMA busy_timeout = 250");
     blocker.exec("BEGIN IMMEDIATE");

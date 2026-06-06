@@ -22,6 +22,7 @@ const SCAN_SKIP_DIRS: ReadonlySet<string> = new Set([
   "dist",
   "build",
   ".git",
+  ".loom",
   ".claude",
   ".turbo",
   "coverage",

@@ -208,6 +208,12 @@ export async function runFSM(
         ops.length = 0;
         return result;
       },
+      // Thread the active bundle's invariants into the commit check so a
+      // gate auto-approve / finalize / step commit is vetoed by the bundle's
+      // own rules — the deterministic safety floor included. `registry` is in
+      // scope here (the FSM tick is the common path for create / deliver /
+      // recover), so this one site covers every transport.
+      { invariants: registry.invariants },
     );
 
     // Mirror the committed ops onto the in-memory snapshot so a later

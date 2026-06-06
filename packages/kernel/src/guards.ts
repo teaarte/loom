@@ -9,11 +9,9 @@
 //
 // All four guards thread `tx.now` (never `Date.now()` / `new Date()`)
 // into their time-window comparisons so a replayed delivery produces
-// the same verdict as the original commit. The single exception is
-// `subtractMs` below: the `Date` constructor there parses the
-// supplied `NowToken` STRING only — it never reads the host clock.
-// The `// allow-ambient-clock` marker on the call line is the
-// load-bearing exception flag the lint pass recognizes.
+// the same verdict as the original commit. The window cutoff is computed
+// with `offsetNowToken` (the single home for NowToken arithmetic), which
+// parses the supplied token STRING only — it never reads the host clock.
 
 import { timingSafeEqual } from "node:crypto";
 
@@ -22,6 +20,7 @@ import {
   loadBypassKey,
   reasonEncodesDriver,
 } from "./lib/bypass-marker.js";
+import { offsetNowToken } from "./lib/now-arith.js";
 import { KernelError } from "./state/db.js";
 import type { NowToken } from "./types/now.js";
 import type { Transaction } from "./types/transaction.js";
@@ -36,16 +35,6 @@ import type { Transaction } from "./types/transaction.js";
 // after recovery is past the window. Defined here (not in a shared
 // constants module) so the guard's contract is readable in one file.
 export const DEFAULT_SPAWN_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
-
-// Subtract `ms` from a NowToken. The `Date` constructor here operates
-// on the input ISO-8601 string only — `Date.parse` of a stable input
-// is deterministic across hosts. This is the documented exception to
-// the ambient-clock ban; lint matches the marker comment on the same
-// line.
-function subtractMs(now: NowToken, ms: number): NowToken {
-  const epoch = Date.parse(now);
-  return new Date(epoch - ms).toISOString() as NowToken; // allow-ambient-clock: parses the supplied NowToken string only; never reads the host clock
-}
 
 // Verify a cross-owner bypass marker and CONSUME it in the same tx as
 // the recovery it authorizes — there is no read-then-act window. The
@@ -65,7 +54,7 @@ async function verifyOwnerBypassMarker(
     throw new KernelError({
       code: "BYPASS_KEY_MISSING",
       message:
-        "cross-owner recovery needs a bypass-HMAC key — set PIPELINE_BYPASS_HMAC_KEY or install a user-global ~/.claude/bypass-hmac.key",
+        "cross-owner recovery needs a bypass-HMAC key — set PIPELINE_BYPASS_HMAC_KEY or install a user-global ~/.loom/bypass-hmac.key",
     });
   }
   // A marker minted under a now-rotated key cannot authorize anything —
@@ -139,7 +128,7 @@ function verifyBypassHmac(_tx: Transaction, marker: BypassMarker): void {
     throw new KernelError({
       code: "BYPASS_KEY_MISSING",
       message:
-        "bypass marker verification needs a bypass-HMAC key — set PIPELINE_BYPASS_HMAC_KEY or install a user-global ~/.claude/bypass-hmac.key",
+        "bypass marker verification needs a bypass-HMAC key — set PIPELINE_BYPASS_HMAC_KEY or install a user-global ~/.loom/bypass-hmac.key",
     });
   }
   if (marker.key_id !== key.key_id) {
@@ -222,7 +211,7 @@ export async function spawnGuard(
 ): Promise<void> {
   const window =
     config?.duplicate_window_ms ?? DEFAULT_SPAWN_DUPLICATE_WINDOW_MS;
-  const cutoff = subtractMs(tx.now, window);
+  const cutoff = offsetNowToken(tx.now, -window);
 
   // Fanout-aware variant: a `FanoutStage` launches N siblings of the
   // same agent name concurrently, each with its own agent_run_id —

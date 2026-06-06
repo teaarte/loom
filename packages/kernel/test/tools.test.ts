@@ -113,12 +113,12 @@ describe("file_write tool", () => {
   });
 
   it("refuses writing the state database before touching disk", async () => {
-    mkdirSync(join(project, ".claude"), { recursive: true });
-    const dbPath = join(project, ".claude", "state.db");
+    mkdirSync(join(project, ".loom"), { recursive: true });
+    const dbPath = join(project, ".loom", "state.db");
     writeFileSync(dbPath, "ORIGINAL", "utf8");
     const { ctx, audited } = makeCtx(project);
     const r = await fileWriteTool.handler(
-      { path: ".claude/state.db", content: "HACKED" },
+      { path: ".loom/state.db", content: "HACKED" },
       ctx,
     );
     assert.ok("error" in r);
@@ -129,10 +129,10 @@ describe("file_write tool", () => {
   });
 
   it("refuses writing the state DB WAL sidecar", async () => {
-    mkdirSync(join(project, ".claude"), { recursive: true });
+    mkdirSync(join(project, ".loom"), { recursive: true });
     const { ctx } = makeCtx(project);
     const r = await fileWriteTool.handler(
-      { path: ".claude/state.db-wal", content: "x" },
+      { path: ".loom/state.db-wal", content: "x" },
       ctx,
     );
     assert.ok("error" in r);

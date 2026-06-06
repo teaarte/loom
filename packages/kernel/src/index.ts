@@ -26,6 +26,8 @@ export * from "./lib/dispatch-event-steps.js";
 export * from "./lib/persist-agent-result.js";
 export * from "./lib/build-agent-result.js";
 export * from "./lib/ledger.js";
+export * from "./lib/footprint.js";
+export * from "./lib/now-arith.js";
 export * from "./lib/project-dir.js";
 export * from "./lib/initialize-task.js";
 export * from "./lib/archive-state.js";

@@ -17,6 +17,7 @@
 //      on a given commit; activation point is flagged on
 //      `runInvariants` below.
 
+import { offsetNowToken } from "./lib/now-arith.js";
 import { loadState } from "./state/load.js";
 import type {
   FindingSnapshotRow,
@@ -434,7 +435,7 @@ export const inv015: Invariant = defineInvariant(
         providerCallArids.add(row.key.slice("provider-call:".length));
       }
     }
-    const cutoff = subtractMsFromNowToken(state.now, ZOMBIE_PENDING_MS);
+    const cutoff = offsetNowToken(state.now, -ZOMBIE_PENDING_MS);
     for (const pending of state.pending_agents) {
       if (pending.started_at >= cutoff) continue;
       if (providerCallArids.has(pending.agent_run_id)) continue;
@@ -452,16 +453,6 @@ export const inv015: Invariant = defineInvariant(
     return null;
   },
 );
-
-// Subtract `ms` from a NowToken without reading the host clock. The
-// `Date` constructor here only parses the supplied ISO-8601 input —
-// it never reads `Date.now()` ambiently, which is why the lint
-// allow-marker on the call below is the precise (and only)
-// exception inside this module.
-function subtractMsFromNowToken(now: string, ms: number): string {
-  const epoch = Date.parse(now);
-  return new Date(epoch - ms).toISOString(); // allow-ambient-clock: parses the supplied NowToken string only; never reads the host clock
-}
 
 // ============================================================================
 // Registry
@@ -483,9 +474,15 @@ export const kernelInvariants: readonly Invariant[] = [
   inv015,
 ];
 
-// Bundle-registered invariants. Populated by `registerInvariant` at
-// registry-load time (the bundle-loader call lands with the bundle
-// surface). Reset between test cases via `_resetInvariantsForTest`.
+// Bundle-registered invariants — a TEST-ONLY seam. Production threads the
+// active registry's invariants PER CALL (see `runInvariants` below): the
+// fleet server is one process over N projects with possibly different
+// bundles, so a module-global would cross-contaminate one project's tx with
+// another bundle's invariants and raise FALSE violations (e.g. the code
+// floor demanding `lint_result` on a spec-bundle project). This list has
+// ZERO production callers; it exists so the invariant-runner's commit-time
+// behaviour can be exercised in isolation. Reset between cases via
+// `_resetInvariantsForTest`.
 const additionalInvariants: Invariant[] = [];
 
 export function registerInvariant(inv: Invariant): void {
@@ -589,18 +586,31 @@ async function loadLedger(tx: Transaction): Promise<IdempotencyLedgerEntry[]> {
 //      for any other read of the in-flight tx.
 //   2. Narrow to BundleStateView so invariants cannot reach into
 //      FSM-internal fields (driver.*, schema_version).
-//   3. Take the union of `reads` declarations across kernel +
-//      additional invariants and materialize only the snapshots the
-//      union demands.
+//   3. Take the union of `reads` declarations across kernel + the
+//      per-call bundle invariants (+ the test seam) and materialize
+//      only the snapshots the union demands.
 //   4. Run every invariant (no skip-on-unchanged this revision; the
 //      `reads` metadata is shipped forward-compatible for the
 //      typed-mutator tracker to activate later).
-export async function runInvariants(tx: Transaction): Promise<Violation[]> {
+//
+// `bundleInvariants` is threaded PER CALL by the FSM tick (where the active
+// registry is in scope) so a gate auto-approve / finalize / step commit is
+// vetoed by the running bundle's own rules — the deterministic safety floor
+// included. It is per-call rather than a module-global precisely because the
+// fleet server runs many projects (possibly different bundles) in one
+// process; see the `additionalInvariants` note above. The default keeps the
+// single-arg call (kernel-only) valid for the utility transactions that hold
+// no registry (backup / restore / marker / hook-ledger writes).
+export async function runInvariants(
+  tx: Transaction,
+  bundleInvariants: readonly Invariant[] = [],
+): Promise<Violation[]> {
   const fullState = await loadState(tx);
   const state = narrowStateForBundle(fullState, tx.now);
   const all: readonly Invariant[] = [
     ...kernelInvariants,
     ...additionalInvariants,
+    ...bundleInvariants,
   ];
   const snapshots = await buildKernelSnapshots(tx, all);
   const violations: Violation[] = [];

@@ -11,6 +11,10 @@
       "types": "./dist/src/index.d.ts",
       "import": "./dist/src/index.js"
     },
+    "./internal": {
+      "types": "./dist/src/internal.d.ts",
+      "import": "./dist/src/internal.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

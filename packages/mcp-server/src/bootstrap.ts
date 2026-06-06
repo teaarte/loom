@@ -39,15 +39,12 @@ import {
 } from "@loomfsm/config";
 import {
   captureNow,
-  loadBundle,
   openDb,
   projectFootprintDir,
-  reconcileExtensions,
   type LLMProvider,
-  type ProviderRoute,
-  type ProvidersConfig,
   type Registry,
 } from "@loomfsm/kernel";
+import { loadBundle, reconcileExtensions, type ProviderRoute, type ProvidersConfig } from "@loomfsm/loader";
 import { claudeCodeShuttleProvider } from "@loomfsm/provider-claude-code-shuttle";
 
 // Resolve the bundle package root through Node's own resolver so it works

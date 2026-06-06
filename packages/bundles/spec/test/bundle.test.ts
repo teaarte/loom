@@ -12,14 +12,13 @@ import {
   closeDb,
   deliverContinue,
   initializeTask,
-  loadBundle,
   loadState,
-  reconcileExtensions,
   registerInvariant,
   runFSM,
   withReadTransaction,
   withStateTransaction,
 } from "@loomfsm/kernel";
+import { loadBundle, reconcileExtensions } from "@loomfsm/loader";
 import type {
   Bundle,
   BundleStateView,

@@ -7,10 +7,8 @@ import { describe, it } from "node:test";
 import {
   buildVocabularies,
   closeDb,
-  reconcileExtensions,
   type Agent,
   type Bundle,
-  type DiscoveredManifest,
   type GateRole,
   type LLMProvider,
   type Policy,
@@ -18,6 +16,7 @@ import {
   type Registry,
   type Stage,
 } from "@loomfsm/kernel";
+import { reconcileExtensions, type DiscoveredManifest } from "@loomfsm/loader";
 
 import { createArchiveResetTool, createRecoverTool, createRunTaskTool } from "../src/index.js";
 

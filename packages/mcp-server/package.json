@@ -39,6 +39,7 @@
     "@loomfsm/config": "workspace:*",
     "@loomfsm/driver": "workspace:*",
     "@loomfsm/kernel": "workspace:*",
+    "@loomfsm/loader": "workspace:*",
     "@loomfsm/provider-claude-code-shuttle": "workspace:*",
     "@loomfsm/transport-types": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"

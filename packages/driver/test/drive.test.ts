@@ -23,11 +23,9 @@ import {
   closeDb,
   loadState,
   openDb,
-  reconcileExtensions,
   withStateTransaction,
   type Agent,
   type Bundle,
-  type DiscoveredManifest,
   type FanoutStage,
   type GateRole,
   type LLMProvider,
@@ -38,6 +36,7 @@ import {
   type Stage,
   type UserAnswerSchema,
 } from "@loomfsm/kernel";
+import { reconcileExtensions, type DiscoveredManifest } from "@loomfsm/loader";
 
 import {
   createAndStart,

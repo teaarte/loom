@@ -15,10 +15,8 @@ import {
   buildVocabularies,
   closeDb,
   openDb,
-  reconcileExtensions,
   type Agent,
   type Bundle,
-  type DiscoveredManifest,
   type GateRole,
   type LLMProvider,
   type Policy,
@@ -28,6 +26,7 @@ import {
   type Stage,
   type UserAnswerSchema,
 } from "@loomfsm/kernel";
+import { reconcileExtensions, type DiscoveredManifest } from "@loomfsm/loader";
 
 export const FIXED_NOW = "2026-06-02T10:00:00.000Z";
 

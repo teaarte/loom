@@ -24,10 +24,10 @@ import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 
-import { KERNEL_SCHEMA_VERSION, withConnection } from "./state/db.js";
-import { assertVocabKnown, kernelDefaultVocabularies } from "./vocabularies.js";
-import type { ExtensionKind, ExtensionManifest } from "./types/extension.js";
-import type { NowToken } from "./types/now.js";
+import { KERNEL_SCHEMA_VERSION, withConnection } from "@loomfsm/kernel/internal";
+import { assertVocabKnown, kernelDefaultVocabularies } from "@loomfsm/kernel/internal";
+import type { ExtensionKind, ExtensionManifest } from "@loomfsm/kernel";
+import type { NowToken } from "@loomfsm/kernel";
 
 // Reconciliation runs at start-up, before any bundle Registry exists,
 // so the lifecycle audit rows validate against the kernel baseline.
@@ -41,7 +41,7 @@ const KERNEL_VOCAB = kernelDefaultVocabularies();
 // ============================================================================
 
 // `${kind}:${name}` — composite-via-concatenation matches the contract
-// shape (e.g. "bundle:code", "provider:anthropic-sdk").
+// shape (e.g. "bundle:code", "provider:<name>").
 export type ExtensionId = string;
 
 export interface DiscoveredManifest {

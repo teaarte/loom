@@ -1,6 +1,7 @@
-// ToolDefinition — pipeline-implemented tools that providers may
-// supply to agents (anthropic-sdk, openai-sdk, ollama, etc.).
-// claude-code-shuttle uses CC's own tool inventory and does not pass
+// ToolDefinition — pipeline-implemented tools that a provider may
+// supply to agents (an SDK-backed API provider exposing a tool-calling
+// surface, a local-model runner, etc.). A shuttle-style provider that
+// drives an external agent with its own tool inventory does not pass
 // ToolDefinition through.
 
 import type { SensitivePathRules } from "../sandbox/resolve-safe-path.js";

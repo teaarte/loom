@@ -15,7 +15,8 @@ import assert from "node:assert/strict";
 
 import specBundle from "@loomfsm/bundle-spec";
 import { resolveBundleModels, type BundleRoster, type LoomConfig } from "@loomfsm/config";
-import { createProviderRouter, type LLMProvider, type PipelineState } from "@loomfsm/kernel";
+import { type LLMProvider, type PipelineState } from "@loomfsm/kernel";
+import { createProviderRouter } from "@loomfsm/loader";
 
 import { providersConfigFromModelMap } from "../src/bootstrap.js";
 

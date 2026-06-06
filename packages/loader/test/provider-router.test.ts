@@ -1,17 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { createProviderRouter, resolveSpawnModel } from "../src/provider-router.js";
-import type { ProvidersConfig } from "../src/provider-router.js";
-import { KernelError } from "../src/state.js";
-import { buildVocabularies } from "../src/vocabularies.js";
-import type { Bundle } from "../src/types/bundle.js";
-import type { PolicyName } from "../src/types/policy.js";
-import type { Agent } from "../src/types/plugins.js";
-import type { LLMProvider } from "../src/types/provider.js";
-import type { Registry } from "../src/types/registry.js";
-import type { GateRole } from "../src/types/row-types.js";
-import type { PipelineState } from "../src/types/state.js";
+import { createProviderRouter } from "../src/index.js";
+import type { ProvidersConfig } from "../src/index.js";
+import {
+  KernelError,
+  buildVocabularies,
+  resolveSpawnModel,
+} from "@loomfsm/kernel";
+import type {
+  Agent,
+  Bundle,
+  GateRole,
+  LLMProvider,
+  PipelineState,
+  PolicyName,
+  Registry,
+} from "@loomfsm/kernel";
 
 function stubProvider(name: string): LLMProvider {
   return {

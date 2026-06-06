@@ -1,11 +1,15 @@
 // A bundle whose gate roles are entirely its own — none of the three
-// kernel-shipped role literals — must type-check, load through the full
-// validator cascade, and drive to finalize. The bundle literal below is
-// the regression guard: its `default_gate_policies` names NONE of
-// classify/plan/final, which compiles only because the map type is
-// `Partial<Record<GateRole, PolicyName>>`. Narrowing it back to a total
-// `Record` re-introduces the "missing properties: classify, plan, final"
-// error and this file stops compiling.
+// kernel-shipped role literals — must type-check and drive to finalize through
+// the TICK PATH. The bundle literal below is the regression guard: its
+// `default_gate_policies` names NONE of classify/plan/final, which compiles
+// only because the map type is `Partial<Record<GateRole, PolicyName>>`.
+// Narrowing it back to a total `Record` re-introduces the "missing properties:
+// classify, plan, final" error and this file stops compiling.
+//
+// The registry here is HAND-BUILT — no loadBundle, no build-time loader — so
+// this proves the kernel's gate dispatcher is gate-role-generic at tick time
+// without depending on `@loomfsm/loader`. (That the loader CASCADE also accepts
+// such a bundle is proven on a fabricated roster in the loader's own suite.)
 
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -15,17 +19,19 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { runFSM } from "../src/fsm.js";
 import { _resetInvariantsForTest } from "../src/invariants.js";
-import { loadBundle, reconcileExtensions } from "../src/index.js";
-import type { ExtensionManifest } from "../src/index.js";
+import { buildPolicyFactoryRegistry } from "../src/policies/index.js";
 import {
   captureNow,
   closeDb,
   loadState,
   withStateTransaction,
 } from "../src/state.js";
+import { buildVocabularies } from "../src/vocabularies.js";
 import type { Bundle } from "../src/types/bundle.js";
 import type { NowToken } from "../src/types/now.js";
+import type { MCPClientPlugin, Stage } from "../src/types/plugins.js";
 import type { LLMProvider } from "../src/types/provider.js";
+import type { ProviderRegistry, Registry } from "../src/types/registry.js";
 import type { PipelineState } from "../src/types/state.js";
 
 const BUNDLE_NAME = "gate-genericity-fixture";
@@ -88,26 +94,31 @@ function makeNonCodeBundle(): Bundle {
   };
 }
 
-function makeManifest(): ExtensionManifest {
-  return {
-    manifest_version: "1.0",
-    name: BUNDLE_NAME,
-    display_name: "Gate-role genericity fixture",
-    description: "non-code gate-role genericity fixture",
-    version: "0.0.0",
-    kind: "bundle",
-    publisher: "@loom",
-    capabilities: ["state.read"],
-    requires: { kernel_api: "^3.0" },
+// Hand-assemble the Registry the kernel ticks — the tick-time subset the gate +
+// finalize stages consult. No loader, no installed_extensions row: runFSM reads
+// the passed state and registry, nothing else.
+function buildRegistry(bundle: Bundle): Registry {
+  const stages = new Map<string, Stage>(Object.entries(bundle.stages));
+  const flows = new Map<string, string[]>(Object.entries(bundle.flows));
+  const providers: ProviderRegistry = {
+    all: [stubProvider()],
+    resolve() {
+      throw new Error("resolve must not run — this flow spawns no agent");
+    },
+    health_check_all: Promise.resolve([]),
   };
-}
-
-async function installManifest(projectDir: string, now: NowToken): Promise<void> {
-  await reconcileExtensions({
-    manifests: [{ path: "/fixture/manifest.json", raw: makeManifest() }],
-    project_dir: projectDir,
-    now,
-  });
+  return {
+    bundle,
+    agents: new Map(),
+    stages,
+    flows,
+    hooks: [],
+    invariants: bundle.invariants,
+    mcp_clients: new Map<string, MCPClientPlugin>(),
+    providers,
+    policyFactories: buildPolicyFactoryRegistry(bundle),
+    vocabularies: buildVocabularies(bundle),
+  };
 }
 
 async function seedState(projectDir: string, now: NowToken): Promise<void> {
@@ -195,7 +206,7 @@ function buildState(projectDir: string, now: NowToken): PipelineState {
   };
 }
 
-describe("gate-role genericity — a non-code bundle needs no kernel-baseline roles", () => {
+describe("gate-role genericity — a non-code bundle drives the tick path with no baseline roles", () => {
   let projectDir: string;
   beforeEach(() => {
     _resetInvariantsForTest();
@@ -203,35 +214,9 @@ describe("gate-role genericity — a non-code bundle needs no kernel-baseline ro
   });
   afterEach(() => cleanup(projectDir));
 
-  it("loads a bundle whose gate-policy map names none of classify/plan/final", async () => {
-    const now = captureNow();
-    await installManifest(projectDir, now);
-
-    const registry = await loadBundle({
-      bundle: makeNonCodeBundle(),
-      project_dir: projectDir,
-      providers: [stubProvider()],
-      now,
-    });
-
-    assert.ok(registry.flows.has("default"));
-    assert.equal(registry.bundle.default_gate_policies["spec-approval"], "on-blockers");
-    // The map is the bundle's own — the three kernel roles are simply absent.
-    assert.equal(registry.bundle.default_gate_policies["classify"], undefined);
-    assert.equal(registry.bundle.default_gate_policies["plan"], undefined);
-    assert.equal(registry.bundle.default_gate_policies["final"], undefined);
-  });
-
   it("drives to finalize through a gate routed to a non-baseline role", async () => {
     const now = captureNow();
-    await installManifest(projectDir, now);
-
-    const registry = await loadBundle({
-      bundle: makeNonCodeBundle(),
-      project_dir: projectDir,
-      providers: [stubProvider()],
-      now,
-    });
+    const registry = buildRegistry(makeNonCodeBundle());
     await seedState(projectDir, now);
     const state = buildState(projectDir, now);
 

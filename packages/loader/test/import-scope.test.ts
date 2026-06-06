@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { validateImportScope } from "../src/bundle-loader/validators/import-scope.js";
-import { KernelError } from "../src/state.js";
+import { KernelError } from "@loomfsm/kernel";
 
 // Write a single bundle source file into a fresh temp dir, run the
 // import-scope sweep against it, and clean up.

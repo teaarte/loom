@@ -5,10 +5,10 @@
 // order. A cycle would deadlock the runner; the loader refuses early
 // so operators see the bad declaration at start, not at first fire.
 
-import { topoSortHooks } from "../../hook-topo.js";
-import { KernelError } from "../../state/db.js";
-import type { Bundle } from "../../types/bundle.js";
-import type { Hook } from "../../types/plugins.js";
+import { topoSortHooks } from "@loomfsm/kernel";
+import { KernelError } from "@loomfsm/kernel";
+import type { Bundle } from "@loomfsm/kernel";
+import type { Hook } from "@loomfsm/kernel";
 
 export function validateHookGraph(bundle: Bundle): Hook[] {
   const result = topoSortHooks(bundle.hooks);

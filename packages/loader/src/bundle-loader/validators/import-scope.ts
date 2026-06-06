@@ -14,7 +14,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 
-import { KernelError } from "../../state/db.js";
+import { KernelError } from "@loomfsm/kernel";
 
 const SOURCE_EXTENSIONS: ReadonlySet<string> = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
 const SCAN_SKIP_DIRS: ReadonlySet<string> = new Set([

@@ -1,8 +1,8 @@
 {
-  "name": "@loomfsm/bundle-code",
+  "name": "@loomfsm/loader",
   "version": "0.3.3",
   "type": "module",
-  "description": "Code review / implementation bundle for loom — agents, reference knowledge, schemas, and stack candidates.",
+  "description": "loom's build-time assembly layer — discovers and reconciles extensions, validates a bundle's declarative shape, and assembles the Registry the kernel ticks. Runs once at start-up, off the replay hot path; the kernel needs none of it to tick.",
   "license": "Apache-2.0",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -14,23 +14,16 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist",
-    "agents",
-    "knowledge",
-    "schemas",
-    "stack-candidates.yaml"
+    "dist/src"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "prepack": "pnpm run build",
-    "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
+    "test": "tsc && node --experimental-sqlite --experimental-strip-types --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
     "@loomfsm/kernel": "workspace:*"
-  },
-  "devDependencies": {
-    "@loomfsm/loader": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

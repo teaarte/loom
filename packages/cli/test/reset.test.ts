@@ -12,11 +12,10 @@ import {
   closeDb,
   initializeTask,
   openDb,
-  reconcileExtensions,
   withStateTransaction,
-  type DiscoveredManifest,
   type NowToken,
 } from "@loomfsm/kernel";
+import { reconcileExtensions, type DiscoveredManifest } from "@loomfsm/loader";
 
 import { run } from "../src/cli.js";
 import type { CliEnv } from "../src/lib/env.js";

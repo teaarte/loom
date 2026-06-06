@@ -11,13 +11,11 @@ import {
   DRIVER_STATE_ID_PATTERN,
   loadState,
   openDb,
-  reconcileExtensions,
   resolvePreset,
   TASK_ID_PATTERN,
   withStateTransaction,
   type Agent,
   type Bundle,
-  type DiscoveredManifest,
   type GateRole,
   type LLMProvider,
   type Policy,
@@ -25,6 +23,7 @@ import {
   type Registry,
   type Stage,
 } from "@loomfsm/kernel";
+import { reconcileExtensions, type DiscoveredManifest } from "@loomfsm/loader";
 
 import { createRunTaskTool } from "../src/index.js";
 

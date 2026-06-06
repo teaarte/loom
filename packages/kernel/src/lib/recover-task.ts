@@ -36,7 +36,7 @@
 // recovery id is minted through `ids.ts` (the documented mint-time
 // exception) by the caller and threaded in here.
 
-import { resolveSpawnModel } from "../provider-router.js";
+import { resolveSpawnModel } from "../resolve-spawn-model.js";
 import { KernelError } from "../state/db.js";
 import type { RecoveryChoice } from "../types/continue-task.js";
 import type { ProviderShuttleIntent } from "../types/provider.js";

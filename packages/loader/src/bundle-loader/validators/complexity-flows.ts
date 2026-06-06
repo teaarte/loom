@@ -8,8 +8,8 @@
 // up to and including `after_stage`. This validator refuses a mis-authored
 // map at LOAD so a prefix break fails at kernel start, never mid-run.
 
-import { KernelError } from "../../state/db.js";
-import type { Bundle } from "../../types/bundle.js";
+import { KernelError } from "@loomfsm/kernel";
+import type { Bundle } from "@loomfsm/kernel";
 
 export function validateComplexityFlows(bundle: Bundle): void {
   const cf = bundle.complexity_flows;

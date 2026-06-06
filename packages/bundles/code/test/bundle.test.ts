@@ -10,9 +10,8 @@ import {
   buildPrompt,
   captureNow,
   closeDb,
-  loadBundle,
-  reconcileExtensions,
 } from "@loomfsm/kernel";
+import { loadBundle, reconcileExtensions } from "@loomfsm/loader";
 import type {
   Bundle,
   BundleStateView,

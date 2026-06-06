@@ -1,4 +1,5 @@
-// Per-agent / per-phase provider routing.
+// Per-agent / per-phase provider routing — the build-time half of the old
+// kernel provider-router module.
 //
 // The router is the single point that turns an (agent, state[, phase])
 // triple into a concrete LLMProvider (and optionally a model name).
@@ -8,6 +9,12 @@
 // callers that omit `config` see the previous MVP shape — default
 // provider falls through to providers[0] — so the registry stays
 // backwards-compatible.
+//
+// `createProviderRouter` builds the default `ProviderRegistry`
+// implementation; it runs once at registry assembly, never on the tick
+// path. The kernel keeps the `ProviderRegistry` INTERFACE and the
+// tick-time `resolveSpawnModel` reader; this default implementation rides
+// with the rest of the build-time loader.
 //
 // Cascade (highest precedence first):
 //   1. state.bundle_state.provider_override   (Step-pushed override)
@@ -30,11 +37,13 @@
 //   PROVIDER_CONFIG_INVALID  — config object failed schema validation
 //                              at construction time.
 
-import { KernelError } from "./state/db.js";
-import type { Bundle } from "./types/bundle.js";
-import type { LLMProvider } from "./types/provider.js";
-import type { ProviderRegistry, Registry } from "./types/registry.js";
-import type { PipelineState } from "./types/state.js";
+import {
+  KernelError,
+  type Bundle,
+  type LLMProvider,
+  type PipelineState,
+  type ProviderRegistry,
+} from "@loomfsm/kernel";
 
 // ----- Config surface ------------------------------------------------------
 
@@ -218,33 +227,6 @@ export function createProviderRouter(opts: ProviderRouterOptions): ProviderRegis
       [] as { name: string; healthy: boolean; reason?: string }[],
     ),
   };
-}
-
-// Resolve the concrete model name to dispatch a spawn with — the single
-// authority both spawn paths use (the driver's fresh-spawn intents and the
-// kernel's re-shuttle directive), so the model is chosen identically whether a
-// spawn runs the first time or is resumed.
-//
-// Precedence: the config route (`agent_routing` / `model_overrides` /
-// `tier_aliases` — the UI-editable per-agent override) wins; otherwise the
-// agent's bundle-declared tier (`agent.default_model`, e.g. "fast") maps
-// through the bundle's `default_model_tiers`; an unknown or already-concrete
-// value passes through unchanged. The backend executor stays dumb — it
-// receives a ready model name and never interprets a tier.
-export function resolveSpawnModel(
-  registry: Registry,
-  agent: string,
-  phase: string | undefined,
-  state: PipelineState,
-): string {
-  // Optional chaining across the three registry surfaces so the resolver is
-  // safe to call from any spawn path (including a `begin_spawn` default) even
-  // when a hand-built registry omits one of them — a full production registry
-  // always carries all three, so this only hardens the edges.
-  const routed = registry.providers?.resolveModel?.(agent, state, phase) ?? null;
-  if (routed !== null && routed !== "") return routed;
-  const tier = registry.agents?.get(agent)?.default_model ?? "default";
-  return registry.bundle?.default_model_tiers?.[tier] ?? tier;
 }
 
 // ----- Config schema validation -------------------------------------------

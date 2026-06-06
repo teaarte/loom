@@ -7,10 +7,9 @@ import { describe, it } from "node:test";
 import {
   closeDb,
   openDb,
-  reconcileExtensions,
-  type DiscoveredManifest,
   type NowToken,
 } from "@loomfsm/kernel";
+import { reconcileExtensions, type DiscoveredManifest } from "@loomfsm/loader";
 
 import { createServer } from "../src/index.js";
 

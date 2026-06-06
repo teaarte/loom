@@ -4,10 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 
-import {
-  reconcileExtensions,
-  type DiscoveredManifest,
-} from "../src/extension-loader.js";
 import { DRIVER_STATE_ID_PATTERN, TASK_ID_PATTERN } from "../src/ids.js";
 import { initializeTask } from "../src/lib/initialize-task.js";
 import {
@@ -20,31 +16,14 @@ import {
 import type { NowToken } from "../src/types/now.js";
 import type { Transaction } from "../src/types/transaction.js";
 
-const FIXED_NOW = "2026-05-28T10:00:00.000Z" as NowToken;
+import { installBundleRow } from "./helpers/install-bundle.js";
 
-function bundleManifest(name: string): DiscoveredManifest {
-  return {
-    path: `/fixture/bundle/${name}`,
-    raw: {
-      manifest_version: "1.0",
-      name,
-      display_name: name,
-      description: "fixture bundle",
-      version: "1.0.0",
-      kind: "bundle",
-      publisher: "@loom",
-      capabilities: [],
-      requires: { kernel_api: "^3.0.0" },
-    },
-  };
-}
+const FIXED_NOW = "2026-05-28T10:00:00.000Z" as NowToken;
 
 async function freshProject(opts?: { seedBundle?: boolean }): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), "loom-init-task-"));
   openDb(dir);
-  const manifests: DiscoveredManifest[] =
-    opts?.seedBundle === false ? [] : [bundleManifest("code-fixture")];
-  await reconcileExtensions({ manifests, project_dir: dir, now: FIXED_NOW });
+  if (opts?.seedBundle !== false) installBundleRow(dir, "code-fixture", FIXED_NOW);
   return dir;
 }
 

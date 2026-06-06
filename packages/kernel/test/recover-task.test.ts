@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 
-import { reconcileExtensions, type DiscoveredManifest } from "../src/extension-loader.js";
 import { makeAgentRunId, makeRecoveryId } from "../src/ids.js";
 import { initializeTask } from "../src/lib/initialize-task.js";
 import { recoverTask } from "../src/lib/recover-task.js";
@@ -12,25 +11,10 @@ import { KernelError, closeDb, loadState, openDb, withStateTransaction } from ".
 import type { NowToken } from "../src/types/now.js";
 import type { Transaction } from "../src/types/transaction.js";
 
+import { installBundleRow } from "./helpers/install-bundle.js";
+
 const NOW = "2026-05-29T12:00:00.000Z" as NowToken;
 const LATER = "2026-05-29T13:00:00.000Z" as NowToken;
-
-function bundleManifest(name: string): DiscoveredManifest {
-  return {
-    path: `/fixture/bundle/${name}`,
-    raw: {
-      manifest_version: "1.0",
-      name,
-      display_name: name,
-      description: "fixture bundle",
-      version: "1.0.0",
-      kind: "bundle",
-      publisher: "@loom",
-      capabilities: [],
-      requires: { kernel_api: "^3.0.0" },
-    },
-  };
-}
 
 // Seed a task with the given phases; returns the driver_state_id.
 async function seedTask(dir: string, phases: string[]): Promise<string> {
@@ -59,7 +43,7 @@ async function addPending(tx: Transaction, agentRunId: string, phase: string): P
 async function freshProject(): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), "loom-recover-"));
   openDb(dir);
-  await reconcileExtensions({ manifests: [bundleManifest("code-fixture")], project_dir: dir, now: NOW });
+  installBundleRow(dir, "code-fixture", NOW);
   return dir;
 }
 

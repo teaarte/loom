@@ -8,9 +8,9 @@
 
 import { createProviderRouter } from "../provider-router.js";
 import type { ProvidersConfig } from "../provider-router.js";
-import type { Bundle } from "../types/bundle.js";
-import type { LLMProvider } from "../types/provider.js";
-import type { ProviderRegistry } from "../types/registry.js";
+import type { Bundle } from "@loomfsm/kernel";
+import type { LLMProvider } from "@loomfsm/kernel";
+import type { ProviderRegistry } from "@loomfsm/kernel";
 
 export function buildProviderRegistry(
   providers: LLMProvider[],

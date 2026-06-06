@@ -8,8 +8,8 @@
 // auto-acceptance with no floor is the silent-corruption case the
 // safety-floor design exists to prevent.
 
-import { KernelError } from "../../state/db.js";
-import type { Bundle } from "../../types/bundle.js";
+import { KernelError } from "@loomfsm/kernel";
+import type { Bundle } from "@loomfsm/kernel";
 
 export function validateAutoPolicy(bundle: Bundle): void {
   for (const role of Object.keys(bundle.default_gate_policies)) {

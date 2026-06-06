@@ -9,38 +9,36 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
-import { topoSortHooks } from "../src/hook-topo.js";
+import { topoSortHooks } from "@loomfsm/kernel";
 import {
   KernelError,
   captureNow,
   closeDb,
   openDb,
-} from "../src/state.js";
-import { buildVocabularies } from "../src/vocabularies.js";
+} from "@loomfsm/kernel";
+import { buildVocabularies } from "@loomfsm/kernel";
 import {
   loadBundle,
   reconcileExtensions,
 } from "../src/index.js";
-import type {
-  DiscoveredManifest,
-  ExtensionManifest,
-} from "../src/index.js";
-import type { Bundle } from "../src/types/bundle.js";
-import type { Invariant } from "../src/types/invariants.js";
-import type { NowToken } from "../src/types/now.js";
+import type { DiscoveredManifest } from "../src/index.js";
+import type { ExtensionManifest } from "@loomfsm/kernel";
+import type { Bundle } from "@loomfsm/kernel";
+import type { Invariant } from "@loomfsm/kernel";
+import type { NowToken } from "@loomfsm/kernel";
 import type {
   Agent,
   Hook,
   Stage,
   StepStage,
-} from "../src/types/plugins.js";
+} from "@loomfsm/kernel";
 import type {
   GatePolicyResolver,
   PolicyName,
-} from "../src/types/policy.js";
-import type { LLMProvider } from "../src/types/provider.js";
-import type { GateRole } from "../src/types/row-types.js";
-import type { PipelineState } from "../src/types/state.js";
+} from "@loomfsm/kernel";
+import type { LLMProvider } from "@loomfsm/kernel";
+import type { GateRole } from "@loomfsm/kernel";
+import type { PipelineState } from "@loomfsm/kernel";
 
 // ============================================================================
 // Fixtures
@@ -241,7 +239,7 @@ describe("loadBundle — happy path", () => {
     const customFactory = () => async () => ({ type: "human-required" as const, reason: "fixture" });
     const bundle: Bundle = {
       ...makeBundle(),
-      policy_factories: { "custom-rule": customFactory } as unknown as Record<PolicyName, () => import("../src/types/policy.js").Policy>,
+      policy_factories: { "custom-rule": customFactory } as unknown as Record<PolicyName, () => import("@loomfsm/kernel").Policy>,
     };
 
     const registry = await loadBundle({
@@ -1507,7 +1505,7 @@ describe("loadBundle — ProviderRegistry.resolve", () => {
 
   // resolve takes a PipelineState; we never read from it in the MVP shape,
   // so passing a `{}` cast is sufficient to exercise the lookup branch.
-  const STATE_STUB = {} as import("../src/types/state.js").PipelineState;
+  const STATE_STUB = {} as import("@loomfsm/kernel").PipelineState;
 
   it("returns the bundle.default_provider when set and present in providers[]", async () => {
     const now = captureNow();

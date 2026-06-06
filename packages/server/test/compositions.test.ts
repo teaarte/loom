@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { createAndStart, drive, readState } from "@loomfsm/driver";
-import { archiveStateDb, KernelError, openDb, reconcileExtensions } from "@loomfsm/kernel";
+import { archiveStateDb, KernelError, openDb } from "@loomfsm/kernel";
+import { reconcileExtensions } from "@loomfsm/loader";
 
 import { answerGate, readProjectStatus, ServerError, submitTask } from "../src/index.js";
 import {

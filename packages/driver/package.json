@@ -27,6 +27,9 @@
     "@loomfsm/kernel": "workspace:*",
     "@loomfsm/transport-types": "workspace:*"
   },
+  "devDependencies": {
+    "@loomfsm/loader": "workspace:*"
+  },
   "publishConfig": {
     "access": "public"
   }

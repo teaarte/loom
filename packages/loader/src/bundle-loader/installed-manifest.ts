@@ -8,8 +8,8 @@
 // `manifest-cross-check` validator for the second half of that
 // contract.
 
-import { KernelError, openDb } from "../state/db.js";
-import type { ExtensionManifest } from "../types/extension.js";
+import { KernelError, openDb } from "@loomfsm/kernel";
+import type { ExtensionManifest } from "@loomfsm/kernel";
 
 interface InstalledRow {
   manifest_json: string;

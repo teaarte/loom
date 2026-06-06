@@ -32,9 +32,8 @@ export type ProviderResult =
     };
 
 // Neutral tool-call shape. Providers translate vendor-specific
-// envelopes (Anthropic's `tool_use`, OpenAI's `tool_calls[].function`,
-// Google's `functionCall`) into this; kernel and bundles never touch
-// vendor types.
+// envelopes (each SDK names and nests its tool-call field differently)
+// into this; kernel and bundles never touch vendor types.
 export interface ToolCall {
   id: string;
   name: string;

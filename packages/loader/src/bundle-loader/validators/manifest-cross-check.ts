@@ -10,9 +10,9 @@
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { KernelError } from "../../state/db.js";
-import type { Bundle } from "../../types/bundle.js";
-import type { ExtensionManifest } from "../../types/extension.js";
+import { KernelError } from "@loomfsm/kernel";
+import type { Bundle } from "@loomfsm/kernel";
+import type { ExtensionManifest } from "@loomfsm/kernel";
 
 export function validateManifestCrossCheck(
   bundle: Bundle,

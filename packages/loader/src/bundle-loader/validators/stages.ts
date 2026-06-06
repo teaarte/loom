@@ -6,9 +6,9 @@
 // flow, unknown phase, and the cross-stage `StepStage.effects[]`
 // collision check.
 
-import { KernelError } from "../../state/db.js";
-import type { Bundle } from "../../types/bundle.js";
-import type { Stage, StepStage } from "../../types/plugins.js";
+import { KernelError } from "@loomfsm/kernel";
+import type { Bundle } from "@loomfsm/kernel";
+import type { Stage, StepStage } from "@loomfsm/kernel";
 
 const KNOWN_STAGE_KINDS: ReadonlySet<string> = new Set([
   "spawn",

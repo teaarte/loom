@@ -44,6 +44,7 @@ import { after, before, describe, it } from "node:test";
 // but listing them here is the single source of truth for what to pack).
 const PUBLISHABLE = [
   "packages/kernel",
+  "packages/loader",
   "packages/transport-types",
   "packages/driver",
   "packages/bundles/code",
@@ -122,8 +123,8 @@ describe("npm pack — self-contained install smoke", () => {
 
   const loomBin = join(prefix, "node_modules", "@loomfsm", "pipeline", "bin", "loom.js");
 
-  // One install for all three assertions; packing + building 7 packages is the
-  // slow part, so the heavy setup happens once. `prepack` rebuilds each
+  // One install for all three assertions; packing + building the publishable
+  // set is the slow part, so the heavy setup happens once. `prepack` rebuilds each
   // package's dist as it is packed, so no pre-build step is assumed.
   before(() => packAndInstall(root, store, prefix), { timeout: 300_000 });
   after(() => rmSync(work, { recursive: true, force: true }));

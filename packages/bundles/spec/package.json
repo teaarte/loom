@@ -25,5 +25,8 @@
   },
   "dependencies": {
     "@loomfsm/kernel": "workspace:*"
+  },
+  "devDependencies": {
+    "@loomfsm/loader": "workspace:*"
   }
 }

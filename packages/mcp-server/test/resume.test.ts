@@ -11,11 +11,9 @@ import {
   initializeTask,
   loadState,
   openDb,
-  reconcileExtensions,
   withStateTransaction,
   type Agent,
   type Bundle,
-  type DiscoveredManifest,
   type GateRole,
   type LLMProvider,
   type Policy,
@@ -25,6 +23,7 @@ import {
   type Transaction,
   type UserAnswerSchema,
 } from "@loomfsm/kernel";
+import { reconcileExtensions, type DiscoveredManifest } from "@loomfsm/loader";
 
 import {
   createContinueTaskTool,

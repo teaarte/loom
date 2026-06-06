@@ -47,24 +47,11 @@ export * from "./budgets.js";
 export * from "./policy-presets/index.js";
 export { defineManifest } from "./defineManifest.js";
 export { defineBundle } from "./defineBundle.js";
-export {
-  discoverExtensions,
-  reconcileExtensions,
-} from "./extension-loader.js";
-export type {
-  DiscoveredManifest,
-  ExtensionId,
-  ReconciliationReport,
-} from "./extension-loader.js";
-export { loadBundle } from "./bundle-loader/index.js";
-export type { LoadBundleOptions } from "./bundle-loader/index.js";
 export { buildVocabularies } from "./vocabularies.js";
-export { createProviderRouter, resolveSpawnModel } from "./provider-router.js";
-export type {
-  ProvidersConfig,
-  ProviderRoute,
-  ProviderRouterOptions,
-  ProviderOverride,
-  TierAlias,
-  ModelOverride,
-} from "./provider-router.js";
+// Extension discovery / reconciliation, bundle loading, and the default
+// provider-router implementation are BUILD-TIME registry assembly — they run
+// once at start-up, never on the replay hot path. They live in
+// `@loomfsm/loader`; the substrate keeps only `resolveSpawnModel`, the
+// tick-time reader both spawn paths call. (Kernel-internal build-time support
+// the loader needs is re-exported from `@loomfsm/kernel/internal`, not here.)
+export { resolveSpawnModel } from "./resolve-spawn-model.js";

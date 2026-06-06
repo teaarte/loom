@@ -33,6 +33,9 @@
     "@loomfsm/mcp-server": "workspace:*",
     "@loomfsm/server": "workspace:*"
   },
+  "devDependencies": {
+    "@loomfsm/loader": "workspace:*"
+  },
   "optionalDependencies": {
     "@loomfsm/provider-anthropic-sdk": "workspace:*",
     "@loomfsm/provider-ollama": "workspace:*",

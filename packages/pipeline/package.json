@@ -17,6 +17,7 @@
     "@loomfsm/daemon": "workspace:*",
     "@loomfsm/driver": "workspace:*",
     "@loomfsm/kernel": "workspace:*",
+    "@loomfsm/loader": "workspace:*",
     "@loomfsm/mcp-server": "workspace:*",
     "@loomfsm/provider-claude-code-shuttle": "workspace:*",
     "@loomfsm/server": "workspace:*"

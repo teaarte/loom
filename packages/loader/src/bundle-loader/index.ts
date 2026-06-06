@@ -20,21 +20,21 @@
 // toward the deeper graph properties (hook DAG, auto-policy safety
 // floor, manifest cross-check, source-import discipline).
 
-import { buildPolicyFactoryRegistry } from "../policies/index.js";
-import { materializeContextAssets, materializeTemplates } from "../prompt-renderer.js";
+import { buildPolicyFactoryRegistry } from "@loomfsm/kernel";
+import { materializeContextAssets, materializeTemplates } from "@loomfsm/kernel";
 import type { ProvidersConfig } from "../provider-router.js";
-import { buildVocabularies } from "../vocabularies.js";
-import type { Bundle } from "../types/bundle.js";
-import type { RenderedContextAsset, RenderedTemplate } from "../types/extension.js";
-import type { NowToken } from "../types/now.js";
+import { buildVocabularies } from "@loomfsm/kernel";
+import type { Bundle } from "@loomfsm/kernel";
+import type { RenderedContextAsset, RenderedTemplate } from "@loomfsm/kernel";
+import type { NowToken } from "@loomfsm/kernel";
 import type {
   Agent,
   Hook,
   MCPClientPlugin,
   Stage,
-} from "../types/plugins.js";
-import type { LLMProvider } from "../types/provider.js";
-import type { Registry } from "../types/registry.js";
+} from "@loomfsm/kernel";
+import type { LLMProvider } from "@loomfsm/kernel";
+import type { Registry } from "@loomfsm/kernel";
 
 import { readInstalledManifest } from "./installed-manifest.js";
 import { buildProviderRegistry } from "./provider-registry.js";

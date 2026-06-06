@@ -5,18 +5,13 @@ import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { captureNow, closeDb, openDb } from "@loomfsm/kernel";
 import {
-  captureNow,
-  closeDb,
   discoverExtensions,
-  openDb,
   reconcileExtensions,
 } from "../src/index.js";
-import type {
-  DiscoveredManifest,
-  ExtensionManifest,
-} from "../src/index.js";
-import type { NowToken } from "../src/types/now.js";
+import type { DiscoveredManifest } from "../src/index.js";
+import type { ExtensionManifest, NowToken } from "@loomfsm/kernel";
 
 // One isolated project dir per test so the per-projectDir DB singleton
 // never bleeds state across cases.

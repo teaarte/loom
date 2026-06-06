@@ -4,8 +4,8 @@
 // must be either kernel-baseline (`classify` / `plan` / `final`) or
 // declared in `bundle.extends_vocab.gate_roles_extra`.
 
-import { KernelError } from "../../state/db.js";
-import type { Bundle } from "../../types/bundle.js";
+import { KernelError } from "@loomfsm/kernel";
+import type { Bundle } from "@loomfsm/kernel";
 
 const KERNEL_GATE_ROLES: ReadonlySet<string> = new Set(["classify", "plan", "final"]);
 

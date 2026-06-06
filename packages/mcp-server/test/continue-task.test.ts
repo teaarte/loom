@@ -11,11 +11,9 @@ import {
   closeDb,
   loadState,
   openDb,
-  reconcileExtensions,
   withStateTransaction,
   type Agent,
   type Bundle,
-  type DiscoveredManifest,
   type GateRole,
   type LLMProvider,
   type Policy,
@@ -23,6 +21,7 @@ import {
   type Registry,
   type Stage,
 } from "@loomfsm/kernel";
+import { reconcileExtensions, type DiscoveredManifest } from "@loomfsm/loader";
 
 import { createContinueTaskTool, createRunTaskTool } from "../src/index.js";
 

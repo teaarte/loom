@@ -20,12 +20,20 @@ importers:
       '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../../kernel
+    devDependencies:
+      '@loomfsm/loader':
+        specifier: workspace:*
+        version: link:../../loader
 
   packages/bundles/spec:
     dependencies:
       '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../../kernel
+    devDependencies:
+      '@loomfsm/loader':
+        specifier: workspace:*
+        version: link:../../loader
 
   packages/cli:
     dependencies:
@@ -57,6 +65,10 @@ importers:
       '@loomfsm/provider-openrouter':
         specifier: workspace:*
         version: link:../providers/openrouter
+    devDependencies:
+      '@loomfsm/loader':
+        specifier: workspace:*
+        version: link:../loader
 
   packages/config:
     dependencies:
@@ -72,6 +84,10 @@ importers:
       '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../kernel
+    devDependencies:
+      '@loomfsm/loader':
+        specifier: workspace:*
+        version: link:../loader
 
   packages/dashboard:
     devDependencies:
@@ -105,8 +121,18 @@ importers:
       '@loomfsm/transport-types':
         specifier: workspace:*
         version: link:../transport-types
+    devDependencies:
+      '@loomfsm/loader':
+        specifier: workspace:*
+        version: link:../loader
 
   packages/kernel: {}
+
+  packages/loader:
+    dependencies:
+      '@loomfsm/kernel':
+        specifier: workspace:*
+        version: link:../kernel
 
   packages/mcp-server:
     dependencies:
@@ -122,6 +148,9 @@ importers:
       '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@loomfsm/loader':
+        specifier: workspace:*
+        version: link:../loader
       '@loomfsm/provider-claude-code-shuttle':
         specifier: workspace:*
         version: link:../providers/claude-code-shuttle
@@ -156,6 +185,9 @@ importers:
       '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@loomfsm/loader':
+        specifier: workspace:*
+        version: link:../loader
       '@loomfsm/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
@@ -216,6 +248,10 @@ importers:
       '@loomfsm/kernel':
         specifier: workspace:*
         version: link:../kernel
+    devDependencies:
+      '@loomfsm/loader':
+        specifier: workspace:*
+        version: link:../loader
 
   packages/transport-types:
     dependencies:

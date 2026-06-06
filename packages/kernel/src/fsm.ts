@@ -33,7 +33,7 @@ import { dispatchEventSteps } from "./lib/dispatch-event-steps.js";
 import { advancePhaseProgress } from "./lib/phase-progress.js";
 import { readPhaseIter } from "./lib/supersede-findings.js";
 import { narrowStateForBundle } from "./narrow.js";
-import { resolveSpawnModel } from "./provider-router.js";
+import { resolveSpawnModel } from "./resolve-spawn-model.js";
 import { interpretFanout } from "./stages/fanout.js";
 import { interpretFinalize } from "./stages/finalize.js";
 import { interpretGate } from "./stages/gate.js";

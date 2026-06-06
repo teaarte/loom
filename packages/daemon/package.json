@@ -27,6 +27,9 @@
     "@loomfsm/driver": "workspace:*",
     "@loomfsm/kernel": "workspace:*"
   },
+  "devDependencies": {
+    "@loomfsm/loader": "workspace:*"
+  },
   "publishConfig": {
     "access": "public"
   }

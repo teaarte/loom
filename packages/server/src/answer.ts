@@ -1,7 +1,7 @@
 // `answerGate` — the deliver-a-human-answer path behind
 // `POST /projects/:id/answer`.
 //
-// It is the network equivalent of `/resume`: the same `deliverAndAdvance`
+// It is the network equivalent of `/proceed`: the same `deliverAndAdvance`
 // composition the stdio `pipeline_continue_task` tool uses, fed a `user-answer`
 // input. The parked supervisor watcher is polling the generic
 // `pending_user_answer` slot; once this delivery clears it, the watcher's

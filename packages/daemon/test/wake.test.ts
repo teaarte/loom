@@ -27,7 +27,7 @@ describe("wake — waitForWake", () => {
       const gateEventId = created.response.gate_event_id;
 
       // A clock whose sleep stands in for "the human answered" — it delivers
-      // the accept through the ordinary continue path, exactly as `/resume`
+      // the accept through the ordinary continue path, exactly as `/proceed`
       // would, advancing past the gate.
       let polls = 0;
       const wakingClock: Clock = {

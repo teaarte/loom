@@ -1,7 +1,7 @@
 // A single project's control surface: its live status + log (over SSE), a
 // submit-task form, and — when the task is parked on a human gate — the answer
 // form. Every action is a PEER of the CLI: submit → `POST /submit`, answer →
-// `POST /projects/:id/answer`, the same paths `loom run` / `/resume` drive.
+// `POST /projects/:id/answer`, the same paths `loom run` / `/proceed` drive.
 // Domain-blind: it shows the generic FSM status and carries a generic decision;
 // it never interprets a gate. The lifecycle logic lives in hooks (`useSubmitTask`
 // / `useAnswerGate` / `useTaskControls`); this view composes the layout.

@@ -86,7 +86,7 @@ elif [ "${pending_agents:-0}" -gt 0 ]; then
     if [ -n "$started_epoch" ] && [ -n "$now_epoch" ] && [ "$now_epoch" -ge "$started_epoch" ]; then
       age_sec=$(( now_epoch - started_epoch ))
       if [ "$age_sec" -ge "$STALE_PENDING_SEC" ]; then
-        note "paused mid-flight ~$(( age_sec / 60 )) min — likely a dropped transport; resume with /resume or 'loom resume'$owner_hint."
+        note "paused mid-flight ~$(( age_sec / 60 )) min — likely a dropped transport; resume with /proceed or 'loom resume'$owner_hint."
       fi
     fi
   fi

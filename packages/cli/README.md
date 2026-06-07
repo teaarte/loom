@@ -1,7 +1,7 @@
 # @loomfsm/cli
 
 The `loom` command-line tool. It registers the pipeline MCP server with your
-agent host, installs the `/task`, `/done`, and `/resume` slash commands,
+agent host, installs the `/task`, `/done`, and `/proceed` slash commands,
 authorizes project directories, and inspects or drives the active task.
 
 Most users install the [`@loomfsm/pipeline`](https://www.npmjs.com/package/@loomfsm/pipeline)
@@ -13,7 +13,7 @@ only if you are assembling your own runtime.
 
 ```
 loom setup [--user|--project] [--dry-run] [--force]
-    Register the MCP server and install the /task, /done, and /resume commands.
+    Register the MCP server and install the /task, /done, and /proceed commands.
     --user      install for your user (default): ~/.claude.json + ~/.claude/commands/
     --project   install for this project only:  ./.mcp.json + ./.claude/commands/
     --dry-run   print what would change without writing anything
@@ -38,7 +38,7 @@ loom history [path]
 loom status [path]
     Show the active task: its status, where in the flow it sits, any pending
     agents and how long they've waited. Flags a stalled task (a likely dropped
-    transport) — resume it with /resume.
+    transport) — resume it with /proceed.
 
 loom run "<task>"
     Drive a task to its end non-interactively, executing each spawn with a

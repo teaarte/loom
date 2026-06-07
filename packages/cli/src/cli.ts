@@ -30,7 +30,7 @@ Usage:
       browser (SSH / headless) — the URL is still printed.
 
   loom setup [--user|--project] [--dry-run] [--force]
-      Register the MCP server and install the /task, /done, and /resume commands.
+      Register the MCP server and install the /task, /done, and /proceed commands.
       --user      install for your user (default): ~/.claude.json + ~/.claude/commands/
       --project   install for this project only:  ./.mcp.json + ./.claude/commands/
       --dry-run   print what would change without writing anything
@@ -54,7 +54,7 @@ Usage:
   loom status [path]
       Show this project's task: its status, where in the flow it sits, any
       pending agents and how long they've waited. Flags a stalled task (a
-      likely dropped transport) — resume it with /resume or 'loom resume'.
+      likely dropped transport) — resume it with /proceed or 'loom resume'.
 
   loom run "<task>"
       Drive a task to its end non-interactively, executing each spawn through

@@ -2,7 +2,7 @@
 // status, where in the flow it sits, any pending agents and how long
 // they've been outstanding, and a "stalled" verdict when a pending agent
 // has been idle past the kernel's zombie-pending window — the signature of
-// a dropped transport (a slept laptop, a closed socket), which `/resume`
+// a dropped transport (a slept laptop, a closed socket), which `/proceed`
 // or `loom resume` re-attaches.
 //
 // Operator-direct: like `reset`, this does not consult the project
@@ -76,7 +76,7 @@ export async function status(
 
   if (state.driver.pending_user_answer !== null) {
     env.out(`paused:   awaiting your answer at gate '${state.driver.pending_user_answer.gate}'`);
-    env.out(`          resume with /resume or 'loom resume'`);
+    env.out(`          resume with /proceed or 'loom resume'`);
     return 0;
   }
 
@@ -97,7 +97,7 @@ export async function status(
     const mins = Math.round(oldestAgeMs / 60_000);
     env.out(
       `verdict:  stalled ~${mins} min — likely a dropped transport; ` +
-        `resume with /resume or 'loom resume'`,
+        `resume with /proceed or 'loom resume'`,
     );
   }
   return 0;

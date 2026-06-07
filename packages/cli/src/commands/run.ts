@@ -18,7 +18,7 @@
 //
 // Non-interactive posture: a genuine human gate (the only kind that ever
 // reaches the loop — clean/auto gates resolve server-side) PAUSES and is
-// printed for the operator to answer via `/resume`; it is NEVER
+// printed for the operator to answer via `/proceed`; it is NEVER
 // auto-answered.
 //
 // The kernel store + runtime are loaded LAZILY inside the handler (as
@@ -193,7 +193,7 @@ function report(outcome: DriveOutcome, env: CliEnv): number {
       for (const opt of outcome.valid_answers.options) {
         env.out(`    - ${opt.verbs.join(" / ")}: ${opt.label}`);
       }
-      env.out(`answer it interactively with /resume, or 'loom run' again once answered.`);
+      env.out(`answer it interactively with /proceed, or 'loom run' again once answered.`);
       return 2;
     case "error":
       env.err(`loom run failed [${outcome.code}]: ${outcome.message}`);

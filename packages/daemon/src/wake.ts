@@ -5,7 +5,7 @@
 // machine-resolved).
 //
 // MVP wake = poll-with-backoff, no new IPC and no kernel surface. The human
-// delivers the answer through the EXISTING `/resume` -> `pipeline_continue_task`
+// delivers the answer through the EXISTING `/proceed` -> `pipeline_continue_task`
 // path, which advances the FSM past the gate; the supervisor observes the
 // GENERIC `state.driver.pending_user_answer` slot clear (or move to a
 // different gate_event_id) and re-`drive()`s. It reads only that generic

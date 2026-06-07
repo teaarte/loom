@@ -34,7 +34,7 @@ function fakeSource(dir: string): ServerSource {
   mkdirSync(commandsSourceDir, { recursive: true });
   writeFileSync(join(commandsSourceDir, "task.md"), "TASK COMMAND BODY\n", "utf8");
   writeFileSync(join(commandsSourceDir, "done.md"), "DONE COMMAND BODY\n", "utf8");
-  writeFileSync(join(commandsSourceDir, "resume.md"), "RESUME COMMAND BODY\n", "utf8");
+  writeFileSync(join(commandsSourceDir, "proceed.md"), "PROCEED COMMAND BODY\n", "utf8");
   return { stdioPath, commandsSourceDir };
 }
 
@@ -93,10 +93,10 @@ describe("loom setup — fresh install (user scope)", () => {
 
       const taskPath = join(h.home, ".claude", "commands", "task.md");
       const donePath = join(h.home, ".claude", "commands", "done.md");
-      const resumePath = join(h.home, ".claude", "commands", "resume.md");
+      const proceedPath = join(h.home, ".claude", "commands", "proceed.md");
       assert.equal(readFileSync(taskPath, "utf8"), "TASK COMMAND BODY\n");
       assert.equal(readFileSync(donePath, "utf8"), "DONE COMMAND BODY\n");
-      assert.equal(readFileSync(resumePath, "utf8"), "RESUME COMMAND BODY\n");
+      assert.equal(readFileSync(proceedPath, "utf8"), "PROCEED COMMAND BODY\n");
     } finally {
       h.dispose();
     }

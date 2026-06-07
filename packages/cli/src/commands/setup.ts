@@ -1,5 +1,5 @@
 // `loom setup` — turn the three manual install steps (register the MCP
-// server, drop the `/task` + `/done` + `/resume` slash commands, then allowlist) into one
+// server, drop the `/task` + `/done` + `/proceed` slash commands, then allowlist) into one
 // idempotent command. This handles the first two; it prints `loom allowlist
 // add` as the next step because allowlisting is the operator's deliberate,
 // per-project authorization and is never implied by setup.
@@ -25,7 +25,7 @@ const SETUP_KNOWN_FLAGS = ["user", "project", "dry-run", "force"] as const;
 
 // The server alias the slash commands address (`mcp__loom__pipeline_*`).
 const SERVER_NAME = "loom";
-const COMMAND_FILES = ["task.md", "done.md", "resume.md"] as const;
+const COMMAND_FILES = ["task.md", "done.md", "proceed.md"] as const;
 
 interface SetupConfig {
   scope: "user" | "project";

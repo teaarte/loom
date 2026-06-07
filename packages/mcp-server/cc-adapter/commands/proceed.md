@@ -2,7 +2,7 @@
 mcp_protocol_required: "^3.0"
 ---
 
-# /resume — re-attach to a paused task
+# /proceed — re-attach to a paused task
 
 <!--
   A dumb router, like /task. Use it when a task's loop stopped without the

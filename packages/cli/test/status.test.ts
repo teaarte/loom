@@ -154,7 +154,7 @@ describe("loom status", () => {
     assert.equal(code, 0);
     const text = out.join("\n");
     assert.match(text, /stalled ~60 min/);
-    assert.match(text, /\/resume/);
+    assert.match(text, /\/proceed/);
   });
 
   it("reports the gate a parked task awaits", async () => {

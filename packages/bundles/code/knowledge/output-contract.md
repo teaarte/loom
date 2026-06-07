@@ -1,0 +1,5 @@
+- `task_id` (header + every finding): MUST equal the canonical `task_id` from the spawn context's **"Canonical identifiers"** section. Do NOT extract a task_id from the task description prose — a semantic id like `phase-0.7-step-1` breaks cross-task analytics. The server will rewrite a mismatch and audit it as `task_id-rewrite`, but emit it correctly.
+- `summary_line`: ≤ 150 chars (one-sentence summary — anything longer fails the schema and forces a retry).
+- `findings[].id`: do NOT emit. The server mints each finding id on ingest; any id you include is ignored.
+- `findings[].summary`: ≤ 200 chars.
+- `findings[].schema_version`: required, exact value `"1.0"`. The schema rejects findings missing this field.

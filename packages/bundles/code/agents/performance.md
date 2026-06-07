@@ -75,11 +75,3 @@ Order: ```json block (`reviewer-output.schema.json`) → markdown narrative.
 Verdict: `REQUEST_CHANGES` iff blocking; `WARN` iff only warn-level; `APPROVE` otherwise.
 
 Only flag things that will actually matter at realistic usage scale.
-
-## Output constraints (hard validation)
-
-- `task_id` (header + every finding): MUST equal the canonical `task_id` from the spawn context's **"Canonical identifiers"** section. Do NOT extract a task_id from the task description prose — semantic ids like `phase-0.7-step-1` break cross-task analytics. The MCP server will rewrite mismatches and audit as `task_id-rewrite`, but emit correctly.
-- `summary_line`: ≤ 150 chars (one-sentence summary — anything longer fails the schema and forces a retry)
-- `findings[].id`: do NOT emit. The server mints each finding id on ingest; any id you include is ignored.
-- `findings[].summary`: ≤ 200 chars
-- `findings[].schema_version`: required, exact value `"1.0"`. The schema rejects findings missing this field.

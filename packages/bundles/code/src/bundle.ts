@@ -997,5 +997,33 @@ export default defineBundle({
       fence: "yaml",
       agents: ["classifier"],
     },
+    // The hard-validation output contract every finding-emitting agent must
+    // honour (task_id / summary_line / id / schema_version rules). It was
+    // byte-identical at the foot of all 13 reviewer + validator prompts; held
+    // ONCE here and injected into each via the spawn context, so the rules
+    // cannot drift between agents. The adjudicator carries its own contract
+    // (info-severity markers, location echo) and is intentionally not listed.
+    {
+      heading: "Output contract (hard validation)",
+      kind: "file",
+      path: "knowledge/output-contract.md",
+      agents: [
+        "logic-reviewer",
+        "logic-reviewer-deep",
+        "challenger-reviewer",
+        "challenger-reviewer-deep",
+        "style-reviewer",
+        "security",
+        "performance",
+        "plan-grounding-check",
+        "plan-conformance",
+        "context-doc-verifier",
+        "acceptance",
+        "test",
+        "ui-consistency",
+        "api-contract",
+        "playwright",
+      ],
+    },
   ],
 });

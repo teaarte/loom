@@ -204,12 +204,20 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
     // The two declared assets materialize, in declaration order, scoped to
     // the classifier.
     const assets = registry.context_assets ?? [];
-    assert.equal(assets.length, 2);
+    assert.equal(assets.length, 3);
     const refs = assets.find((a) => a.heading === "Refs catalog");
     const stack = assets.find((a) => a.heading === "Stack candidate registry");
+    const contract = assets.find((a) => a.heading === "Output contract (hard validation)");
     assert.ok(refs !== undefined, "refs catalog asset materialized");
     assert.ok(stack !== undefined, "stack registry asset materialized");
+    assert.ok(contract !== undefined, "output-contract asset materialized");
     assert.deepEqual(refs.agents, ["classifier"]);
+    // The shared output contract is scoped to the header-emitting agents
+    // (reviewers + validators) and NOT to the classifier / other producers.
+    assert.ok(contract.agents?.includes("logic-reviewer"));
+    assert.ok(contract.agents?.includes("acceptance"));
+    assert.ok(!contract.agents?.includes("classifier"));
+    assert.ok(contract.body.includes("findings[].schema_version"));
     // The catalog lists real reference filenames (the field that hallucinated
     // when no catalog was supplied).
     assert.ok(refs.body.includes("FILE: knowledge/references/api-design.md"));
@@ -230,6 +238,16 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
     assert.ok(implementer !== undefined);
     const implPrompt = buildPrompt(makeClassifyState(), implementer, registry);
     assert.ok(!implPrompt.includes("### Refs catalog"));
+
+    // The output contract reaches a reviewer (a header-emitting agent) but not
+    // the classifier — the dedup lands the shared block exactly where the inline
+    // copies used to live.
+    assert.ok(!classifierPrompt.includes("### Output contract (hard validation)"));
+    const logicReviewer = registry.agents.get("logic-reviewer");
+    assert.ok(logicReviewer !== undefined);
+    const reviewerPrompt = buildPrompt(makeClassifyState(), logicReviewer, registry);
+    assert.ok(reviewerPrompt.includes("### Output contract (hard validation)"));
+    assert.ok(reviewerPrompt.includes("findings[].schema_version"));
   });
 
 });

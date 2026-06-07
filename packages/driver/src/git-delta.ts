@@ -28,6 +28,19 @@ import { spawnSync } from "node:child_process";
 // task is still accounted for.
 const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+// Loom's own reserved footprint inside the worktree. The per-task state, the
+// seeded knowledge refs (`.loom/work/refs/*`), and the rendered diff itself
+// (`.loom/work/diff.txt`) all live under `.loom/` — none of it is the AGENT's
+// change to the PROJECT, so it must never appear in the self-diff that feeds
+// the change-conditional reviewers or the "files touched" accounting. A project
+// that does NOT gitignore `.loom/` would otherwise leak every seeded ref (and
+// diff.txt referencing itself) into `created`, defeating the empty-diff
+// review-skip and burying the real change under thousands of lines of refs.
+// Excluding it with a git pathspec — rather than depending on the project's
+// .gitignore — keeps the delta honest by construction. The leading "." is
+// required: git rejects an exclude-only pathspec.
+const LOOM_FOOTPRINT_PATHSPEC: readonly string[] = ["--", ".", ":(exclude).loom"];
+
 export interface GitDelta {
   modified: string[];
   created: string[];
@@ -103,9 +116,11 @@ export function gitBaselineRef(projectDir: string): string | null {
 export function gitDelta(projectDir: string, baseline: string | null): GitDelta | null {
   if (baseline === null) return null;
   if (!isGitWorkTree(projectDir)) return null;
-  const modified = parsePaths(runGit(projectDir, ["diff", "--name-only", baseline]));
+  const modified = parsePaths(
+    runGit(projectDir, ["diff", "--name-only", baseline, ...LOOM_FOOTPRINT_PATHSPEC]),
+  );
   const created = parsePaths(
-    runGit(projectDir, ["ls-files", "--others", "--exclude-standard"]),
+    runGit(projectDir, ["ls-files", "--others", "--exclude-standard", ...LOOM_FOOTPRINT_PATHSPEC]),
   );
   return { modified, created };
 }
@@ -126,9 +141,11 @@ export function gitDiffText(projectDir: string, baseline: string | null): string
   if (baseline === null) return null;
   if (!isGitWorkTree(projectDir)) return null;
   const parts: string[] = [];
-  const tracked = runGit(projectDir, ["diff", baseline]);
+  const tracked = runGit(projectDir, ["diff", baseline, ...LOOM_FOOTPRINT_PATHSPEC]);
   if (tracked !== null && tracked.trim().length > 0) parts.push(tracked.replace(/\n+$/, ""));
-  for (const file of parsePaths(runGit(projectDir, ["ls-files", "--others", "--exclude-standard"]))) {
+  for (const file of parsePaths(
+    runGit(projectDir, ["ls-files", "--others", "--exclude-standard", ...LOOM_FOOTPRINT_PATHSPEC]),
+  )) {
     const hunk = runGitDiffTolerant(projectDir, ["diff", "--no-index", "--", "/dev/null", file]);
     if (hunk !== null && hunk.trim().length > 0) parts.push(hunk.replace(/\n+$/, ""));
   }

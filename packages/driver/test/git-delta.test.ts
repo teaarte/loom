@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
-import { gitBaselineRef, gitDelta } from "../src/git-delta.js";
+import { gitBaselineRef, gitDelta, gitDiffText } from "../src/git-delta.js";
 
 // Run git for test setup; throws on failure (a broken fixture must fail
 // loudly, not silently produce a misleading assertion).
@@ -145,6 +145,40 @@ describe("git-delta — honest delta of committed + uncommitted + untracked work
       assert.ok(delta !== null);
       assert.deepEqual(delta?.modified, ["src/existing.ts"]);
       assert.deepEqual(delta?.created, ["src/brand-new.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never counts loom's own .loom/ footprint, even when the project does NOT gitignore it", () => {
+    const dir = freshDir();
+    try {
+      initRepo(dir);
+      git(dir, "commit", "-q", "--allow-empty", "-m", "baseline");
+      const baseline = gitBaselineRef(dir);
+
+      // The project does NOT gitignore .loom/ (the dogfooded case). loom seeds
+      // its knowledge refs and renders diff.txt under .loom/work/ in the
+      // worktree; none of it is the agent's change to the project.
+      write(dir, ".loom/work/refs/api-design.md", "# seeded ref\n");
+      write(dir, ".loom/work/refs/error-handling.md", "# seeded ref\n");
+      write(dir, ".loom/work/diff.txt", "diff --git a/x b/x\n");
+      write(dir, ".loom/state.db", "binary-ish\n");
+      // …and one REAL change the agent made.
+      write(dir, "src/real.ts", "export const z = 1\n");
+
+      const delta = gitDelta(dir, baseline);
+      assert.ok(delta !== null);
+      // Only the real source file is created — the entire .loom/ tree is excluded.
+      assert.deepEqual(delta?.created, ["src/real.ts"]);
+      assert.deepEqual(delta?.modified, []);
+
+      // The rendered textual diff likewise carries the real change and NONE of
+      // the .loom/ artifacts (no seeded refs, and no diff.txt referencing itself).
+      const text = gitDiffText(dir, baseline);
+      assert.ok(text !== null);
+      assert.ok(text.includes("src/real.ts"), "real change must be in the diff");
+      assert.ok(!text.includes(".loom/"), "no .loom/ artifact may leak into the diff");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

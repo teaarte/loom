@@ -163,6 +163,37 @@ describe("adjudicate.when — escalation predicate", () => {
 });
 
 // ============================================================================
+// P1b — the acceptance spawn (`final-checks`) self-skips while an impl-phase
+// reviewer blocker is still live, so an acceptance PASS can never be recorded
+// over an open blocker (which would trip INV_CODE_104 and crash the run).
+// ============================================================================
+
+function acceptanceWhen(): SpawnStage["when"] {
+  const stage = codeBundle.stages["final-checks"];
+  assert.ok(stage !== undefined && stage.kind === "spawn", "final-checks is a spawn stage");
+  assert.ok(stage.when !== undefined, "final-checks carries a `when` predicate");
+  return stage.when;
+}
+
+describe("final-checks.when — acceptance gates on a clean review", () => {
+  it("does NOT run acceptance while an impl-phase reviewer blocker is live", () => {
+    const run = acceptanceWhen()!;
+    // A surviving non-runtime blocker (a style violation the adjudicator never
+    // touches) — exactly the case that crashed the complex flow.
+    const styleBlocker = { phase: "implementation", finding: mkFinding({ id: "f-style", agent: "style-reviewer", category: "naming-violation" }) };
+    assert.equal(run(viewWith({}), ctxOf([styleBlocker])), false);
+  });
+
+  it("runs acceptance once the review is free of live blockers", () => {
+    const run = acceptanceWhen()!;
+    assert.equal(run(viewWith({}), ctxOf([])), true);
+    // A dismissed blocker is not live → acceptance proceeds.
+    const dismissed = { phase: "implementation", finding: mkFinding({ id: "f-gone", status: "dismissed" }) };
+    assert.equal(run(viewWith({}), ctxOf([dismissed])), true);
+  });
+});
+
+// ============================================================================
 // P2 — reconcile applies the adjudicator's verdict to the ORIGINAL finding,
 // against a real SQLite DB, and the override changes live-blocking + inv008.
 // ============================================================================

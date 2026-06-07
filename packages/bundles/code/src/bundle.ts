@@ -342,6 +342,21 @@ function shouldAdjudicate(
   return reviewersDisagree(state, ADJUDICATION_PHASE) || touchesHotPath(state);
 }
 
+// `when` for the acceptance spawn (`final-checks`): run acceptance ONLY once the
+// implementation review is free of LIVE blocking findings. An acceptance
+// PASS/PASS_WITH_WARNINGS recorded while an impl-phase reviewer blocker is still
+// open contradicts INV_CODE_104 — which rolls the tx back at record time, i.e.
+// a hard INVARIANT_VIOLATION that strands the run. The adjudicator only resolves
+// runtime-CLAIM blockers; a style / security / correctness blocker that survives
+// must gate the flow at gate-final (the on-blockers policy parks on it) rather
+// than be overrun by an acceptance PASS. So when a blocker is live, acceptance
+// self-skips, the flow advances to gate-final, and the open blocker parks it for
+// a human to revise or override — a graceful pause instead of a crash.
+// Deterministic over the materialized open+blocking subset — replay-stable.
+function shouldRunAcceptance(_state: BundleStateView, ctx: ConditionalSpawnContext): boolean {
+  return ctx.findings.countBlocking({ phase: ADJUDICATION_PHASE }) === 0;
+}
+
 // Verdict-spread across the implementation-phase reviewers: at least one
 // approve-leaning AND one changes-leaning verdict on the same review — the
 // reviewers do not agree, so a tie-breaking observation earns its keep.
@@ -910,7 +925,7 @@ export default defineBundle({
       ],
       run: verifyTestFileHashes,
     },
-    "final-checks": { kind: "spawn", name: "final-checks", phase: "validation", agent: "acceptance" },
+    "final-checks": { kind: "spawn", name: "final-checks", phase: "validation", agent: "acceptance", when: shouldRunAcceptance },
     "test-verify": { kind: "step", name: "test-verify", phase: "validation", position: "positional", effects: [] },
     "gate-final": {
       kind: "gate",

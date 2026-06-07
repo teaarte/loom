@@ -37,6 +37,11 @@ import { claudeAvailable, dockerAvailableDefault } from "../lib/probes.js";
 import { resolveSpawnTimeouts } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
+// The complexity levels the operator may pin via `--complexity` (skips the
+// classifier so the flow + cost are predictable). Matches the bundle's flow set.
+const COMPLEXITY_LEVELS = ["trivial", "simple", "medium", "complex"] as const;
+type ComplexityLevel = (typeof COMPLEXITY_LEVELS)[number];
+
 // Seams for tests: a suite injects a ready registry / stub executor / fake
 // drive / CLI-presence probes so it can assert the command's parsing +
 // reporting without standing up a real store, the Claude Code CLI, or Docker.
@@ -70,10 +75,32 @@ export async function runTask(
     env.err(`loom run: ${modeResult.error}`);
     return 1;
   }
-  const raw = argv
-    .filter((a) => a !== "--docker" && a !== "--no-docker" && a !== "--replace")
-    .join(" ")
-    .trim();
+  // `--complexity <level>` PINS the task complexity, skipping the classifier so
+  // the flow (and its cost) is predictable run-to-run — the classifier otherwise
+  // picks a different complexity for the same task across runs. A value-flag
+  // (`--complexity simple` or `--complexity=simple`), so it and its value are
+  // stripped from the task string. Mirrors the dashboard's complexity selector:
+  // the pin rides as `initial_decisions: { complexity, complexity_pinned: true }`.
+  let complexity: ComplexityLevel | undefined;
+  const taskTokens: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === undefined) continue;
+    if (a === "--docker" || a === "--no-docker" || a === "--replace") continue;
+    let value: string | undefined;
+    if (a === "--complexity") value = argv[++i];
+    else if (a.startsWith("--complexity=")) value = a.slice("--complexity=".length);
+    if (value !== undefined || a === "--complexity") {
+      if (value === undefined || !COMPLEXITY_LEVELS.includes(value as ComplexityLevel)) {
+        env.err(`loom run: --complexity needs one of: ${COMPLEXITY_LEVELS.join(", ")}`);
+        return 1;
+      }
+      complexity = value as ComplexityLevel;
+      continue;
+    }
+    taskTokens.push(a);
+  }
+  const raw = taskTokens.join(" ").trim();
   if (raw.length === 0) {
     env.err('loom run: a task is required — e.g. loom run "add a health check route"');
     return 1;
@@ -175,6 +202,11 @@ export async function runTask(
     task,
     ...(policy_preset !== undefined ? { policy_preset } : {}),
     ...(replaceFlag ? { on_active_task: "archive" as const } : {}),
+    // Pin the complexity (skip the classifier) when the operator asked. The
+    // bundle reads `complexity` + `complexity_pinned`; the classifier self-skips.
+    ...(complexity !== undefined
+      ? { initial_decisions: { complexity, complexity_pinned: true } }
+      : {}),
   });
 
   return report(outcome, env);

@@ -167,4 +167,61 @@ describe("loom run", () => {
     assert.equal(code, 1);
     assert.ok(err.some((l) => /--docker requires/.test(l)));
   });
+
+  it("pins complexity via --complexity, strips it, and seeds the pin decisions", async () => {
+    const { env } = makeEnv();
+    let seenTask: string | undefined;
+    let seenDecisions: Record<string, unknown> | undefined;
+    const code = await runTask(["--complexity", "simple", "do", "the", "thing"], env, {
+      resolveRegistry: () => ({}) as unknown as Registry,
+      buildExecutor: () => stubExecutor,
+      driveImpl: async (_dir, opts) => {
+        seenTask = opts.task;
+        seenDecisions = opts.initial_decisions;
+        return { kind: "complete", task_id: "t", verdict: "accepted", summary: "" };
+      },
+    });
+    assert.equal(code, 0);
+    assert.equal(seenTask, "do the thing");
+    assert.deepEqual(seenDecisions, { complexity: "simple", complexity_pinned: true });
+  });
+
+  it("accepts the --complexity=<level> form", async () => {
+    const { env } = makeEnv();
+    let seenDecisions: Record<string, unknown> | undefined;
+    await runTask(["--complexity=medium", "work"], env, {
+      resolveRegistry: () => ({}) as unknown as Registry,
+      buildExecutor: () => stubExecutor,
+      driveImpl: async (_dir, opts) => {
+        seenDecisions = opts.initial_decisions;
+        return { kind: "complete", task_id: "t", verdict: "accepted", summary: "" };
+      },
+    });
+    assert.deepEqual(seenDecisions, { complexity: "medium", complexity_pinned: true });
+  });
+
+  it("rejects an invalid --complexity level", async () => {
+    const { env, err } = makeEnv();
+    const code = await runTask(
+      ["--complexity", "huge", "work"],
+      env,
+      overrides({ kind: "complete", task_id: "t", verdict: "accepted", summary: "" }),
+    );
+    assert.equal(code, 1);
+    assert.ok(err.some((l) => /--complexity needs one of/.test(l)));
+  });
+
+  it("does not seed pin decisions when --complexity is absent", async () => {
+    const { env } = makeEnv();
+    let seenDecisions: Record<string, unknown> | undefined = { sentinel: true };
+    await runTask(["plain", "work"], env, {
+      resolveRegistry: () => ({}) as unknown as Registry,
+      buildExecutor: () => stubExecutor,
+      driveImpl: async (_dir, opts) => {
+        seenDecisions = opts.initial_decisions;
+        return { kind: "complete", task_id: "t", verdict: "accepted", summary: "" };
+      },
+    });
+    assert.equal(seenDecisions, undefined);
+  });
 });

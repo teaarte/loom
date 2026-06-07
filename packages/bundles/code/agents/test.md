@@ -77,10 +77,7 @@ The plan's Test Specifications use executable AAA format — each `Case` has lit
 
 If the plan's test specs are NOT in AAA format, treat it as a planner bug — emit JSON with `"verdict": "ERROR"` and a finding with `"category": "non-aaa-spec"`. Do NOT silently interpret. The Planner is contractually required to emit AAA (per `agents/planner.md`).
 
-**Mocking rules:**
-- Mock external dependencies (API calls, DB, file system)
-- Do NOT mock the thing being tested
-- Use project's existing mock patterns (from reference)
+**Mocking:** mock external dependencies (API calls, DB, file system) with the project's existing patterns; never mock the thing being tested.
 
 ### 4. Run tests
 Use test command from CLAUDE.md. If new test file, run just that file first, then full suite.

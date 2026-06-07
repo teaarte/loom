@@ -15,7 +15,7 @@ Approved `.loom/work/plan.md` + `.loom/work/context-doc.md` + CLAUDE.md + the se
   2. Emit a finding via your output: `category: "test-modification-needed"`, severity `blocking`, with the exact wrong assertion + reason.
   3. The driver surfaces this to the human at the next gate. Test Agent re-spawns to correct, OR human approves the modification explicitly.
   4. Do NOT silently edit and continue.
-- **Mechanical checkpoint after every 3 plan steps (or 3-5 in long plans):** run the test command (e.g. `npx vitest run` / `pytest`). Compare failing-count to previous checkpoint. Failing-count MUST be monotonically non-increasing — if it grows, you broke something. Stop, investigate, do not continue.
+- **Run the mechanical checkpoint (Strict Rule 11) every ~3 plan steps** — the failing-count must never grow; if it does, stop and investigate.
 - If all plan steps complete but tests still fail → investigate and fix implementation. Tests stay sacred.
 
 ## Strict Rules
@@ -35,12 +35,7 @@ Approved `.loom/work/plan.md` + `.loom/work/context-doc.md` + CLAUDE.md + the se
     - Compare to previous checkpoint's failing-count. MUST be ≤ previous (monotonically non-increasing).
     - If failing-count increased → STOP. Output the regression details. Do NOT proceed.
     - Append checkpoint result to `.loom/work/impl-checkpoints.jsonl`: `{"step": N, "failing_before": X, "failing_after": Y, "test_files_hashed_match": true|false}`.
-12. **Checkpoint reporting (plans with 5+ steps):** After completing every 3-5 steps, output an interim status:
-    - Steps completed so far
-    - Files created/modified
-    - Any concerns or ambiguities discovered
-    - Latest mechanical-checkpoint failing-count
-    - Ready for checkpoint review before continuing
+12. **Checkpoint reporting (plans with 5+ steps):** after every 3-5 steps, pause with an interim status — use the *Checkpoint Report Format* below.
 
 ## Simplicity & surgical edits (minimum viable code)
 

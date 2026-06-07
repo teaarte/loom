@@ -14,13 +14,16 @@
 //                   single authority for each task; this file only records
 //                   which projects the control plane is responsible for.
 //
-// `isAlive` is reused from `@loomfsm/daemon` so liveness probing is identical
-// across the local daemon and the control plane.
+// The advisory status file's mechanics (atomic write, liveness-guarded lock,
+// SIGTERM stop) are the daemon's `createStatusFile`, so liveness probing and
+// the lock/stop semantics are identical across the local daemon and the
+// control plane. The durable registered-projects file stays local — it has a
+// different shape (no pid/phase) and its own non-pid temp-name.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { isAlive, isoFrom, systemClock, type Clock } from "@loomfsm/daemon";
+import { createStatusFile, isoFrom, systemClock, type Clock, type StatusFile } from "@loomfsm/daemon";
 import { userFootprintDir } from "@loomfsm/kernel";
 
 export type ServerPhase = "starting" | "serving" | "stopping" | "stopped";
@@ -59,32 +62,19 @@ export function registeredProjectsPath(stateDir: string): string {
   return join(stateDir, "projects.json");
 }
 
-export function readServerStatus(stateDir: string): ServerStatus | null {
-  const path = serverStatusPath(stateDir);
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as ServerStatus;
-  } catch {
-    return null;
-  }
+// The advisory server-status file shares its mechanics (tolerant read, atomic
+// temp+rename write, best-effort clear, liveness-guarded acquire, SIGTERM stop)
+// with the local daemon; only the status shape and the conflict error differ.
+function statusFile(stateDir: string): StatusFile<ServerStatus> {
+  return createStatusFile<ServerStatus>(serverStatusPath(stateDir));
 }
 
-// Atomic status write (temp + rename) so a concurrent `status` read never sees
-// a half-written file.
-function writeServerStatusFile(stateDir: string, status: ServerStatus): void {
-  mkdirSync(stateDir, { recursive: true });
-  const path = serverStatusPath(stateDir);
-  const tmp = `${path}.${status.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(status, null, 2), "utf8");
-  renameSync(tmp, path);
+export function readServerStatus(stateDir: string): ServerStatus | null {
+  return statusFile(stateDir).read();
 }
 
 export function clearServerStatus(stateDir: string): void {
-  try {
-    rmSync(serverStatusPath(stateDir), { force: true });
-  } catch {
-    /* a lingering status file is harmless — the next start overwrites it */
-  }
+  statusFile(stateDir).clear();
 }
 
 // ----- durable registered-project set ------------------------------------
@@ -136,14 +126,14 @@ export function acquireServerLock(
 ): ServerHandle {
   const pid = opts.pid ?? process.pid;
   const clock = opts.clock ?? systemClock;
+  const sf = statusFile(stateDir);
 
-  const existing = readServerStatus(stateDir);
-  if (existing !== null && existing.pid !== pid && isAlive(existing.pid) && existing.phase !== "stopped") {
+  sf.guardAcquire(pid, (existing) => {
     throw new ServerControlError(
       "SERVER_ALREADY_RUNNING",
       `a loom control plane (pid ${existing.pid}) is already serving on ${existing.host}:${existing.port}`,
     );
-  }
+  });
 
   const startedAt = isoFrom(clock);
   const base = (phase: ServerPhase, projectCount: number): ServerStatus => ({
@@ -155,14 +145,14 @@ export function acquireServerLock(
     phase,
     project_count: projectCount,
   });
-  writeServerStatusFile(stateDir, base("starting", 0));
+  sf.write(base("starting", 0));
 
   return {
     update(phase, projectCount) {
-      writeServerStatusFile(stateDir, base(phase, projectCount));
+      sf.write(base(phase, projectCount));
     },
     release() {
-      clearServerStatus(stateDir);
+      sf.clear();
     },
   };
 }
@@ -172,15 +162,5 @@ export type StopResult = "signalled" | "not-running";
 // Signal a running control plane to stop (SIGTERM → graceful shutdown). A
 // stale/absent status file or a dead pid reports "not-running".
 export function signalServerStop(stateDir: string): StopResult {
-  const status = readServerStatus(stateDir);
-  if (status === null || !isAlive(status.pid)) {
-    clearServerStatus(stateDir);
-    return "not-running";
-  }
-  try {
-    process.kill(status.pid, "SIGTERM");
-    return "signalled";
-  } catch {
-    return "not-running";
-  }
+  return statusFile(stateDir).signalStop();
 }

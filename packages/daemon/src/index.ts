@@ -101,3 +101,5 @@ export {
 } from "./process-control.js";
 
 export { systemClock, isoFrom, type Clock } from "./clock.js";
+
+export { createStatusFile, type StatusFile } from "./status-file.js";

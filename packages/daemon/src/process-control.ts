@@ -9,12 +9,16 @@
 // records only which OS process currently owns the supervision, never
 // anything the kernel persists.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { projectFootprintDir } from "@loomfsm/kernel";
 
 import { type Clock, isoFrom, systemClock } from "./clock.js";
+import { createStatusFile, isAlive, type StatusFile, type StopResult } from "./status-file.js";
+
+// Liveness probing and the stop-result type are shared with the control plane.
+export { isAlive };
+export type { StopResult };
 
 export type DaemonPhase =
   | "starting"
@@ -55,45 +59,22 @@ export function statusFilePath(projectDir: string): string {
   return join(daemonDir(projectDir), "daemon.json");
 }
 
-// True when a process with this pid exists (and is ours or someone else's).
-// `kill(pid, 0)` sends no signal — it only probes existence/permission.
-export function isAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // EPERM → the process exists but is owned by another user; ESRCH → gone.
-    return (err as { code?: string }).code === "EPERM";
-  }
+function statusFile(projectDir: string): StatusFile<DaemonStatus> {
+  return createStatusFile<DaemonStatus>(statusFilePath(projectDir));
 }
 
 export function readStatus(projectDir: string): DaemonStatus | null {
-  const path = statusFilePath(projectDir);
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as DaemonStatus;
-  } catch {
-    return null;
-  }
+  return statusFile(projectDir).read();
 }
 
 // Atomic status write (temp + rename) so a concurrent `status` read never
 // sees a half-written file.
 export function writeStatus(projectDir: string, status: DaemonStatus): void {
-  mkdirSync(daemonDir(projectDir), { recursive: true });
-  const path = statusFilePath(projectDir);
-  const tmp = `${path}.${status.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(status, null, 2), "utf8");
-  renameSync(tmp, path);
+  statusFile(projectDir).write(status);
 }
 
 export function clearStatus(projectDir: string): void {
-  try {
-    rmSync(statusFilePath(projectDir), { force: true });
-  } catch {
-    /* a lingering status file is harmless — the next start overwrites it */
-  }
+  statusFile(projectDir).clear();
 }
 
 export interface AcquireOptions {
@@ -115,19 +96,14 @@ export interface DaemonHandle {
 export function acquireLock(projectDir: string, opts: AcquireOptions = {}): DaemonHandle {
   const pid = opts.pid ?? process.pid;
   const clock = opts.clock ?? systemClock;
+  const sf = statusFile(projectDir);
 
-  const existing = readStatus(projectDir);
-  if (
-    existing !== null &&
-    existing.pid !== pid &&
-    isAlive(existing.pid) &&
-    existing.phase !== "stopped"
-  ) {
+  sf.guardAcquire(pid, (existing) => {
     throw new DaemonError(
       "DAEMON_ALREADY_RUNNING",
       `a loom daemon (pid ${existing.pid}) already supervises ${projectDir}`,
     );
-  }
+  });
 
   const startedAt = isoFrom(clock);
   const base = (): DaemonStatus => ({
@@ -137,11 +113,11 @@ export function acquireLock(projectDir: string, opts: AcquireOptions = {}): Daem
     updated_at: isoFrom(clock),
     phase: "starting",
   });
-  writeStatus(projectDir, base());
+  sf.write(base());
 
   return {
     update(phase, fields) {
-      writeStatus(projectDir, {
+      sf.write({
         ...base(),
         updated_at: isoFrom(clock),
         phase,
@@ -150,25 +126,13 @@ export function acquireLock(projectDir: string, opts: AcquireOptions = {}): Daem
       });
     },
     release() {
-      clearStatus(projectDir);
+      sf.clear();
     },
   };
 }
 
-export type StopResult = "signalled" | "not-running";
-
 // Signal a running daemon to stop (SIGTERM, the graceful-shutdown trigger).
 // A stale/absent status file or a dead pid reports "not-running".
 export function signalStop(projectDir: string): StopResult {
-  const status = readStatus(projectDir);
-  if (status === null || !isAlive(status.pid)) {
-    clearStatus(projectDir);
-    return "not-running";
-  }
-  try {
-    process.kill(status.pid, "SIGTERM");
-    return "signalled";
-  } catch {
-    return "not-running";
-  }
+  return statusFile(projectDir).signalStop();
 }

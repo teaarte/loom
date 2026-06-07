@@ -212,6 +212,84 @@ describe("createSandboxedExecutor — worktree isolation + self-diff", () => {
   });
 });
 
+describe("createSandboxedExecutor — leaves the textual diff for the reviewers", () => {
+  it("writes the implementer's changes to .loom/work/diff.txt in the sandbox", async () => {
+    const projectDir = freshGitProject();
+    try {
+      const executor = createSandboxedExecutor({
+        project_dir: projectDir,
+        runSpawn: async (_i, worktreeDir) => {
+          // The implementer edits the seed and adds a new (untracked) file.
+          writeFileSync(join(worktreeDir, "seed.ts"), "export const seed = 99;\n", "utf8");
+          writeFileSync(join(worktreeDir, "added.ts"), "export const added = 1;\n", "utf8");
+          return "implemented";
+        },
+      });
+
+      await executor.execute(intent());
+
+      const diffPath = join(worktreePathFor(projectDir), ".loom", "work", "diff.txt");
+      assert.ok(existsSync(diffPath), "diff.txt must exist in the sandbox work area");
+      const diff = readFileSync(diffPath, "utf8");
+      // The tracked edit shows as a hunk; the untracked file shows as an add.
+      assert.match(diff, /seed\.ts/);
+      assert.match(diff, /-export const seed = 1;/);
+      assert.match(diff, /\+export const seed = 99;/);
+      assert.match(diff, /added\.ts/);
+      assert.match(diff, /\+export const added = 1;/);
+      // It must NOT have been written to the real project tree.
+      assert.equal(existsSync(join(projectDir, ".loom", "work", "diff.txt")), false);
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  it("a later reviewer spawn reads the diff the implementer left in the same worktree", async () => {
+    const projectDir = freshGitProject();
+    try {
+      // First spawn = implementer: changes the tree (its execute leaves diff.txt).
+      const impl = createSandboxedExecutor({
+        project_dir: projectDir,
+        runSpawn: async (_i, dir) => {
+          writeFileSync(join(dir, "seed.ts"), "export const seed = 7;\n", "utf8");
+          return "done";
+        },
+      });
+      await impl.execute(intent({ agent: "implementer" }));
+
+      // Second spawn = reviewer (a fresh executor instance, same project ⇒ same
+      // reused worktree): it reads the diff the implementer left.
+      let reviewerSawDiff = "";
+      const reviewer = createSandboxedExecutor({
+        project_dir: projectDir,
+        runSpawn: async (_i, dir) => {
+          reviewerSawDiff = readFileSync(join(dir, ".loom", "work", "diff.txt"), "utf8");
+          return "reviewed";
+        },
+      });
+      await reviewer.execute(intent({ agent: "logic-reviewer", phase: "implementation" }));
+
+      assert.match(reviewerSawDiff, /\+export const seed = 7;/);
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  it("writes no diff.txt for a non-git project (no baseline)", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "loom-wt-nogit-diff-"));
+    try {
+      const executor = createSandboxedExecutor({
+        project_dir: projectDir,
+        runSpawn: async () => "ok",
+      });
+      await executor.execute(intent());
+      assert.equal(existsSync(join(projectDir, ".loom", "work", "diff.txt")), false);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("provisionWorktree — full copy carries gitignored files + deps", () => {
   for (const forcePlainCopy of [false, true]) {
     const label = forcePlainCopy ? "plain copy (forced fallback)" : "copy-on-write";

@@ -20,11 +20,32 @@
 //
 // Ambient runtime: this is transport OUTSIDE the kernel's replay graph.
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import type { Executor, ExecutorResult, SpawnUsage } from "./drive.js";
-import { gitDelta } from "./git-delta.js";
+import { gitDelta, gitDiffText } from "./git-delta.js";
 import { provisionWorktree, type WorktreeProvision } from "./worktree.js";
+
+// Render the full textual self-diff into the sandbox so a later reviewer spawn —
+// which runs in this SAME worktree — can read exactly what the implementer
+// changed via its `.loom/work/diff.txt` input. Written after every spawn that
+// has a baseline, so it always reflects the latest tree (a reviewer reads the
+// copy the prior implementer spawn left). Best-effort: a reviewer without
+// diff.txt still has the tree itself, so a write failure never fails the spawn.
+function writeSandboxDiff(dir: string, baseline: string): void {
+  try {
+    const text = gitDiffText(dir, baseline);
+    if (text === null) return;
+    const workDir = join(dir, ".loom", "work");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "diff.txt"), text, "utf8");
+  } catch {
+    /* best-effort — the worktree itself is always readable */
+  }
+}
 
 // What a backend run returns: the agent's text output, optionally paired with
 // per-spawn usage when the backend's envelope reports it. A plain string is
@@ -127,6 +148,11 @@ export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executo
       if (delta !== null) {
         if (delta.modified.length > 0) result.files_modified = delta.modified;
         if (delta.created.length > 0) result.files_created = delta.created;
+      }
+      // Leave the full textual diff beside the work area for the reviewers that
+      // run next in this same worktree (best-effort, isolated trees only).
+      if (wt.isolated && wt.baseline !== null) {
+        writeSandboxDiff(wt.dir, wt.baseline);
       }
       return result;
     },

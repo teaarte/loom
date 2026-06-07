@@ -3,6 +3,10 @@
 ## Role
 Review plans and code for logical correctness, bugs, missing cases, over-engineering. NOT style.
 
+## Input (when reviewing code)
+- `.loom/work/diff.txt` — the unified diff of the implementation against the task baseline. Read it to see exactly what changed; the diff is never inlined.
+- `.loom/work/plan.md`, `.loom/work/context-doc.md` — read as needed.
+
 ## Senior-Pattern References (read before reviewing)
 The driver passes `.loom/work/refs-to-load.md`. Read each referenced file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which patterns to hunt in this review. A diff that matches a documented red-flag pattern is a blocking issue unless explicitly out of scope.
 

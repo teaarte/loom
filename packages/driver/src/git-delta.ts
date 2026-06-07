@@ -49,6 +49,21 @@ function runGit(projectDir: string, args: string[]): string | null {
   return typeof res.stdout === "string" ? res.stdout : null;
 }
 
+// As `runGit`, but also returns stdout on exit code 1. `git diff --no-index`
+// (used to render an untracked file as an add-only hunk) exits 1 precisely WHEN
+// the inputs differ — the normal case for a new file — so a strict
+// exit-0 check would discard its output. Any other non-zero exit (a real error)
+// still yields null.
+function runGitDiffTolerant(projectDir: string, args: string[]): string | null {
+  const res = spawnSync("git", ["-C", projectDir, ...args], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (res.error !== undefined) return null;
+  if (res.status !== 0 && res.status !== 1) return null;
+  return typeof res.stdout === "string" ? res.stdout : null;
+}
+
 // True when projectDir sits inside a git working tree.
 function isGitWorkTree(projectDir: string): boolean {
   const out = runGit(projectDir, ["rev-parse", "--is-inside-work-tree"]);
@@ -93,4 +108,29 @@ export function gitDelta(projectDir: string, baseline: string | null): GitDelta 
     runGit(projectDir, ["ls-files", "--others", "--exclude-standard"]),
   );
   return { modified, created };
+}
+
+// Render the FULL textual diff of the working tree against the baseline — the
+// unified diff a reviewer reads to see exactly what changed. Two parts, so a
+// brand-new file is not silently absent:
+//   - `git diff <baseline>` — every tracked path that differs (committed OR
+//     uncommitted edits, plus deletions);
+//   - each untracked, non-ignored file rendered as an add-only hunk via
+//     `git diff --no-index /dev/null <file>` (which exits 1 by design — see
+//     runGitDiffTolerant).
+// Read-only: it never touches the index, so a later `gitDelta` still classifies
+// new files as `created` rather than tracked. Returns null when there is no
+// baseline or the project is not a git work tree (the caller writes nothing
+// then); an empty string is a real "nothing changed" answer.
+export function gitDiffText(projectDir: string, baseline: string | null): string | null {
+  if (baseline === null) return null;
+  if (!isGitWorkTree(projectDir)) return null;
+  const parts: string[] = [];
+  const tracked = runGit(projectDir, ["diff", baseline]);
+  if (tracked !== null && tracked.trim().length > 0) parts.push(tracked.replace(/\n+$/, ""));
+  for (const file of parsePaths(runGit(projectDir, ["ls-files", "--others", "--exclude-standard"]))) {
+    const hunk = runGitDiffTolerant(projectDir, ["diff", "--no-index", "--", "/dev/null", file]);
+    if (hunk !== null && hunk.trim().length > 0) parts.push(hunk.replace(/\n+$/, ""));
+  }
+  return parts.length > 0 ? `${parts.join("\n")}\n` : "";
 }

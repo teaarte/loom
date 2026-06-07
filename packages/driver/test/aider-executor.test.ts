@@ -85,6 +85,10 @@ describe("buildAiderArgs — headless, hermetic argv", () => {
       "--no-gitignore",
       "--no-check-update",
       "--analytics-disable",
+      // under --yes-always, stop aider auto-scraping URLs in the task text and
+      // auto-installing Playwright to do it
+      "--no-detect-urls",
+      "--disable-playwright",
     ]) {
       assert.ok(args.includes(flag), `expected ${flag} in argv`);
     }

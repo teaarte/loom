@@ -102,6 +102,16 @@ export interface AiderExecutorOptions {
 // to `scratchDir` (outside the worktree) for the same reason. A `system_prompt`
 // (Aider has no `--append-system-prompt`) is folded into the message so the
 // bundle's persona still rides.
+//
+// `--no-detect-urls` + `--disable-playwright` are load-bearing under
+// `--yes-always`: by default Aider scans the message for URLs and, on a match,
+// SCRAPES the page — and `--yes-always` then auto-approves installing Playwright
+// (a pip + headless-chromium download) to do it. A task description routinely
+// contains a URL (an endpoint to change, an internal/prod host), so unattended
+// loom would fetch arbitrary hosts and pull a heavyweight dependency without a
+// human in the loop. loom feeds the agent every file it needs explicitly; it
+// never wants Aider's own URL fetching. Both are real aider flags
+// (`AIDER_DETECT_URLS` / `AIDER_DISABLE_PLAYWRIGHT`).
 export function buildAiderArgs(
   intent: ProviderShuttleIntent,
   model: string,
@@ -124,6 +134,10 @@ export function buildAiderArgs(
     "--no-check-update",
     "--analytics-disable",
     "--no-show-model-warnings",
+    // Under --yes-always these stop Aider from auto-scraping URLs in the task
+    // text and auto-installing Playwright (pip + chromium) to do it.
+    "--no-detect-urls",
+    "--disable-playwright",
     "--map-tokens",
     String(opts.mapTokens),
     "--chat-history-file",

@@ -6,9 +6,9 @@ Write and run E2E / integration tests for user-facing flows. Detects platform an
 ## Process
 
 ### 1. Detect Platform
-Read `project_stack` from the driver context or detect from project:
-- Web → read `agents/references/e2e-playwright.md`
-- Flutter → read `agents/references/e2e-flutter.md`
+Read `stack` from your spawn context (`### Decisions so far`) or detect from project:
+- Web → read `.loom/work/refs/e2e-playwright.md`
+- Flutter → read `.loom/work/refs/e2e-flutter.md`
 
 ### 2. Follow reference
 Apply the process and rules from the loaded reference file.

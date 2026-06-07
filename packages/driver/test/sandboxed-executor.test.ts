@@ -290,6 +290,55 @@ describe("createSandboxedExecutor — leaves the textual diff for the reviewers"
   });
 });
 
+describe("createSandboxedExecutor — seeds static files into the sandbox", () => {
+  it("copies a seed dir into the sandbox before the first spawn runs", async () => {
+    const projectDir = freshGitProject();
+    const refsSrc = mkdtempSync(join(tmpdir(), "loom-refs-src-"));
+    writeFileSync(join(refsSrc, "redis.md"), "# redis patterns\n", "utf8");
+    writeFileSync(join(refsSrc, "api-design.md"), "# api design\n", "utf8");
+    try {
+      let sawRef = "";
+      const executor = createSandboxedExecutor({
+        project_dir: projectDir,
+        sandbox_seed: [{ src: refsSrc, rel: ".loom/work/refs" }],
+        runSpawn: async (_i, dir) => {
+          // The seed is present BEFORE the spawn runs (an agent can read it).
+          sawRef = readFileSync(join(dir, ".loom", "work", "refs", "redis.md"), "utf8");
+          return "ok";
+        },
+      });
+      await executor.execute(intent());
+
+      assert.equal(sawRef, "# redis patterns\n");
+      const wt = worktreePathFor(projectDir);
+      assert.ok(existsSync(join(wt, ".loom", "work", "refs", "api-design.md")));
+      // The operator's real tree is never seeded.
+      assert.equal(existsSync(join(projectDir, ".loom", "work", "refs", "redis.md")), false);
+    } finally {
+      cleanup(projectDir);
+      rmSync(refsSrc, { recursive: true, force: true });
+    }
+  });
+
+  it("does not seed an un-isolated (non-git) project — never writes into the real tree", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "loom-wt-nogit-seed-"));
+    const refsSrc = mkdtempSync(join(tmpdir(), "loom-refs-src2-"));
+    writeFileSync(join(refsSrc, "x.md"), "x\n", "utf8");
+    try {
+      const executor = createSandboxedExecutor({
+        project_dir: projectDir,
+        sandbox_seed: [{ src: refsSrc, rel: ".loom/work/refs" }],
+        runSpawn: async () => "ok",
+      });
+      await executor.execute(intent());
+      assert.equal(existsSync(join(projectDir, ".loom", "work", "refs", "x.md")), false);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(refsSrc, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("provisionWorktree — full copy carries gitignored files + deps", () => {
   for (const forcePlainCopy of [false, true]) {
     const label = forcePlainCopy ? "plain copy (forced fallback)" : "copy-on-write";

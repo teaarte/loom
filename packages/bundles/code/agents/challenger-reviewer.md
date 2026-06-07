@@ -10,7 +10,7 @@ Adversarial counterpart to the Logic Reviewer. Same input, **inverted system pro
 - **Verify caller assumptions, not just the diff.** Trace how the changed code's callers use it — don't reason about the diff in isolation.
 
 ## Senior-Pattern References (read before probing)
-The driver passes `.loom/work/refs-to-load.md`. Read each referenced file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts seed concrete failure scenarios for your probes — use them as starting points alongside the mandatory probes below.
+The classifier's `refs_to_load` (in your spawn context, `### Decisions so far`) names the senior-pattern files picked for this task; read each one from `.loom/work/refs/<name>`. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts seed concrete failure scenarios for your probes — use them as starting points alongside the mandatory probes below.
 
 ## Input (file pointers)
 - `.loom/work/diff.txt` — Read this. Diff is never inlined.

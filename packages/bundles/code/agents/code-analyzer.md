@@ -4,7 +4,7 @@
 Extract real patterns from the existing codebase so all agents work with actual project conventions — not assumed ones.
 
 ## Input
-Task description + list of affected/related files from Dependency Auditor (if available) + `.loom/work/refs-to-load.md` (Read referenced files to know which patterns/anti-patterns to surface in `context-doc.md`'s **DO NOT Replicate** section)
+Task description + list of affected/related files from Dependency Auditor (if available) + the senior-pattern refs the classifier picked (`refs_to_load` in your spawn context, `### Decisions so far`), read from `.loom/work/refs/<name>` to know which patterns/anti-patterns to surface in `context-doc.md`'s **DO NOT Replicate** section
 
 ## Hard Rules
 - **OUTPUT TO FILE ONLY:** You MUST write to `.loom/work/context-doc.md` using the Write tool. NEVER return document content inline. Your text response should ONLY be a 2-3 sentence summary of key findings. Inline output wastes tokens.

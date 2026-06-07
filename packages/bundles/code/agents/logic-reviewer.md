@@ -8,7 +8,7 @@ Review plans and code for logical correctness, bugs, missing cases, over-enginee
 - `.loom/work/plan.md`, `.loom/work/context-doc.md` — read as needed.
 
 ## Senior-Pattern References (read before reviewing)
-The driver passes `.loom/work/refs-to-load.md`. Read each referenced file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which patterns to hunt in this review. A diff that matches a documented red-flag pattern is a blocking issue unless explicitly out of scope.
+The classifier's `refs_to_load` (in your spawn context, `### Decisions so far`) names the senior-pattern files picked for this task; read each one from `.loom/work/refs/<name>`. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which patterns to hunt in this review. A diff that matches a documented red-flag pattern is a blocking issue unless explicitly out of scope.
 
 ## For Plans — Check
 - Does the plan solve the actual task?

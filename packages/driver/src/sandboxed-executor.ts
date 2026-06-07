@@ -20,7 +20,7 @@
 //
 // Ambient runtime: this is transport OUTSIDE the kernel's replay graph.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { ProviderShuttleIntent } from "@loomfsm/kernel";
@@ -28,6 +28,38 @@ import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 import type { Executor, ExecutorResult, SpawnUsage } from "./drive.js";
 import { gitDelta, gitDiffText } from "./git-delta.js";
 import { provisionWorktree, type WorktreeProvision } from "./worktree.js";
+
+// One static directory/file to copy into the sandbox before the first spawn.
+// `src` is an absolute path OUTSIDE the project (e.g. a bundle's bundled
+// knowledge dir, resolved by the transport that knows the bundle); `rel` is the
+// destination relative to the sandbox root (conventionally under `.loom/work/`).
+// Generic by construction — the shell copies a path the transport hands it and
+// names nothing about what the files are for.
+export interface SandboxSeed {
+  src: string;
+  rel: string;
+}
+
+// Copy each seed into the freshly-provisioned sandbox. Idempotent (overwrites),
+// so a re-resume that reuses the worktree simply refreshes them. Best-effort: a
+// missing/absent source is skipped with a notice, never a fatal — a spawn whose
+// seed didn't land still runs (it just can't read those files).
+function seedSandbox(
+  dir: string,
+  seeds: readonly SandboxSeed[],
+  onNotice?: (message: string) => void,
+): void {
+  for (const { src, rel } of seeds) {
+    try {
+      if (!existsSync(src)) continue;
+      const dest = join(dir, rel);
+      mkdirSync(dest, { recursive: true });
+      cpSync(src, dest, { recursive: true });
+    } catch (e) {
+      onNotice?.(`could not seed '${rel}' into the sandbox: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+}
 
 // Render the full textual self-diff into the sandbox so a later reviewer spawn —
 // which runs in this SAME worktree — can read exactly what the implementer
@@ -94,6 +126,11 @@ export interface SandboxedExecutorOptions {
   // deployment whose `runSpawn` has EXTERNAL side effects (a spawn that posts
   // to a real API) sets this false to keep the provider idempotency gate.
   idempotent?: boolean;
+  // Static files to copy into the sandbox before the first spawn (e.g. a
+  // bundle's bundled knowledge the agents are told to read). Copied once per
+  // executor instance, only when the sandbox is isolated. The shell names
+  // nothing about what they are — the transport hands it (src, rel) pairs.
+  sandbox_seed?: readonly SandboxSeed[];
 }
 
 export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executor {
@@ -113,6 +150,13 @@ export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executo
           `sandbox isolation unavailable (not a git work tree); ` +
             `running in ${opts.project_dir} without isolation`,
         );
+      }
+      // Seed the isolated sandbox with any static files the transport supplied
+      // (e.g. the bundle's knowledge refs) so a spawn can read them at a stable
+      // path. Skipped when running un-isolated in the real tree — we never write
+      // seed files into the operator's project.
+      if (provisioned.isolated && opts.sandbox_seed !== undefined && opts.sandbox_seed.length > 0) {
+        seedSandbox(provisioned.dir, opts.sandbox_seed, opts.onNotice);
       }
     }
     return provisioned;

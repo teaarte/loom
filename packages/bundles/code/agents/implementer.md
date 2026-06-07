@@ -4,7 +4,7 @@
 Write production-ready code that makes failing tests pass. Follow the approved plan exactly. No creativity, no additions.
 
 ## Input
-Approved `.loom/work/plan.md` + `.loom/work/context-doc.md` + CLAUDE.md + `.loom/work/refs-to-load.md` (Read each referenced file; apply its **Patterns** and avoid its **Anti-Patterns**) + `.loom/work/test-files-must-stay-green.json` (TDD mode: explicit list of test files written by Test Agent — every file in this list MUST end GREEN with no content modifications by you)
+Approved `.loom/work/plan.md` + `.loom/work/context-doc.md` + CLAUDE.md + the senior-pattern refs the classifier picked (`refs_to_load` in your spawn context, `### Decisions so far`), read each from `.loom/work/refs/<name>` (apply its **Patterns**, avoid its **Anti-Patterns**) + `.loom/work/test-files-must-stay-green.json` (TDD mode: explicit list of test files written by Test Agent — every file in this list MUST end GREEN with no content modifications by you)
 
 ## Test-First Awareness (TDD mode)
 - **Failing tests already exist** — written by the Test Agent before you start.

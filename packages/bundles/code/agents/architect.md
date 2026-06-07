@@ -11,7 +11,7 @@ You were spawned because the task was classified `complex`. That classification 
 - Senior-engineer test: if a senior would call the design overcomplicated for the task, simplify it before you write it.
 
 ## Input
-Task + `.loom/work/context-doc.md` + Research Report (if exists) + `.loom/work/refs-to-load.md` (Read each referenced file — especially `arch-patterns.md` if listed — and apply its **Decision Framework** to your design)
+Task + `.loom/work/context-doc.md` + Research Report (if exists) + the senior-pattern refs the classifier picked (`refs_to_load` in your spawn context, `### Decisions so far`), read each from `.loom/work/refs/<name>` — especially `arch-patterns.md` if listed — and apply its **Decision Framework** to your design
 
 ## Hard Rules
 - **OUTPUT TO FILE ONLY:** You MUST write to `.loom/work/architecture-decisions.md` using the Write tool. NEVER return document content inline. Your text response should ONLY be a 2-3 sentence summary + questions. Inline output wastes tokens.

@@ -30,7 +30,12 @@ import { KernelError, type ProviderShuttleIntent } from "@loomfsm/kernel";
 import type { Executor, SpawnUsage } from "./drive.js";
 import { classifyPermanentProviderError, PERMANENT_PROVIDER_ERROR_CODE } from "./provider-error.js";
 import { defaultRateLimitDetector, type RateLimitDetector } from "./rate-limit.js";
-import { createSandboxedExecutor, type RunSpawn, type RunSpawnResult } from "./sandboxed-executor.js";
+import {
+  createSandboxedExecutor,
+  type RunSpawn,
+  type RunSpawnResult,
+  type SandboxSeed,
+} from "./sandboxed-executor.js";
 import { spawnCapture } from "./spawn-cli.js";
 
 const DEFAULT_PERMISSION_MODE = "acceptEdits";
@@ -64,6 +69,10 @@ export interface ClaudeCodeExecutorOptions {
   // Test seam: inject the per-spawn runner instead of spawning the real
   // binary, so the shell (worktree + self-diff) can be exercised offline.
   runSpawn?: RunSpawn;
+  // Static files to seed into the sandbox before the first spawn (forwarded to
+  // the shell). Used to deliver a bundle's bundled knowledge so an agent can
+  // read it at a stable sandbox path.
+  sandbox_seed?: readonly SandboxSeed[];
 }
 
 // Build the argv for one `claude -p` invocation. Pure → unit-tested directly.
@@ -305,5 +314,6 @@ export function createClaudeCodeExecutor(opts: ClaudeCodeExecutorOptions): Execu
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     ...(opts.onNotice !== undefined ? { onNotice: opts.onNotice } : {}),
     ...(opts.onUsage !== undefined ? { onUsage: opts.onUsage } : {}),
+    ...(opts.sandbox_seed !== undefined ? { sandbox_seed: opts.sandbox_seed } : {}),
   });
 }

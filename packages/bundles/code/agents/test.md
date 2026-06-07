@@ -11,7 +11,7 @@ The driver specifies the mode. If not specified, default to **Test-First** for n
 ## Input
 - `.loom/work/plan.md` — acceptance criteria and **test specifications** (Test-First section)
 - CLAUDE.md — test command, architecture, patterns
-- `.loom/work/refs-to-load.md` — Read referenced files; their frontmatter (tags + agent_hints + when_to_load) tells you why each ref was selected, and that frames which edge cases to test (e.g. db-postgres refs suggest tests for OFFSET pagination behavior at boundaries; redis refs suggest tests for stampede protection)
+- The senior-pattern refs the classifier picked (`refs_to_load` in your spawn context, `### Decisions so far`) — read each from `.loom/work/refs/<name>`; their frontmatter (tags + agent_hints + when_to_load) tells you why each ref was selected, and that frames which edge cases to test (e.g. db-postgres refs suggest tests for OFFSET pagination behavior at boundaries; redis refs suggest tests for stampede protection)
 - Mode: `test-first` or `test-after`
 - List of changed files from the driver (test-after mode only)
 - If not provided in test-after mode, detect changed files: `git diff --name-only HEAD~1`
@@ -38,9 +38,9 @@ Read CLAUDE.md for `Test:` command in Validation Commands section.
 If test command exists → project has tests. Read 2-3 existing test files to match patterns exactly (file naming, imports, describe/it structure, mocking approach, assertion style).
 
 If no test command → detect framework by reading the platform-specific reference:
-- TypeScript/JavaScript → read `agents/references/test-react.md` or `agents/references/test-nestjs.md`
-- Python → read `agents/references/test-python.md`
-- Flutter/Dart → read `agents/references/test-flutter.md`
+- TypeScript/JavaScript → read `.loom/work/refs/test-react.md` or `.loom/work/refs/test-nestjs.md`
+- Python → read `.loom/work/refs/test-python.md`
+- Flutter/Dart → read `.loom/work/refs/test-flutter.md`
 
 If no framework at all: **stop and report** — "No test framework detected. Recommend installing [X]. Want me to set it up?" Do NOT write tests without a runner.
 

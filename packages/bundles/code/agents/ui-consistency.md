@@ -6,9 +6,9 @@ Ensure new UI code fits the existing design system and doesn't duplicate existin
 ## Process
 
 ### 1. Detect Platform
-Read `project_stack` from the driver context or detect from code:
-- Web (React/Vue/Next.js) → read `agents/references/ui-web.md`
-- Flutter → read `agents/references/ui-flutter.md`
+Read `stack` from your spawn context (`### Decisions so far`) or detect from code:
+- Web (React/Vue/Next.js) → read `.loom/work/refs/ui-web.md`
+- Flutter → read `.loom/work/refs/ui-flutter.md`
 
 ### 2. Cross-Platform Checks (always apply)
 

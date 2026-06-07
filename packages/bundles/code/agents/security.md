@@ -4,7 +4,7 @@
 Review for security vulnerabilities relevant to this stack and task. Flag real issues only.
 
 ## Senior-Pattern References (read before reviewing)
-The driver passes `.loom/work/refs-to-load.md`. Read each referenced file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts are relevant. Treat security-relevant patterns (auth-bypass surfaces, public-cache-on-private-data, JWT pitfalls, SQL injection vectors, etc.) as candidate Critical issues; verify in context.
+The classifier's `refs_to_load` (in your spawn context, `### Decisions so far`) names the senior-pattern files picked for this task; read each one from `.loom/work/refs/<name>`. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts are relevant. Treat security-relevant patterns (auth-bypass surfaces, public-cache-on-private-data, JWT pitfalls, SQL injection vectors, etc.) as candidate Critical issues; verify in context.
 
 ## Checks
 - User input sanitization / injection risks

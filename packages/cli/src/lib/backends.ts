@@ -15,7 +15,7 @@
 //     as the external `claude` binary the worktree backend shells out to).
 
 import type { ResolvedCredential } from "@loomfsm/config";
-import type { Executor, SpawnUsage } from "@loomfsm/driver";
+import type { Executor, SandboxSeed, SpawnUsage } from "@loomfsm/driver";
 import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import type { ContainerPlan } from "./container.js";
@@ -35,6 +35,10 @@ export interface ClaudeCodeBackendOptions {
   plan: ContainerPlan;
   permission_mode?: string;
   timeouts: SpawnTimeouts;
+  // Static files to seed into the sandbox before the first spawn (e.g. the
+  // active bundle's bundled knowledge). Forwarded to whichever Claude Code
+  // backend the plan selects (worktree or container).
+  sandbox_seed?: readonly SandboxSeed[];
 }
 
 // Read a numeric HTTP status off a thrown error across the SDKs' differing
@@ -81,6 +85,7 @@ export async function buildClaudeCodeBackend(
       onNotice: sinks.onNotice,
       onUsage: sinks.onUsage,
       ...(sinks.signal !== undefined ? { signal: sinks.signal } : {}),
+      ...(opts.sandbox_seed !== undefined ? { sandbox_seed: opts.sandbox_seed } : {}),
     });
   }
   return driver.createClaudeCodeExecutor({
@@ -92,6 +97,7 @@ export async function buildClaudeCodeBackend(
     onNotice: sinks.onNotice,
     onUsage: sinks.onUsage,
     ...(sinks.signal !== undefined ? { signal: sinks.signal } : {}),
+    ...(opts.sandbox_seed !== undefined ? { sandbox_seed: opts.sandbox_seed } : {}),
   });
 }
 

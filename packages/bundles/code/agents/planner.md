@@ -11,7 +11,7 @@ Complete and unambiguous ≠ big. Plan the SMALLEST path that satisfies the acce
 - `Not In Scope` is load-bearing — use it to keep the implementer (and yourself) from scope creep.
 
 ## Input
-Task + `.loom/work/context-doc.md` + `.loom/work/architecture-decisions.md` (if complex) + previous reviewer feedback (if iteration > 1) + `.loom/work/refs-to-load.md` (driver-resolved list of senior-pattern references — Read each one and apply its **Patterns**, **Anti-Patterns**, and **Decision Framework** to the plan)
+Task + `.loom/work/context-doc.md` + `.loom/work/architecture-decisions.md` (if complex) + previous reviewer feedback (if iteration > 1) + the senior-pattern refs the classifier picked (`refs_to_load` in your spawn context, `### Decisions so far`) — read each from `.loom/work/refs/<name>` and apply its **Patterns**, **Anti-Patterns**, and **Decision Framework** to the plan
 
 ## Hard Rules
 - **OUTPUT TO FILE ONLY:** You MUST write the plan to `.loom/work/plan.md` using the Write tool. NEVER return plan content inline. Your response text should ONLY be a 2-3 sentence summary + step count + questions. If you return the plan inline, the driver must duplicate it to a file — wasting tokens. This is the #1 rule.
@@ -25,7 +25,7 @@ Task + `.loom/work/context-doc.md` + `.loom/work/architecture-decisions.md` (if 
 - When revising a plan (iteration > 1), the driver saves the previous version as `.loom/work/plan-v[N].md`. You always write to `.loom/work/plan.md` — versioning is handled by the driver
 - **When `tests_mode = tdd` (passed by the driver), Test Specifications are MANDATORY.** Every Acceptance Criterion must have ≥1 corresponding Test T-case. Every Test T-case must contain executable AAA blocks (Arrange / Act / Assert as code, not English prose). The "tests not applicable" escape clause does NOT exist in TDD mode. If you genuinely believe a TDD task should skip tests, you MUST stop and ask the human to re-run with `--no-tests` flag — do NOT silently emit a plan without specs.
 - **When `tests_mode = regression-only`** (frontend apps, or `--no-tests` flag): Test Specifications section is omitted, Implementer writes code directly, existing tests are checked for regressions in STEP 6b.
-- **Use the project's language and tools** — read the `project_stack` context from driver. Do NOT default to TypeScript syntax/tools
+- **Use the project's language and tools** — read the `stack` decision from your spawn context (`### Decisions so far`). Do NOT default to TypeScript syntax/tools
 
 ## Output — Plan Document
 

@@ -139,6 +139,23 @@ export function agentExecutionFor(bundleName: string): Readonly<Record<string, A
   return AGENT_EXECUTION_BY_BUNDLE[bundleName] ?? {};
 }
 
+// Absolute path to the bundle's bundled knowledge-reference directory — the same
+// files the classifier picks from (the frontmatter-catalog context asset's dir,
+// resolved against the bundle source root). The transport hands this to the
+// driver to seed into each sandbox, so an agent told to "read the referenced
+// file" resolves it. Surfaced HERE, where the bundle package is already
+// imported, so the generic driver/CLI never names the bundle. Returns undefined
+// when the bundle declares no such catalog.
+export function bundleKnowledgeRefsDir(bundleName: string): string | undefined {
+  if (bundleName !== codeBundle.name) return undefined;
+  for (const asset of codeBundle.spawn_context_assets ?? []) {
+    if (asset.kind === "frontmatter-catalog") {
+      return join(bundleSourceDir, asset.dir);
+    }
+  }
+  return undefined;
+}
+
 // Ensure the project store exists (migrations apply on first open) and
 // carries the bundle manifest row. Idempotent: an unchanged manifest is
 // left as-is. Run on every resolver call so a store that was rotated away

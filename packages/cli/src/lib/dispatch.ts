@@ -24,7 +24,7 @@ import {
 // `@loomfsm/driver` (and thus `@loomfsm/kernel` → `node:sqlite`) is imported
 // LAZILY in `execute` so loading this module does not pull SQLite into the
 // flag-free commands (`loom --version` / `setup`); types are erased.
-import type { ChainEntry, Executor, ResolveExecutor, SpawnUsage } from "@loomfsm/driver";
+import type { ChainEntry, Executor, ResolveExecutor, SandboxSeed, SpawnUsage } from "@loomfsm/driver";
 import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import {
@@ -81,6 +81,13 @@ export interface DispatchExecutorArgs {
   onNotice: (message: string) => void;
   onUsage: (usage: SpawnUsage) => void;
   signal?: AbortSignal;
+  // Static files to seed into each Claude Code sandbox before its first spawn
+  // (e.g. the active bundle's bundled knowledge, resolved by the transport that
+  // knows the bundle). A thunk, resolved lazily on the first Claude Code spawn,
+  // so a transport whose bundle name is async (serve, per project) can await it.
+  // Only the Claude Code backend — worktree or container — is sandboxed; raw
+  // model calls touch no files, so the seed never reaches them.
+  sandbox_seed?: () => readonly SandboxSeed[] | Promise<readonly SandboxSeed[]>;
   // Per-agent execution shape (generic, bundle-DECLARED, surfaced by the
   // transport from the bundle's sidecar). "agentic" → on a non-Claude backend
   // the spawn runs through the Aider worktree harness; "single-shot" → a plain
@@ -211,16 +218,19 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
       return Promise.resolve(args.buildBackendExecutor(backend, sinks, harness));
     }
     if (backend === CLAUDE_CODE_BACKEND) {
-      return buildClaudeCodeBackend(
-        {
-          project_dir: args.projectDir,
-          plan: args.plan,
-          ...(permissionMode !== undefined && permissionMode !== ""
-            ? { permission_mode: permissionMode }
-            : {}),
-          timeouts: args.timeouts,
-        },
-        sinks,
+      return Promise.resolve(args.sandbox_seed?.() ?? []).then((seed) =>
+        buildClaudeCodeBackend(
+          {
+            project_dir: args.projectDir,
+            plan: args.plan,
+            ...(permissionMode !== undefined && permissionMode !== ""
+              ? { permission_mode: permissionMode }
+              : {}),
+            timeouts: args.timeouts,
+            ...(seed.length > 0 ? { sandbox_seed: seed } : {}),
+          },
+          sinks,
+        ),
       );
     }
     // A raw / non-CC backend. For an explicit harness pin (`aider`/`opencode`)

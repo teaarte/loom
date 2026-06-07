@@ -35,7 +35,12 @@ import { buildClaudeArgs, parseClaudeResult, parseClaudeUsage } from "./claude-c
 import { provisionClone } from "./clone.js";
 import type { Executor, SpawnUsage } from "./drive.js";
 import { defaultRateLimitDetector, type RateLimitDetector } from "./rate-limit.js";
-import { createSandboxedExecutor, type RunSpawn, type RunSpawnResult } from "./sandboxed-executor.js";
+import {
+  createSandboxedExecutor,
+  type RunSpawn,
+  type RunSpawnResult,
+  type SandboxSeed,
+} from "./sandboxed-executor.js";
 import { spawnCapture } from "./spawn-cli.js";
 
 const DEFAULT_PERMISSION_MODE = "bypassPermissions";
@@ -101,6 +106,10 @@ export interface ContainerExecutorOptions {
   // Test seam: inject the per-spawn runner instead of spawning real docker, so
   // the clone-provision + self-diff shell can be exercised offline.
   runSpawn?: RunSpawn;
+  // Static files to seed into the clone before the first spawn (forwarded to the
+  // shell). Same purpose as the worktree backend: deliver a bundle's bundled
+  // knowledge at a stable in-sandbox path.
+  sandbox_seed?: readonly SandboxSeed[];
 }
 
 export interface DockerArgsOptions {
@@ -221,5 +230,6 @@ export function createContainerExecutor(opts: ContainerExecutorOptions): Executo
     ...(opts.onNotice !== undefined ? { onNotice: opts.onNotice } : {}),
     ...(opts.onUsage !== undefined ? { onUsage: opts.onUsage } : {}),
     ...(opts.idempotent !== undefined ? { idempotent: opts.idempotent } : {}),
+    ...(opts.sandbox_seed !== undefined ? { sandbox_seed: opts.sandbox_seed } : {}),
   });
 }

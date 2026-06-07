@@ -87,7 +87,7 @@ export type {
 // either in a worktree (default) or inside a container (the isolation fence
 // that makes bypassPermissions safe).
 export { createSandboxedExecutor } from "./sandboxed-executor.js";
-export type { RunSpawn, RunSpawnResult, SandboxedExecutorOptions } from "./sandboxed-executor.js";
+export type { RunSpawn, RunSpawnResult, SandboxedExecutorOptions, SandboxSeed } from "./sandboxed-executor.js";
 export {
   createClaudeCodeExecutor,
   buildClaudeArgs,

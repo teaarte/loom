@@ -141,8 +141,9 @@ export async function runTask(
       // model call. `auto` is CC-first and falls back loudly. The worktree
       // posture defaults to the safe `acceptEdits`, raised only by an explicit
       // `LOOM_CLAUDE_PERMISSION_MODE` opt-in.
-      const { agentExecutionFor } = await import("@loomfsm/mcp-server/bootstrap");
+      const { agentExecutionFor, bundleKnowledgeRefsDir } = await import("@loomfsm/mcp-server/bootstrap");
       const execMap = agentExecutionFor(registry.bundle.name);
+      const refsDir = bundleKnowledgeRefsDir(registry.bundle.name);
       executor = buildDispatchExecutor({
         projectDir: target,
         resolveBundleName: () => registry.bundle.name,
@@ -152,6 +153,7 @@ export async function runTask(
         timeouts: resolveSpawnTimeouts(cfgEnv),
         claudeAvailable: () => available(bin),
         resolveAgentExecution: (agent) => execMap[agent] ?? "single-shot",
+        ...(refsDir !== undefined ? { sandbox_seed: () => [{ src: refsDir, rel: ".loom/work/refs" }] } : {}),
         onNotice: (message) => env.err(`loom run: ${message}`),
         onUsage: (usage) => env.err(`loom run: ${formatUsage(usage)}`),
       });

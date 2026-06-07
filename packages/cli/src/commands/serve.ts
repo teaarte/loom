@@ -377,7 +377,7 @@ async function defaultServeFactory(
   // backend gets the Aider worktree harness. These dynamic imports keep
   // @loomfsm/server (and the heavy daemon/bootstrap) OUT of the eager command
   // graph, so a bare `loom --version` never loads them.
-  const { agentExecutionFor } = await import("@loomfsm/mcp-server/bootstrap");
+  const { agentExecutionFor, bundleKnowledgeRefsDir } = await import("@loomfsm/mcp-server/bootstrap");
   const { commitToBranchMergeBack, commitToBranchMergeBackFromClone } = await import("@loomfsm/daemon");
   const { readTaskExecPrefs } = await import("@loomfsm/server");
 
@@ -407,6 +407,10 @@ async function defaultServeFactory(
         timeouts,
         claudeAvailable: () => available(bin),
         resolveAgentExecution: async (agent) => agentExecutionFor(await bundleNameP)[agent] ?? "single-shot",
+        sandbox_seed: async () => {
+          const dir = bundleKnowledgeRefsDir(await bundleNameP);
+          return dir !== undefined ? [{ src: dir, rel: ".loom/work/refs" }] : [];
+        },
         onNotice: ctx.onNotice,
         onUsage: ctx.onUsage,
         signal: ctx.signal,

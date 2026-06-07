@@ -8,7 +8,7 @@ Run in ONE pass, no follow-up — the pipeline cannot prompt you again. Classifi
 
 - **Task description** — under `## Spawn context`.
 - **CLAUDE.md anti-pattern section** (if present) — formalized rules from the project's "What NOT to do" / `<!-- antipattern -->` block.
-- **Refs catalog** — list of `agents/references/*.md` files with frontmatter (`tags`, `agent_hints`, `summary`, `when_to_load`).
+- **Refs catalog** — the available senior-pattern reference files, listed under the **Refs catalog** heading as `FILE: knowledge/references/<name>.md` followed by each file's frontmatter (`tags`, `agent_hints`, `summary`, `when_to_load`).
 - **Active agents** — the names of agents this flow will fan out to (so refs you pick are useful to them).
 - **Stack candidate registry** — the contents of `stack-candidates.yaml` (injected under that heading in your spawn context). You pick `language` / `package_manager` / commands / `project_type` from this list — never invent.
 - **Detected stack baseline** — what the deterministic resolver picked. You may override when CLAUDE.md / file evidence contradicts; otherwise echo the baseline.
@@ -24,7 +24,7 @@ A single fenced JSON code block. No prose outside. Schema:
   "task_id": "<canonical task_id from spawn context's 'Canonical identifiers' section>",
   "task_short": "<short kebab-case slug, ≤60 chars, summarising the task>",
   "complexity": "<trivial | simple | medium | complex>",
-  "refs_to_load": ["agents/references/<file>.md", "..."],
+  "refs_to_load": ["<file>.md", "..."],
   "security_needed": true,
   "antipattern_rules_applicable": ["<rule-id>", "..."],
   "stack": {
@@ -50,7 +50,7 @@ A single fenced JSON code block. No prose outside. Schema:
   - `complex` — cross-cutting or high-stakes: architecture/redesign, a migration, a security/auth/crypto surface, a public-contract change, work touching many layers/modules, OR scaffolding/bootstrapping a NEW project or service from little/no existing code.
   - **Tie-breaker — cost-aware, not fear-driven.** The heavier flow is NOT free: it spends more tokens, adds latency, and adds failure surface (more agent spawns = more that can go wrong, as a 40-minute run that never reached a diff proved). Escalate to the higher level ONLY when the task carries genuine RISK — one of the `complex` markers above (contract / security / migration / cross-cutting). When the SCOPE is clearly localized (one module, some logic, no contract/security/architecture surface), prefer the LOWER level even if the brief is long or pasted-in noisy. A senior engineer would not convene an architecture review to add a field to one endpoint's error response. (`trivial` stays the exception: choose it only when certain.)
   - GREENFIELD NOTE: when the project is empty / near-empty (a setup, scaffold, or "deploy/initialize a new …" task), classify by the scope of what is being CREATED, not by the absent codebase — such tasks are usually `medium` or `complex`, never `trivial`.
-- **`refs_to_load`** — up to **5** ref filenames that materially help the agents listed in Active agents. Skip refs whose `when_to_load` clearly doesn't match the task. Empty array if nothing fits.
+- **`refs_to_load`** — up to **5** ref filenames (the basename only, e.g. `api-design.md`) that materially help the agents listed in Active agents. Skip refs whose `when_to_load` clearly doesn't match the task. Empty array if nothing fits. Downstream agents read each picked ref from `.loom/work/refs/<name>`.
 - **`security_needed`** — `true` ONLY when the task plausibly touches authentication, authorization, secrets, tokens, sessions, PII, or input-validation surfaces. Default `false`.
 - **`antipattern_rules_applicable`** — rule identifiers (strings) from CLAUDE.md whose pattern the implementer might violate while working on this task. Empty array if no anti-pattern documentation exists or none apply.
 - **`stack`** — your stack pick from the candidate registry. Override the deterministic baseline only when CLAUDE.md / file evidence clearly contradicts. Set the whole object to `null` if the project has no recognisable stack signals.
@@ -67,7 +67,7 @@ A single fenced JSON code block. No prose outside. Schema:
 ## Rules
 
 - Output ONLY the JSON code block. No commentary, no greeting, no explanation.
-- Every entry in `refs_to_load` MUST be an exact filename from the supplied catalog. Do not invent paths.
+- Every entry in `refs_to_load` MUST be the basename of a file in the supplied catalog (e.g. `redis.md`). Do not invent names.
 - Every entry in `antipattern_rules_applicable` MUST come from the supplied rule list (or be empty).
 - `stack.language` MUST be in `stack-candidates.yaml.languages[*].name`. `stack.package_manager` MUST be in `stack-candidates.yaml.package_managers[*].name` (or `null`). Do not invent.
 - If any field is genuinely indeterminate, emit a safe default (`null` for `task_short` / `stack` / `change_kind`, empty arrays, `false` for boolean, `medium` for `complexity`) — never guess.

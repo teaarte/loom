@@ -24,7 +24,7 @@
       "type": "array",
       "items": { "type": "string" },
       "maxItems": 5,
-      "description": "Senior-pattern references (filenames from agents/references/) to inject into agent prompts."
+      "description": "Senior-pattern references picked for this task — basenames from the refs catalog (e.g. 'redis.md'). Delivered to the sandbox at .loom/work/refs/<name> for downstream agents to read."
     },
     "security_needed": {
       "type": "boolean",

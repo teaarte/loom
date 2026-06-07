@@ -40,7 +40,7 @@ Pros: ... | Cons: ...
 **Use [X]** because [clear reasoning specific to our stack].
 
 ## Integration
-- Install: `[package manager command from project_stack]`
+- Install: `[package manager command from the project's stack]`
 - Key setup steps
 - Usage pattern matching our codebase style:
   ```[language]

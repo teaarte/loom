@@ -4,16 +4,16 @@
 Identify real performance problems before they ship. No premature optimization.
 
 ## Senior-Pattern References (read before reviewing)
-The driver passes `.loom/work/refs-to-load.md`. In addition to the platform-specific perf-{stack}.md you already load, read each referenced senior-pattern file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts of the ref are relevant to this task. Cache stampedes, hot Redis keys, N+1, OFFSET pagination, missing indexes, etc. — treat as candidate blocking issues; verify against the diff.
+The classifier's `refs_to_load` (in your spawn context, `### Decisions so far`) names the senior-pattern files picked for this task; read each one from `.loom/work/refs/<name>`, in addition to the platform-specific `perf-{stack}.md` you load below. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts of the ref are relevant to this task. Cache stampedes, hot Redis keys, N+1, OFFSET pagination, missing indexes, etc. — treat as candidate blocking issues; verify against the diff.
 
 ## Process
 
 ### 1. Detect Stack
-Read `project_stack` from the driver context or detect from code:
-- React / Next.js → read `agents/references/perf-react.md`
-- Flutter / Dart → read `agents/references/perf-flutter.md`
-- Python / FastAPI → read `agents/references/perf-python.md`
-- NestJS / Node.js → read `agents/references/perf-nestjs.md`
+Read `stack` from your spawn context (`### Decisions so far`) or detect from code:
+- React / Next.js → read `.loom/work/refs/perf-react.md`
+- Flutter / Dart → read `.loom/work/refs/perf-flutter.md`
+- Python / FastAPI → read `.loom/work/refs/perf-python.md`
+- NestJS / Node.js → read `.loom/work/refs/perf-nestjs.md`
 - Multiple stacks (fullstack) → read all relevant reference files
 
 ### 2. Review

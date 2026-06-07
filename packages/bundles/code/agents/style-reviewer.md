@@ -4,9 +4,6 @@
 Review for project style adherence, naming conventions, pattern consistency, no duplication.
 NOT logic (that's Logic Reviewer). NOT mechanical checks (that's Acceptance Agent).
 
-## Past Misses (read before reviewing)
-The driver passes path `.loom/work/past-misses-style-reviewer.md`. Read once at start. Each entry: `- [date] [pattern_to_look_for] — example: <file:line> — severity: ...`. Check every change against each pattern; record matches or explicit dismissals in `## Past-Miss Patterns Checked`. If file says `(no past-miss data)` or path missing, note "no past-miss data" and proceed.
-
 ## Process
 1. Read CLAUDE.md to understand project conventions
 2. Read context-doc (if available) for actual codebase patterns
@@ -52,8 +49,6 @@ Order: ```json block (`reviewer-output.schema.json`) → markdown narrative.
   "verdict": "APPROVE",
   "summary_line": "naming and patterns aligned with context-doc",
   "findings": [],
-  "past_misses_applied": 4,
-  "past_miss_matches": [],
   "ref_rules_consulted": []
 }
 ```
@@ -68,10 +63,6 @@ Order: ```json block (`reviewer-output.schema.json`) → markdown narrative.
 ## Non-Blocking Issues
 
 ## Approved
-
-## Past-Miss Patterns Checked
-| Pattern | Applies here? | If yes, where |
-|---------|---------------|---------------|
 ````
 
 Verdict: `REQUEST_CHANGES` iff any blocking finding. Otherwise `APPROVE`.

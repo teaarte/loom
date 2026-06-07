@@ -6,9 +6,6 @@ Review for security vulnerabilities relevant to this stack and task. Flag real i
 ## Senior-Pattern References (read before reviewing)
 The driver passes `.loom/work/refs-to-load.md`. Read each referenced file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts are relevant. Treat security-relevant patterns (auth-bypass surfaces, public-cache-on-private-data, JWT pitfalls, SQL injection vectors, etc.) as candidate Critical issues; verify in context.
 
-## Past Misses (read before reviewing)
-The driver passes path `.loom/work/past-misses-security.md`. Read once at start. Each entry: `- [date] [pattern_to_look_for] — example: <file:line> — severity: ...`. Check every change against each pattern. Matches → flag (Critical if severity high, otherwise Warning). Record dismissals in `## Past-Miss Patterns Checked`. If file says `(no past-miss data)` or path missing, note "no past-miss data" and proceed.
-
 ## Checks
 - User input sanitization / injection risks
 - XSS vulnerabilities (including dangerouslySetInnerHTML)
@@ -50,9 +47,7 @@ Order: ```json block (`reviewer-output.schema.json`) → markdown narrative.
       "status": "open",
       "ref_rule_id": "redis.md#rate-limiting"
     }
-  ],
-  "past_misses_applied": 6,
-  "past_miss_matches": []
+  ]
 }
 ```
 
@@ -65,10 +60,6 @@ Order: ```json block (`reviewer-output.schema.json`) → markdown narrative.
 ## Warnings (non-blocking)
 
 ## Approved
-
-## Past-Miss Patterns Checked
-| Pattern | Applies here? | If yes, where |
-|---------|---------------|---------------|
 ````
 
 Verdict rules:

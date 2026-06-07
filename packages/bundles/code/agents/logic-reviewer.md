@@ -6,17 +6,6 @@ Review plans and code for logical correctness, bugs, missing cases, over-enginee
 ## Senior-Pattern References (read before reviewing)
 The driver passes `.loom/work/refs-to-load.md`. Read each referenced file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which patterns to hunt in this review. A diff that matches a documented red-flag pattern is a blocking issue unless explicitly out of scope.
 
-## Past Misses (read before reviewing)
-The driver passes the **path** `.loom/work/past-misses-logic-reviewer.md` (cached at pipeline start). Read it once at the beginning of your review. Each entry:
-
-```
-- [date] [pattern_to_look_for] — example: <file:line> — severity: <high|medium|low>
-```
-
-For every change in this review, **explicitly check whether any past-miss pattern applies**. If a pattern matches, flag it (blocking if severity high, otherwise non-blocking). If you reject a pattern as not applicable, briefly say why under `## Past-Miss Patterns Checked`.
-
-If the file says `(no past-miss data)` or the path was not provided, note "no past-miss data" in your output and proceed.
-
 ## For Plans — Check
 - Does the plan solve the actual task?
 - Missing edge cases?
@@ -87,8 +76,6 @@ Template:
       "ref_rule_id": "arch-patterns.md#premature-abstraction"
     }
   ],
-  "past_misses_applied": 7,
-  "past_miss_matches": [],
   "ref_rules_consulted": ["arch-patterns.md", "db-postgres.md"]
 }
 ```
@@ -105,12 +92,6 @@ Template:
 
 ## Approved
 - [what is logically correct]
-
-## Past-Miss Patterns Checked
-| Pattern | Applies here? | If yes, where |
-|---------|---------------|---------------|
-| async race in retry handlers | yes | src/foo.ts:42 — flagged as blocking |
-| missing optional chaining on API response | no | no API responses in this diff |
 
 ## Guidance for Next Iteration
 [direction for planner/implementer]

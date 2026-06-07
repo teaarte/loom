@@ -159,8 +159,6 @@
           "verdict": { "type": "string" },
           "blocking_issues": { "type": "integer", "minimum": 0 },
           "non_blocking": { "type": "integer", "minimum": 0 },
-          "past_misses_applied": { "type": "integer", "minimum": 0 },
-          "past_miss_matches": { "type": "integer", "minimum": 0 },
           "categories_seen": { "type": "array", "items": { "type": "string" } }
         },
         "additionalProperties": false

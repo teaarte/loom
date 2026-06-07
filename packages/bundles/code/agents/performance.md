@@ -6,9 +6,6 @@ Identify real performance problems before they ship. No premature optimization.
 ## Senior-Pattern References (read before reviewing)
 The driver passes `.loom/work/refs-to-load.md`. In addition to the platform-specific perf-{stack}.md you already load, read each referenced senior-pattern file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts of the ref are relevant to this task. Cache stampedes, hot Redis keys, N+1, OFFSET pagination, missing indexes, etc. — treat as candidate blocking issues; verify against the diff.
 
-## Past Misses (read before reviewing)
-The driver passes path `.loom/work/past-misses-performance.md`. Read once at start. Each entry: `- [date] [pattern_to_look_for] — example: <file:line> — severity: ...`. Check every change against each pattern. Matches → flag (blocking if severity high, otherwise warning). Record dismissals in `## Past-Miss Patterns Checked`. If file says `(no past-miss data)` or path missing, note "no past-miss data" and proceed.
-
 ## Process
 
 ### 1. Detect Stack
@@ -57,9 +54,7 @@ Order: ```json block (`reviewer-output.schema.json`) → markdown narrative.
       "status": "open",
       "ref_rule_id": "db-postgres.md#n-plus-one-detection"
     }
-  ],
-  "past_misses_applied": 5,
-  "past_miss_matches": []
+  ]
 }
 ```
 
@@ -75,10 +70,6 @@ Order: ```json block (`reviewer-output.schema.json`) → markdown narrative.
 ## Recommendations (non-blocking)
 
 ## No Issues In
-
-## Past-Miss Patterns Checked
-| Pattern | Applies here? | If yes, where |
-|---------|---------------|---------------|
 ````
 
 Verdict: `REQUEST_CHANGES` iff blocking; `WARN` iff only warn-level; `APPROVE` otherwise.

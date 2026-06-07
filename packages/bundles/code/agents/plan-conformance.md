@@ -45,7 +45,8 @@ Implementer "small adjustments" outside the plan are the second-largest source o
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`validator-output.schema.json`) → markdown narrative.
-`category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`.
+Allowed `category` values for `plan-conformance` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+drift-file-touched-outside-plan, drift-in-file-overreach, drift-not-in-scope-violation, partial-step-not-done, ac-not-satisfied-by-diff, auxiliary-touch, missing-test-coverage, ac-not-met, test-file-modified-by-implementer, other
 
 ````markdown
 ```json

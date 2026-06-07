@@ -48,7 +48,8 @@ ALWAYS emit output in this exact order:
 1. A single fenced ```json block conforming to `reviewer-output.schema.json`. This is the machine-parseable surface — the server validates it.
 2. Markdown narrative below the block.
 
-The driver injects the allowed `category` values for `logic-reviewer` inline in your spawn prompt (under "## Allowed `category` values"). Use one of those values, or `"other"` + `proposed_new_category` when no existing entry fits.
+Allowed `category` values for `logic-reviewer` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+race-condition, off-by-one, error-swallowed, missing-edge-case, leak-or-cleanup-missing, ordering-assumption, type-confusion, over-engineering, duplicate-logic, regression-risk, unhandled-async, unbounded-recursion-or-loop, spec-deviation, scope-creep, coverage-gap, other
 
 Template:
 

@@ -118,7 +118,8 @@ Use test command from CLAUDE.md. If new test file, run just that file first, the
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`validator-output.schema.json`) → markdown narrative.
-`agent`: `"test"`. `category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`.
+`agent`: `"test"`. Allowed `category` values for `test` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+skeleton-compile-error, test-unexpectedly-passes, missing-aaa-block, mock-misconfigured, framework-detection-failed, non-aaa-spec, test-spec-count-mismatch, other
 
 ### Test-First Mode
 

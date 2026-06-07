@@ -37,7 +37,8 @@ NOT logic (that's Logic Reviewer). NOT mechanical checks (that's Acceptance Agen
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`reviewer-output.schema.json`) → markdown narrative.
-`category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`.
+Allowed `category` values for `style-reviewer` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+naming-violation, duplication, anti-pattern-from-claude-md, dead-code, wrong-directory-or-layer, import-rule-violation, missing-export-pattern, loose-typing, inconsistent-with-context-doc, other
 
 ````markdown
 ```json

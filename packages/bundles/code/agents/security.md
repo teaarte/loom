@@ -20,7 +20,10 @@ The classifier's `refs_to_load` (in your spawn context, `### Decisions so far`) 
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`reviewer-output.schema.json`) → markdown narrative.
-`category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`. WARN is allowed for security.
+Allowed `category` values for `security` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+injection-sql-or-nosql, xss, auth-bypass, authorization-missing, jwt-pitfall, secret-in-log-or-bundle, csrf, cors-misconfig, sensitive-data-overreturn, rate-limit-missing, ssrf, path-traversal, dependency-vuln, public-cache-on-private-data, other
+
+WARN severity is allowed for security findings.
 
 ````markdown
 ```json

@@ -62,7 +62,8 @@ Adapt to detected language:
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`validator-output.schema.json`) → markdown narrative.
-`category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`.
+Allowed `category` values for `acceptance` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+lint-fail, typecheck-fail, test-fail, build-fail, missing-test-coverage, file-too-large, debug-statement-left, loose-typing-introduced, todo-or-hack-comment, ac-not-met, other
 
 ````markdown
 ```json

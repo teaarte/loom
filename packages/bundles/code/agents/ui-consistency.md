@@ -33,7 +33,8 @@ Apply checks from the loaded reference file.
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`validator-output.schema.json`) → markdown narrative.
-`category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`.
+Allowed `category` values for `ui-consistency` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+spacing-violation, color-token-violation, typography-token-violation, component-not-from-system, responsive-breakpoint-issue, a11y-violation, other
 
 ````markdown
 ```json

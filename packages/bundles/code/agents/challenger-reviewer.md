@@ -36,7 +36,8 @@ If none of these surface a real risk, say so explicitly — don't fabricate conc
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`reviewer-output.schema.json`) → markdown narrative.
-`category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`.
+Allowed `category` values for `challenger-reviewer` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+concurrency-failure, hostile-input, downstream-failure-not-handled, ordering-violation, atomicity-gap, state-leak-across-requests, empty-or-null-input-failure, retry-or-replay-issue, boundary-mismatch, other
 
 ````markdown
 ```json

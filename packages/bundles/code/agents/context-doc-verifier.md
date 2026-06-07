@@ -27,7 +27,8 @@ Spot-check `.loom/work/context-doc.md` for hallucinated patterns before the Plan
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`validator-output.schema.json`) → markdown narrative.
-`category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`.
+Allowed `category` values for `context-doc-verifier` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+claim-not-found, claim-mismatch, naming-convention-mismatch, other
 
 ````markdown
 ```json

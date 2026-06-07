@@ -27,7 +27,10 @@ Apply checks from the loaded reference(s) to the changed code. Only flag things 
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`reviewer-output.schema.json`) → markdown narrative.
-`category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`. WARN allowed.
+Allowed `category` values for `performance` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+n-plus-one, missing-index, full-table-scan, offset-pagination-on-large-table, hot-key-redis, cache-stampede-risk, unbounded-loop-or-collection, sync-call-in-async-path, missing-timeout, missing-pagination, memory-leak, react-rerender-storm, client-bundle-bloat, other
+
+WARN severity is allowed for performance findings.
 
 ````markdown
 ```json

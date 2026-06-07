@@ -31,7 +31,8 @@ Verify API contracts are in sync after changes. Works for same-repo (frontend+ba
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`validator-output.schema.json`) → markdown narrative.
-`category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`.
+Allowed `category` values for `api-contract` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+type-mismatch, missing-field, extra-field, breaking-change, version-skew, other
 
 ````markdown
 ```json

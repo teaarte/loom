@@ -47,9 +47,10 @@ Emit, in this exact order:
    `reviewer-output.schema.json`.
 2. A markdown narrative below it.
 
-Your `category` values are injected under "## Allowed `category` values" — use
-`runtime-confirmed` for a confirmed claim and `runtime-refuted` for a refuted
-one (or `other` + `proposed_new_category` only if neither fits).
+Allowed `category` values for `adjudicator` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+runtime-confirmed, runtime-refuted, other
+
+Use `runtime-confirmed` for a confirmed claim and `runtime-refuted` for a refuted one.
 
 **Your findings are markers, always `severity: "info"`** — they are not new
 blockers. The override of the *original* blocker is applied by the reconcile

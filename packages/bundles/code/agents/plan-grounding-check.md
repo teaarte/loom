@@ -39,7 +39,8 @@ Verify that every `path:line` citation in `.loom/work/plan.md` actually exists a
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`validator-output.schema.json`) → markdown narrative.
-`category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`.
+Allowed `category` values for `plan-grounding-check` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+citation-file-not-found, citation-range-out-of-bounds, citation-claim-mismatch, unverified-marker, context-doc-cross-mismatch, missing-aaa-block, ac-not-met, other
 
 ````markdown
 ```json

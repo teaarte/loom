@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -880,5 +880,82 @@ describe("@loomfsm/bundle-code — safety floor (INV_lint_clean / INV_tests_pass
       invSafetyFloorFinal(floorState({ lint: ok, test_run: ok, typecheck: ok }), snaps),
       null,
     );
+  });
+});
+
+// ============================================================================
+// per-agent category vocab is delivered inline — each finding-emitting prompt
+// carries its OWN allowlist from schemas/category-vocab.json (the single
+// source). The prompt renderer injects no category list, so the prompt must
+// carry it; this guards the drift that would re-open if a prompt's inline list
+// and the JSON diverged.
+// ============================================================================
+
+describe("@loomfsm/bundle-code — per-agent category vocab is inlined from the single source", () => {
+  // Template file → its category-vocab.json key. The two `-deep` reviewer
+  // variants reuse these base templates, so the base entry covers both.
+  const VOCAB_BY_TEMPLATE: Record<string, string> = {
+    "logic-reviewer.md": "logic-reviewer",
+    "challenger-reviewer.md": "challenger-reviewer",
+    "style-reviewer.md": "style-reviewer",
+    "security.md": "security",
+    "performance.md": "performance",
+    "acceptance.md": "acceptance",
+    "plan-conformance.md": "plan-conformance",
+    "plan-grounding-check.md": "plan-grounding-check",
+    "context-doc-verifier.md": "context-doc-verifier",
+    "ui-consistency.md": "ui-consistency",
+    "api-contract.md": "api-contract",
+    "playwright.md": "playwright",
+    "test.md": "test",
+    "adjudicator.md": "adjudicator",
+  };
+
+  function loadVocab(): Record<string, string[]> {
+    const raw = readFileSync(join(PKG_ROOT, "schemas", "category-vocab.json"), "utf8");
+    return (JSON.parse(raw) as { vocab: Record<string, string[]> }).vocab;
+  }
+
+  // Pull the inlined list out of a prompt: the first non-blank line AFTER the
+  // "Allowed `category` values for ..." marker is the comma-separated list.
+  function inlinedCategories(file: string): string[] {
+    const lines = readFileSync(join(PKG_ROOT, "agents", file), "utf8").split("\n");
+    const markerIdx = lines.findIndex((l) => l.includes("Allowed `category` values for"));
+    assert.ok(markerIdx !== -1, `${file} must carry the inline category marker`);
+    let listIdx = -1;
+    for (let i = markerIdx + 1; i < lines.length; i++) {
+      if ((lines[i] ?? "").trim() !== "") {
+        listIdx = i;
+        break;
+      }
+    }
+    assert.ok(listIdx !== -1, `${file}: marker must be followed by a values line`);
+    return (lines[listIdx] ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  }
+
+  it("every finding-emitting prompt inlines exactly its category-vocab.json allowlist", () => {
+    const vocab = loadVocab();
+    for (const [file, key] of Object.entries(VOCAB_BY_TEMPLATE)) {
+      const expected = vocab[key];
+      assert.ok(expected !== undefined, `category-vocab.json must define vocab['${key}']`);
+      assert.deepEqual(
+        inlinedCategories(file),
+        expected,
+        `${file} inline list must equal category-vocab.json vocab['${key}'] (vocab is the single source)`,
+      );
+    }
+  });
+
+  it("no prompt still claims the driver injects the category values (the removed phantom)", () => {
+    for (const file of Object.keys(VOCAB_BY_TEMPLATE)) {
+      const body = readFileSync(join(PKG_ROOT, "agents", file), "utf8");
+      assert.ok(
+        !/injected\s+(?:inline\s+)?(?:by the driver|under "## Allowed)/i.test(body),
+        `${file} must not claim category values are injected by the driver`,
+      );
+    }
   });
 });

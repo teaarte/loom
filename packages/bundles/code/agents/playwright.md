@@ -21,7 +21,8 @@ Apply the process and rules from the loaded reference file.
 ## Output (JSON header + markdown narrative)
 
 Order: ```json block (`validator-output.schema.json`) → markdown narrative.
-`category` values are injected inline by the driver under "## Allowed `category` values". Use one of those, or `"other"` + `proposed_new_category`.
+Allowed `category` values for `playwright` (use one; if none fits, set `"other"` and populate `proposed_new_category`):
+selector-flaky, missing-step-from-plan, timing-or-race, test-data-leak, other
 
 ````markdown
 ```json

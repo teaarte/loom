@@ -44,7 +44,15 @@ import type { SpawnTimeouts } from "./resilience.js";
 const CLAUDE_CODE_BACKEND = "claude-code";
 const AIDER_BACKEND = "aider";
 const OPENCODE_BACKEND = "opencode";
-const DEFAULT_HARNESS = AIDER_BACKEND;
+// Default agentic harness for a work-agent on a non-Claude family backend.
+// opencode runs a real multi-step tool loop (read → reason → edit → iterate) in
+// one headless invocation, so a work-agent can follow a "read the plan, then
+// implement" prompt and actually land edits. The alternative (aider) drives a
+// SINGLE non-interactive `--message` turn: a model that opens with "let me read
+// the plan first" gets no second turn and produces ZERO edits, which a weaker
+// model does reliably. opencode is the safer default for headless work-agents;
+// aider stays available via LOOM_HARNESS / config.harness.
+const DEFAULT_HARNESS = OPENCODE_BACKEND;
 
 // The agentic-CLI harness backends. A spawn whose resolved backend is one of
 // these runs through that CLI harness (worktree + tool loop); it is also the set

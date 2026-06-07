@@ -214,11 +214,12 @@ function harnessDispatcher(opts: {
 }
 
 describe("buildDispatchExecutor — harness selection by a bundle-declared generic capability", () => {
-  it("routes a work-agent to the aider harness and a decision-agent to a plain raw call on the SAME non-Claude backend", async () => {
+  it("routes a work-agent to the default (opencode) harness and a decision-agent to a plain raw call on the SAME non-Claude backend", async () => {
     const built: string[] = [];
     const exec = harnessDispatcher({
       config: {
         backend: "auto",
+        // No harness configured → the shipped default (opencode) applies.
         bundles: {
           [BUNDLE]: {
             agents: {
@@ -232,10 +233,10 @@ describe("buildDispatchExecutor — harness selection by a bundle-declared gener
       agentic: ["builder"],
       built,
     });
-    assert.equal((await exec.execute(intent("builder"))).agent_output, "aider");
+    assert.equal((await exec.execute(intent("builder"))).agent_output, "opencode");
     assert.equal((await exec.execute(intent("oracle"))).agent_output, "plain");
     // Two distinct harness shapes built over the one backend, each cached once.
-    assert.deepEqual([...built].sort(), ["openrouter:aider", "openrouter:plain"]);
+    assert.deepEqual([...built].sort(), ["openrouter:opencode", "openrouter:plain"]);
   });
 
   it("an agentic agent whose anthropic model routes to Claude Code uses CC's own loop, not aider", async () => {

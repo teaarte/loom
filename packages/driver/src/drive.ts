@@ -198,7 +198,12 @@ class SpawnBudgetExceeded extends Error {
 }
 
 export async function drive(projectDir: string, opts: DriveOptions): Promise<DriveOutcome> {
-  const registry = await opts.resolveRegistry(projectDir);
+  // `let`, not `const`: archiving the slot (auto-rotate / --replace below) wipes
+  // the project store INCLUDING its installed-extension registrations, so the
+  // registry must be RE-RESOLVED against the fresh store afterwards — a
+  // reconciling resolver re-installs the bundle so the replacement task can
+  // initialize. Without it, `initialize-task` refuses with "no enabled bundle".
+  let registry = await opts.resolveRegistry(projectDir);
   const uuid = opts.client_idempotency_uuid ?? `cidem-${randomUUID()}`;
   const maxRetries = opts.max_executor_retries ?? 2;
   // The executor's promise that re-running a spawn is safe — lets the resume
@@ -234,6 +239,9 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
       // NEVER rotated (that branch is unreachable here: in_progress falls
       // through to resume below).
       await archiveStateDb(projectDir, captureNow(), { reason: "auto-rotate" });
+      // The archive wiped the store (incl. installed extensions) — re-resolve so
+      // the bundle is reconciled back into the fresh store before init.
+      registry = await opts.resolveRegistry(projectDir);
       const created = await createAndStart(projectDir, createArgs(registry, uuid, opts));
       response = created.response;
       driverStateId = created.driver_state_id;
@@ -243,6 +251,10 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
     // (it is preserved in history + its branch stays for review), then start
     // the new task. Only ever reached when the operator asked (`--replace`).
     await archiveAndReset(projectDir, captureNow(), { force: true });
+    // The force-archive wiped the store (incl. installed extensions) — re-resolve
+    // so the bundle is reconciled back into the fresh store before init,
+    // otherwise the replacement task refuses with "no enabled bundle".
+    registry = await opts.resolveRegistry(projectDir);
     const created = await createAndStart(projectDir, createArgs(registry, uuid, opts));
     response = created.response;
     driverStateId = created.driver_state_id;

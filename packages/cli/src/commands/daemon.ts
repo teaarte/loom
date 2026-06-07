@@ -178,7 +178,10 @@ async function start(argv: string[], env: CliEnv, overrides: DaemonOverrides): P
   const notifier = await resolveNotifier(cfgEnv, (m) => logger.warn("notify", { message: m }));
   const opts = {
     buildExecutor: factory.buildExecutor,
-    resolveRegistry: () => registry,
+    // Reconciling resolver (not pinned): on a slot rotation / force-replace the
+    // drive re-resolves to re-install the bundle into the freshly-archived store
+    // (else the next task refuses with "no enabled bundle").
+    resolveRegistry,
     ...(task.length > 0 ? { task } : {}),
     ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
     ...resolveSupervisionKnobs(cfgEnv),

@@ -388,6 +388,60 @@ describe("drive — resume re-shuttles a pending spawn under a non-idempotent pr
   });
 });
 
+describe("drive — replacing an in-progress task re-installs the bundle into the fresh store", () => {
+  // Regression: `--replace` (on_active_task:"archive") force-archives the live
+  // store, which wipes its installed-extension registrations along with the
+  // task. The replacement task then initializes against an EMPTY store and the
+  // kernel refuses with "no enabled bundle is installed". The drive must
+  // RE-RESOLVE the registry after the archive so a reconciling resolver
+  // re-installs the bundle into the fresh store before the new task starts.
+  it("on_active_task:archive does not strand the project with 'no enabled bundle'", async () => {
+    const dir = await freshProject();
+    try {
+      const executor: Executor = { execute: async () => ({ agent_output: "" }) };
+      // A reconciling resolver — the contract `assembleRegistry` fulfils in
+      // production: re-install the bundle manifest into the (possibly freshly
+      // archived, empty) store on EVERY call, then hand back the registry.
+      const resolveRegistry = async (): Promise<Registry> => {
+        await reconcileExtensions({
+          manifests: [bundleManifest("code-fixture")],
+          project_dir: dir,
+          now: FIXED_NOW as never,
+        });
+        return gateRegistry();
+      };
+
+      // Task A parks at its gate → an in-progress incumbent occupies the slot.
+      const first = await drive(dir, {
+        executor,
+        resolveRegistry,
+        task: "task A",
+        client_idempotency_uuid: "cidem-A",
+      });
+      assert.equal(first.kind, "paused");
+
+      // Task B with --replace: archive the incumbent, then START B. Before the
+      // fix this rejected with "no enabled bundle" because the archive emptied
+      // the store and nothing re-reconciled it.
+      const second = await drive(dir, {
+        executor,
+        resolveRegistry,
+        task: "task B",
+        on_active_task: "archive",
+        client_idempotency_uuid: "cidem-B",
+      });
+      assert.equal(second.kind, "paused", "the replacement task must start, not refuse on an empty store");
+
+      // The incumbent was preserved in history, and the live store now carries
+      // the replacement task on a re-installed bundle.
+      const state = await readState(dir);
+      assert.equal(state.task, "task B");
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
 describe("drive — human gate pauses (no auto-answer)", () => {
   it("returns paused at an ask-user and never invokes the executor", async () => {
     const dir = await freshProject();

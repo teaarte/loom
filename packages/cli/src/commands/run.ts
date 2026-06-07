@@ -166,7 +166,12 @@ export async function runTask(
   const driveFn = overrides.driveImpl ?? (await import("@loomfsm/driver")).drive;
   const outcome = await driveFn(target, {
     executor,
-    resolveRegistry: () => registry,
+    // Pass the RECONCILING resolver (not a pinned `() => registry`): when the
+    // drive force-archives an incumbent (`--replace`) or rotates a finished
+    // slot, it re-resolves to re-install the bundle into the fresh store. A
+    // pinned resolver would hand back a registry without re-reconciling, and the
+    // replacement task would refuse with "no enabled bundle".
+    resolveRegistry,
     task,
     ...(policy_preset !== undefined ? { policy_preset } : {}),
     ...(replaceFlag ? { on_active_task: "archive" as const } : {}),

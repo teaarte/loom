@@ -25,7 +25,6 @@
 // `status` / `reset` do), so the flag-free install commands never pull
 // node:sqlite; the bin re-execs `run` with --experimental-sqlite.
 
-import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 
 import type { DriveOptions, DriveOutcome, Executor } from "@loomfsm/driver";
@@ -34,6 +33,7 @@ import type { Registry } from "@loomfsm/kernel";
 import { effectiveEnv } from "../lib/config.js";
 import { containerModeFrom, formatUsage, resolveContainerPlan } from "../lib/container.js";
 import { buildDispatchExecutor, preflightDispatch } from "../lib/dispatch.js";
+import { claudeAvailable, dockerAvailableDefault } from "../lib/probes.js";
 import { resolveSpawnTimeouts } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
@@ -175,19 +175,6 @@ export async function runTask(
   return report(outcome, env);
 }
 
-// Probe for the Claude Code CLI by spawning `<bin> --version`. A missing
-// binary surfaces as a spawn error (ENOENT); a present one exits 0.
-function claudeAvailable(bin: string): boolean {
-  const res = spawnSync(bin, ["--version"], { encoding: "utf8" });
-  return res.error === undefined && res.status === 0;
-}
-
-// Probe for the Docker CLI + a reachable daemon by spawning `docker version`.
-function dockerAvailableDefault(): boolean {
-  const bin = process.env["LOOM_DOCKER_BIN"] ?? "docker";
-  const res = spawnSync(bin, ["version", "--format", "{{.Server.Version}}"], { encoding: "utf8" });
-  return res.error === undefined && res.status === 0;
-}
 
 function report(outcome: DriveOutcome, env: CliEnv): number {
   switch (outcome.kind) {

@@ -18,7 +18,7 @@
 // wrapper that injects the production registry resolver + the `claude -p`
 // executor factory exactly as those do; all logic lives in @loomfsm/server.
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
@@ -32,6 +32,7 @@ import { effectiveEnv } from "../lib/config.js";
 import { containerModeFrom, resolveContainerPlan, type ContainerMode, type ContainerPlan } from "../lib/container.js";
 import { buildDispatchExecutor } from "../lib/dispatch.js";
 import { reloadableNotifier, resolveNotifier } from "../lib/notify.js";
+import { claudeAvailable, dockerAvailableDefault } from "../lib/probes.js";
 import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
@@ -430,17 +431,6 @@ async function defaultServeFactory(
         : { available: false, ...(dockerReason !== undefined ? { reason: dockerReason } : {}) },
   };
   return factory;
-}
-
-function claudeAvailable(bin: string): boolean {
-  const res = spawnSync(bin, ["--version"], { encoding: "utf8" });
-  return res.error === undefined && res.status === 0;
-}
-
-function dockerAvailableDefault(): boolean {
-  const bin = process.env["LOOM_DOCKER_BIN"] ?? "docker";
-  const res = spawnSync(bin, ["version", "--format", "{{.Server.Version}}"], { encoding: "utf8" });
-  return res.error === undefined && res.status === 0;
 }
 
 // Fork a detached background control plane: re-exec the launcher with the same

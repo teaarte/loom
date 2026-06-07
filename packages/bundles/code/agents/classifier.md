@@ -10,8 +10,8 @@ Run in ONE pass, no follow-up — the pipeline cannot prompt you again. Classifi
 - **CLAUDE.md anti-pattern section** (if present) — formalized rules from the project's "What NOT to do" / `<!-- antipattern -->` block.
 - **Refs catalog** — list of `agents/references/*.md` files with frontmatter (`tags`, `agent_hints`, `summary`, `when_to_load`).
 - **Active agents** — the names of agents this flow will fan out to (so refs you pick are useful to them).
-- **Stack candidate registry** (v2.2.6) — the contents of `templates/stack-candidates.yaml`. You pick `language` / `package_manager` / commands / `project_type` from this list — never invent.
-- **Detected stack baseline** (v2.2.6) — what the deterministic resolver picked. You may override when CLAUDE.md / file evidence contradicts; otherwise echo the baseline.
+- **Stack candidate registry** — the contents of `stack-candidates.yaml` (injected under that heading in your spawn context). You pick `language` / `package_manager` / commands / `project_type` from this list — never invent.
+- **Detected stack baseline** — what the deterministic resolver picked. You may override when CLAUDE.md / file evidence contradicts; otherwise echo the baseline.
 
 ## Output contract
 
@@ -41,7 +41,7 @@ A single fenced JSON code block. No prose outside. Schema:
 
 ### Field guidance
 
-- **`task_id`** — copy the canonical id from the spawn context's "Canonical identifiers" section verbatim. Do NOT extract a task_id from the task description prose (Item 6 / Q-task_id-drift safety).
+- **`task_id`** — copy the canonical id from the spawn context's "Canonical identifiers" section verbatim. Do NOT extract a task_id from the task description prose — a semantic id mined from the brief breaks cross-task analytics.
 - **`task_short`** — kebab-case, lowercase ASCII; describes the *intent* of the task in 3-6 hyphenated words. Examples: `doc-drift-fix`, `cache-invalidation-bug`, `gate-mirror-refactor`. **No transliteration** — if the task is in a non-Latin script, render the *concept* in English. If you genuinely cannot summarise, emit `null`.
 - **`complexity`** — assess the SCOPE OF THE ACTUAL CHANGE, not how long the brief is. A verbose description of a mechanical one-file edit is `trivial`/`simple`; a terse description of a cross-cutting redesign is `complex`. This is the signal the engine uses to pick the flow — `trivial` is the fast lane (one implementer spawn, NO review and NO gates), `simple` is a lean path (one reviewer, no fanout), `medium`/`complex` run the review fanout (`complex` adds the full adversarial panel). Always emit one of:
   - `trivial` — a single-file, MECHANICAL, zero-logic edit a senior would land without review: a typo, a comment/wording tweak, a version bump, a pure rename, a one-line doc change. Emit this ONLY when you are confident there is no behavioral risk — it skips ALL review and gates. When unsure between `trivial` and `simple`, choose `simple`.
@@ -53,8 +53,8 @@ A single fenced JSON code block. No prose outside. Schema:
 - **`refs_to_load`** — up to **5** ref filenames that materially help the agents listed in Active agents. Skip refs whose `when_to_load` clearly doesn't match the task. Empty array if nothing fits.
 - **`security_needed`** — `true` ONLY when the task plausibly touches authentication, authorization, secrets, tokens, sessions, PII, or input-validation surfaces. Default `false`.
 - **`antipattern_rules_applicable`** — rule identifiers (strings) from CLAUDE.md whose pattern the implementer might violate while working on this task. Empty array if no anti-pattern documentation exists or none apply.
-- **`stack`** (v2.2.6 substrate; auto-spawn activates in v2.2.7) — your stack pick from the candidate registry. Override the deterministic baseline only when CLAUDE.md / file evidence clearly contradicts. Set the whole object to `null` if the project has no recognisable stack signals.
-- **`change_kind`** (v2.2.6 substrate; consumer ships in v2.2.7) — best-guess classification of the task's diff shape based on the task description and any planning context. Heuristics:
+- **`stack`** — your stack pick from the candidate registry. Override the deterministic baseline only when CLAUDE.md / file evidence clearly contradicts. Set the whole object to `null` if the project has no recognisable stack signals.
+- **`change_kind`** — best-guess classification of the task's diff shape based on the task description and any planning context. Heuristics:
   - `type-only` — TypeScript type widening / narrowing, type-export edits, no runtime emit.
   - `logic` — code that changes runtime behavior (functions, conditionals, control flow).
   - `ui` — components, styles, rendering, accessibility.

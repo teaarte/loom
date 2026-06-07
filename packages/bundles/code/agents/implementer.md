@@ -57,11 +57,9 @@ The plan says WHAT to build; these say how MUCH. Write the least code that makes
 
 **Bug in existing unrelated code:** Note it in output AND append to `.loom/work/issues-found.md`, do NOT fix it.
 
-### Tech-debt and out-of-scope observations (Q-tech-debt / D3)
+### Tech-debt and out-of-scope observations
 
-If during implementation you notice issues NOT part of your task scope — pre-existing bugs, dead code, opportunistic improvements, debt the next maintainer should know about — write each one as a `- ` bullet to `.loom/work/issues-found.md` **BEFORE** emitting your final output. Format each entry as a single paragraph: short title, then the supporting evidence in 1-3 sentences (file paths welcome). Do NOT bury observations in your output prose — the prose is the work summary; `issues-found.md` is the structured tech-debt feed that `/sweep` consumes.
-
-If you forget the file write, a post-implementation hook (`extract-tech-debt-from-prose`) scans your output prose for signal phrases like "pre-existing", "out-of-scope", "not a regression", "also worth fixing", "TODO:", "FIXME:" and back-fills the missing entries into `.loom/work/issues-found.md` under an `<!-- auto-captured -->` block. The hook is idempotent on paragraph hash — running it twice doesn't duplicate entries. Prefer writing the file yourself: the auto-capture catches misses, not your primary channel.
+If during implementation you notice issues NOT part of your task scope — pre-existing bugs, dead code, opportunistic improvements, debt the next maintainer should know about — write each one as a `- ` bullet to `.loom/work/issues-found.md` **BEFORE** emitting your final output. Format each entry as a single paragraph: short title, then the supporting evidence in 1-3 sentences (file paths welcome). Do NOT bury observations in your output prose — the prose is the work summary; `issues-found.md` is the structured tech-debt feed. Writing it is your responsibility; nothing back-fills a missed entry for you.
 
 **Context-doc shows a utility that does what you were about to write:** Use the existing one.
 

@@ -10,7 +10,7 @@ Style/naming/pattern checks are handled by Style Reviewer — do NOT duplicate t
 ## Process
 
 ### 1. Read Project Stack
-Use `project_stack` from pipeline-state.json (if available) or detect from CLAUDE.md:
+Use `stack` from your spawn context (`### Decisions so far`) if present, or detect from CLAUDE.md:
 - Language, source directory, file extensions, package manager
 
 ### 2. Run Validation Commands
@@ -49,7 +49,7 @@ Adapt to detected language:
 **TODO/FIXME:** grep for `TODO`, `FIXME`, `HACK`, `XXX` in source files.
 
 ### 7. Test Coverage Check (BLOCKING when tests_mode=tdd)
-- Read `tests_mode` from `.loom/work/pipeline-state.json`.
+- Read `tests_mode` from your spawn context (`### Decisions so far`).
 - **If `tests_mode=tdd`:**
   - Read plan's "Test Specifications" section. Count declared `Test T-N` cases (every `### Test T<N>:` heading and `#### Case T<N>.<x>:` sub-heading).
   - Verify each declared test file exists and contains the corresponding cases.
@@ -125,7 +125,7 @@ Verdict rules:
 Before emitting `verdict: "PASS"` (or `"PASS_WITH_WARNINGS"`), you MUST cross-reference the implementation-phase reviewer findings:
 
 1. Look at `state.reviewer_verdicts[]` (provided in the spawn context). Filter to entries where `phase === "implementation"` AND `iteration === <max iteration in that array>` (the latest impl pass).
-2. If any of those reviewer entries has `blocking_issues > 0`, OR if `findings.jsonl` contains any line with `severity: "blocking"` + `agent` ∈ {impl-phase reviewers} + `status: "open"` at the latest iteration → **downgrade your verdict to `FAIL`**.
+2. If any of those reviewer entries has `blocking_issues > 0` (an impl-phase reviewer left an open blocking finding) → **downgrade your verdict to `FAIL`**.
 3. The `summary_line` MUST enumerate the open blocker categories + file paths so the human can see which findings vetoed the pass at gate-2. Example: `FAIL: 3 open impl blockers (prettier x2 in src/runtime/*.ts, race-condition x1 in src/app.ts)`.
 4. Tool-call green (`pnpm test/lint/build`) is necessary but NOT sufficient for `PASS`. A clean tool exit while a reviewer's blocker is still open is the silent-ship-with-blockers anti-pattern this gate exists to stop.
 

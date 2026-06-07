@@ -20,7 +20,7 @@
     "schema_version": { "type": "string", "const": "1.1" },
     "bundle": {
       "type": "string",
-      "description": "Which bundle this state belongs to. Selects the matching bundle-extension schema in templates/schemas/bundle-extensions/<bundle>.schema.json."
+      "description": "Which bundle this state belongs to."
     },
     "task_id": {
       "type": "string",
@@ -47,12 +47,12 @@
     "ended_at": {
       "type": ["string", "null"],
       "format": "date-time",
-      "description": "Item 11: set by pipeline_finish so the metrics row + post-hoc analysis can compute wall-clock duration."
+      "description": "Set at finish so the metrics row + post-hoc analysis can compute wall-clock duration."
     },
     "refs_loaded": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Senior-pattern reference paths resolved at STEP 1 (rule #24)."
+      "description": "Senior-pattern reference paths resolved for this task."
     },
     "refs_dropped_due_to_cap": {
       "type": "array",
@@ -61,7 +61,7 @@
     "team_knowledge_refs": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Project-scoped shared knowledge files injected into every agent prompt (item 7 of v2.2.5). Populated by pipeline_init from <project>/.claude/pipeline.config.json.team_knowledge_refs[]."
+      "description": "Project-scoped shared knowledge files injected into every agent prompt."
     },
     "phases": {
       "type": "object",
@@ -165,11 +165,6 @@
         },
         "additionalProperties": false
       }
-    },
-    "findings_path": {
-      "type": "string",
-      "description": "Pointer to .loom/work/findings.jsonl — append-only stream of all findings emitted across the run.",
-      "default": ".loom/work/findings.jsonl"
     },
     "files": {
       "type": "object",

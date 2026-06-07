@@ -44,7 +44,7 @@ to build and run in.
 ## Output (JSON header + markdown narrative)
 Emit, in this exact order:
 1. A single fenced ```json block conforming to
-   `templates/schemas/reviewer-output.schema.json`.
+   `reviewer-output.schema.json`.
 2. A markdown narrative below it.
 
 Your `category` values are injected under "## Allowed `category` values" — use

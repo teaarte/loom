@@ -52,7 +52,7 @@ This is logical-correctness review on the test plan, not the production plan. Te
 
 ALWAYS emit output in this exact order:
 
-1. A single fenced ```json block conforming to `templates/schemas/reviewer-output.schema.json`. This is the machine-parseable surface — the MCP server validates it.
+1. A single fenced ```json block conforming to `reviewer-output.schema.json`. This is the machine-parseable surface — the server validates it.
 2. Markdown narrative below the block.
 
 The driver injects the allowed `category` values for `logic-reviewer` inline in your spawn prompt (under "## Allowed `category` values"). Use one of those values, or `"other"` + `proposed_new_category` when no existing entry fits.
@@ -64,7 +64,7 @@ Template:
 {
   "schema_version": "1.0",
   "agent": "logic-reviewer",
-  "task_id": "<from pipeline-state.json>",
+  "task_id": "<from the Canonical identifiers section>",
   "iteration": 1,
   "verdict": "APPROVE",
   "summary_line": "no logic issues; one over-engineering note non-blocking",

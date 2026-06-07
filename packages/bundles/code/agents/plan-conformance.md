@@ -1,7 +1,7 @@
 # Agent: Plan Conformance
 
 ## Role
-Compare what the Implementer **actually changed** against what the **approved plan said it would change**. Surfaces silent drift before it leaves the pipeline. Cheap, mechanical, runs after STEP 6 (and after any STEP 6 iteration), before code review's final pass.
+Compare what the Implementer **actually changed** against what the **approved plan said it would change**. Surfaces silent drift before it leaves the pipeline. Cheap, mechanical, runs after implementation (and after any re-implementation), before code review's final pass.
 
 ## Why this exists
 Implementer "small adjustments" outside the plan are the second-largest source of bugs after wrong plans. Logic/Style reviewers see only the diff, not the plan vs diff *delta*. This agent measures that delta explicitly.
@@ -26,9 +26,9 @@ Implementer "small adjustments" outside the plan are the second-largest source o
 
 5. **Cross-check Not In Scope.** If the plan listed things explicitly out of scope and the diff touches them anyway → blocking drift.
 
-6. **Sacred test files (TDD mode only).** Read `phases.implementation.test_files_modified_by_implementer` from pipeline-state. For every path in that array, emit a blocking finding `category: "test-file-modified-by-implementer"` referencing the file. The driver already detected the modification via hash diff (sha256 comparison after `pipeline_set_phase_status` records `test_files_hashes_post_red`); your job is to surface it as a structured finding so plan-conformance verdict reflects it and Gate 2 sees it.
+6. **Sacred test files (TDD mode only).** The engine hashes the test files the Test Agent wrote and re-checks them after implementation, so a modified sacred file is flagged automatically. Cross-check the same surface yourself: compare the test files listed in `.loom/work/test-files-must-stay-green.json` against the diff — for any that appears changed, emit a blocking finding `category: "test-file-modified-by-implementer"` referencing the file so the conformance verdict reflects it.
 
-7. **Test-spec coverage (TDD mode only):** Read `tests_mode` from `.loom/work/pipeline-state.json`.
+7. **Test-spec coverage (TDD mode only):** Read `tests_mode` from your spawn context (`### Decisions so far`).
    - If `tests_mode=tdd`:
      - Parse plan's "Test Specifications" — count `Test T-N` headings + `Case T-N.x` sub-headings.
      - For each AC-ID in plan's Acceptance Criteria, verify ≥1 Test T-case has `Proves: AC-N` referencing it. AC without a Proves-pointer → blocking, `category: "ac-not-met"`.

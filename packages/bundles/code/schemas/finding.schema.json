@@ -39,7 +39,7 @@
     "iteration": { "type": "integer", "minimum": 1 },
     "task_id": {
       "type": "string",
-      "description": "Links to pipeline-state.json task_id"
+      "description": "The canonical task_id this finding belongs to."
     },
     "file": {
       "type": ["string", "null"],
@@ -53,7 +53,7 @@
     },
     "category": {
       "type": "string",
-      "description": "Controlled vocab — must match an entry in templates/schemas/category-vocab.json for the finding's agent. If a new pattern is being recorded, use 'other' and populate proposed_new_category."
+      "description": "Controlled vocab — must match an entry in category-vocab.json for the finding's agent. If a new pattern is being recorded, use 'other' and populate proposed_new_category."
     },
     "proposed_new_category": {
       "type": ["string", "null"],

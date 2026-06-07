@@ -23,7 +23,7 @@ Verify that every `path:line` citation in `.loom/work/plan.md` actually exists a
 
 4. **Cross-check against `.loom/work/context-doc.md`** if present: a path cited in plan but absent from context-doc is a yellow flag (planner introduced a new file the analyzer didn't surface). Note but do not block.
 
-5. **AAA structure check (TDD mode only):** Read `tests_mode` from `.loom/work/pipeline-state.json`. If `tdd`, scan plan's Test Specifications:
+5. **AAA structure check (TDD mode only):** Read `tests_mode` from your spawn context (`### Decisions so far`). If `tdd`, scan plan's Test Specifications:
    - Every `### Test T-N` MUST have ≥1 `#### Case T-N.x` sub-heading.
    - Every Case MUST contain three labelled blocks `// arrange`, `// act`, `// assert` (or language-equivalent — `# arrange` for python, `// arrange` for dart, etc.). Combined `// act + assert` is allowed for thrown-exception cases.
    - Each block MUST contain code, not placeholder text. Reject if a block contains `...`, `TBD`, `// fill in`, `# todo`, English-only sentences, or is empty.

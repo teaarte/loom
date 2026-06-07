@@ -1,99 +1,68 @@
-# Stack-detection candidate registry (v2.2.6).
+# Stack candidate catalog — the classifier's pick-list (v2.2.6).
 #
-# Single source of truth for languages, package managers, default test/lint/
-# build commands, and project-type heuristics. Editing this file = adding
-# language/PM/command support to the pipeline. NO TypeScript edit required.
+# The classifier-agent (context phase) reads this to fill the `stack` field of
+# its result: it picks `language` / `package_manager` / `project_type` from the
+# NAMES below (never invents) and the test/lint/build commands from
+# `default_commands`. It is injected into the classifier's spawn context only
+# (scoped via `spawn_context_assets`), so it stays out of every other prompt.
 #
-# Consumed by:
-#   mcp/src/lib/stack-candidates.ts  — Zod-validated loader (singleton)
-#   mcp/src/driver/bundles/code/decisions/stack-detect.ts  — deterministic
-#     resolver (gatherStackSignals + resolveStack)
-#   agents/classifier.md  — classifier-agent uses candidates to pick stack
-#
-# Glob patterns in `signal_files` use micromatch-style globs. The resolver
-# uses simple suffix/prefix matching ("*.csproj", "tsconfig.*.json") so keep
-# patterns conservative.
+# This is a NAME + COMMAND catalog, NOT a detection registry: a task-time
+# deterministic stack resolver (file-signal matching) is future work; until it
+# lands the classifier is the sole consumer, so the per-entry detection signals
+# (lockfiles, extensions, dependency markers) are deliberately omitted — they
+# only bloated the prompt with data nothing read.
 
+# Valid `language` values (specific frameworks first, generic last).
 languages:
-  # Specific frameworks first: Svelte projects use package.json too, but
-  # `svelte.config.*` is a stronger signal than the generic package.json
-  # that ts/js fall back on.
   - name: svelte
-    signal_files: ["svelte.config.js", "svelte.config.ts"]
-    extensions: [".svelte"]
   - name: typescript
-    signal_files: ["tsconfig.json", "tsconfig.*.json"]
-    extensions: [".ts", ".tsx"]
   - name: javascript
-    signal_files: ["package.json"]
-    extensions: [".js", ".jsx", ".mjs", ".cjs"]
   - name: python
-    signal_files: ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"]
-    extensions: [".py"]
   - name: rust
-    signal_files: ["Cargo.toml"]
-    extensions: [".rs"]
   - name: go
-    signal_files: ["go.mod"]
-    extensions: [".go"]
   - name: csharp
-    signal_files: ["*.csproj", "*.sln", "global.json"]
-    extensions: [".cs"]
   - name: elixir
-    signal_files: ["mix.exs"]
-    extensions: [".ex", ".exs"]
   - name: dart
-    signal_files: ["pubspec.yaml"]
-    extensions: [".dart"]
 
+# Valid `package_manager` values, with the language(s) each serves so the
+# classifier picks a compatible one (npm is the Node fall-through; pick a
+# lockfile-specific PM only when the task / CLAUDE.md indicates it).
 package_managers:
   - name: pnpm
     languages: [typescript, javascript]
-    signal_files: ["pnpm-lock.yaml", "pnpm-workspace.yaml"]
-    package_json_field_prefix: "pnpm@"
   - name: yarn
     languages: [typescript, javascript]
-    signal_files: ["yarn.lock"]
-    package_json_field_prefix: "yarn@"
   - name: bun
     languages: [typescript, javascript]
-    signal_files: ["bun.lockb"]
-    package_json_field_prefix: "bun@"
-  # npm is the fall-through default for Node ecosystems: comes LAST in the
-  # list so pnpm/yarn/bun signals fire first when present. Including
-  # `package.json` ensures any Node project gets a PM picked even when no
-  # lockfile / packageManager field is present.
   - name: npm
     languages: [typescript, javascript]
-    signal_files: ["package-lock.json", "package.json"]
-    package_json_field_prefix: "npm@"
   - name: uv
     languages: [python]
-    signal_files: ["uv.lock"]
   - name: poetry
     languages: [python]
-    signal_files: ["poetry.lock"]
   - name: pip
     languages: [python]
-    signal_files: ["requirements.txt", "pyproject.toml", "setup.py", "setup.cfg"]
   - name: cargo
     languages: [rust]
-    signal_files: ["Cargo.toml"]
   - name: go
     languages: [go]
-    signal_files: ["go.mod"]
   - name: dotnet
     languages: [csharp]
-    signal_files: ["*.csproj", "*.sln"]
   - name: mix
     languages: [elixir]
-    signal_files: ["mix.exs"]
   - name: pub
     languages: [dart]
-    signal_files: ["pubspec.yaml"]
 
-# Default command shapes per (language, package_manager). Pipeline picks
-# language-default if pm is null. CLAUDE.md overrides win over both.
+# Valid `project_type` values (the classifier picks one, or null when unclear).
+project_types:
+  - frontend-app
+  - backend
+  - library
+  - monorepo
+
+# Default command shapes per (language, package_manager). The classifier echoes
+# these into test/lint/build; a CLAUDE.md override wins over them. `null` = the
+# stack has no standard command of that kind.
 default_commands:
   - language: typescript
     package_manager: pnpm
@@ -185,64 +154,3 @@ default_commands:
     test: "flutter test"
     lint: "dart analyze"
     build: null
-
-# Project-type heuristics. First entry whose ANY non-empty match-category
-# fires wins. Categories: signal_files (file in project), package_json_deps
-# (entry in deps/devDependencies), languages (detected language matches).
-# Used when classifier-agent is unavailable; classifier may override.
-project_type_signals:
-  # 1. Strong positive frontend signal — wins over monorepo + library defaults.
-  - type: frontend-app
-    signal_files:
-      - "next.config.js"
-      - "next.config.ts"
-      - "next.config.mjs"
-      - "vite.config.js"
-      - "vite.config.ts"
-      - "vite.config.mjs"
-      - "rsbuild.config.js"
-      - "rsbuild.config.ts"
-      - "angular.json"
-      - "svelte.config.js"
-      - "svelte.config.ts"
-      - "remix.config.js"
-      - "remix.config.ts"
-      - "nuxt.config.js"
-      - "nuxt.config.ts"
-      - "astro.config.mjs"
-      - "astro.config.ts"
-    package_json_deps:
-      - "next"
-      - "vite"
-      - "react-dom"
-      - "@angular/core"
-      - "@sveltejs/kit"
-      - "remix"
-      - "astro"
-      - "vue"
-
-  # 2. Strong positive backend signal via package.json deps.
-  - type: backend
-    package_json_deps:
-      - "@nestjs/core"
-      - "express"
-      - "fastify"
-      - "@hapi/hapi"
-      - "koa"
-      - "hono"
-
-  # 3. Monorepo markers (fires only when no positive frontend/backend matched).
-  - type: monorepo
-    signal_files:
-      - "pnpm-workspace.yaml"
-      - "lerna.json"
-      - "nx.json"
-      - "turbo.json"
-
-  # 4. Per-language defaults (when no positive signal fired).
-  - type: frontend-app
-    languages: [svelte, dart]
-  - type: backend
-    languages: [python, go, csharp, elixir]
-  - type: library
-    languages: [rust, typescript, javascript]

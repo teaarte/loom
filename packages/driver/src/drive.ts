@@ -49,6 +49,7 @@ import {
   readState,
   recoverAndAdvance,
 } from "./compositions.js";
+import { resetWorktree } from "./worktree.js";
 import { PERMANENT_PROVIDER_ERROR_CODES } from "./provider-error.js";
 import { resumeDirective } from "./resume-directive.js";
 import { writeSpawnTranscript } from "./transcript.js";
@@ -239,6 +240,9 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
       // NEVER rotated (that branch is unreachable here: in_progress falls
       // through to resume below).
       await archiveStateDb(projectDir, captureNow(), { reason: "auto-rotate" });
+      // Discard the prior task's isolated copy so the new task starts from a
+      // clean tree — otherwise its self-diff inherits the rotated task's edits.
+      resetWorktree(projectDir);
       // The archive wiped the store (incl. installed extensions) — re-resolve so
       // the bundle is reconciled back into the fresh store before init.
       registry = await opts.resolveRegistry(projectDir);
@@ -251,6 +255,8 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
     // (it is preserved in history + its branch stays for review), then start
     // the new task. Only ever reached when the operator asked (`--replace`).
     await archiveAndReset(projectDir, captureNow(), { force: true });
+    // Discard the incumbent's isolated copy so the replacement starts clean.
+    resetWorktree(projectDir);
     // The force-archive wiped the store (incl. installed extensions) — re-resolve
     // so the bundle is reconciled back into the fresh store before init,
     // otherwise the replacement task refuses with "no enabled bundle".

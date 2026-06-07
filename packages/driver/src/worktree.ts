@@ -33,12 +33,13 @@
 // graph.
 
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { KernelError } from "@loomfsm/kernel";
 
+import { clonePathFor } from "./clone.js";
 import { cleanLoomArtifacts, clearGitLocks, copyTree, heavyCopyNotice } from "./copy.js";
 import { gitBaselineRef } from "./git-delta.js";
 
@@ -64,6 +65,27 @@ export interface WorktreeProvision {
 export function worktreePathFor(projectDir: string): string {
   const hash = createHash("sha1").update(resolve(projectDir)).digest("hex").slice(0, 16);
   return join(tmpdir(), `loom-wt-${hash}`);
+}
+
+// Discard the project's isolated sandbox copies so the NEXT task provisions
+// fresh ones. Each copy path is deterministic by project, so it is reused across
+// spawns of a task (and across a re-resume) — but a NEW task must NOT inherit the
+// previous task's uncommitted edits, or its self-diff / review / acceptance would
+// be contaminated by work that is not its own. BOTH backend shapes are reset: the
+// non-container worktree copy AND the container backend's dedicated clone (same
+// deterministic hash, distinct path) — a project may switch between `--docker` and
+// the worktree across tasks, so leaving either stale would re-introduce the leak.
+// The long-lived supervisor GCs the copies after merge-back; the headless
+// `loom run` path has no supervisor, so the driver resets them when it rotates one
+// task out for another. Best-effort + idempotent: a missing copy is a no-op.
+export function resetWorktree(projectDir: string): void {
+  for (const dest of [worktreePathFor(projectDir), clonePathFor(projectDir)]) {
+    try {
+      rmSync(dest, { recursive: true, force: true });
+    } catch {
+      /* best-effort — a stale copy that cannot be removed degrades to reuse */
+    }
+  }
 }
 
 // Provision (or reuse) the active task's isolated copy. Returns the directory

@@ -109,7 +109,7 @@ export type { AiderExecutorOptions } from "./aider-executor.js";
 // its JSON event stream, and self-diffs the worktree.
 export { createOpencodeExecutor, buildOpencodeArgs, parseOpencodeResult } from "./opencode-executor.js";
 export type { OpencodeExecutorOptions } from "./opencode-executor.js";
-export { provisionWorktree, worktreePathFor } from "./worktree.js";
+export { provisionWorktree, resetWorktree, worktreePathFor } from "./worktree.js";
 export type { WorktreeProvision } from "./worktree.js";
 export { provisionClone, clonePathFor } from "./clone.js";
 

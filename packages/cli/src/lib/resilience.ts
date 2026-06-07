@@ -70,6 +70,34 @@ export function resolveSpawnTimeouts(env: NodeJS.ProcessEnv): SpawnTimeouts {
   return out;
 }
 
+// Shorter default per-spawn cap for the non-Claude work-agent HARNESSES
+// (aider / opencode). They RETRY INTERNALLY on a flaky tool-use or rate-limited
+// model, so a wedged run is opaque to loom until its own cap fires — the live
+// failure was a model that produced malformed tool calls and looped ~20-30 min
+// against the rate limit before the 30m Claude cap would have stopped it,
+// burning tokens with no result. A 10m cap fails a bad model fast while still
+// clearing a legit heavy edit (a single agentic edit-loop is minutes, not tens).
+// Override with LOOM_HARNESS_SPAWN_SESSION_TIMEOUT_MS; set it to 0 to disable.
+export const DEFAULT_HARNESS_SPAWN_SESSION_TIMEOUT_MS = 600_000; // 10m
+
+// As `resolveSpawnTimeouts`, but with the shorter harness session default. The
+// idle cap is shared (the harness-specific env name is honored first, then the
+// general one). Used only for the aider/opencode backends; Claude Code keeps the
+// generous general cap (it does not retry internally — one print-mode run).
+export function resolveHarnessSpawnTimeouts(env: NodeJS.ProcessEnv): SpawnTimeouts {
+  const out: SpawnTimeouts = {};
+  const session = resolveWithDefault(
+    env["LOOM_HARNESS_SPAWN_SESSION_TIMEOUT_MS"],
+    DEFAULT_HARNESS_SPAWN_SESSION_TIMEOUT_MS,
+  );
+  if (session !== undefined && session > 0) out.session_timeout_ms = session;
+  const idle =
+    parseDurationMs(env["LOOM_HARNESS_SPAWN_IDLE_TIMEOUT_MS"]) ??
+    parseDurationMs(env["LOOM_SPAWN_IDLE_TIMEOUT_MS"]);
+  if (idle !== undefined && idle > 0) out.idle_timeout_ms = idle;
+  return out;
+}
+
 // Supervisor-level resilience knobs (daemon + serve).
 export interface SupervisionKnobs {
   rate_limit_wait_ms?: number;

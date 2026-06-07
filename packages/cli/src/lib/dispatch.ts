@@ -39,7 +39,7 @@ import {
   type BackendSinks,
 } from "./backends.js";
 import type { ContainerPlan } from "./container.js";
-import type { SpawnTimeouts } from "./resilience.js";
+import { resolveHarnessSpawnTimeouts, type SpawnTimeouts } from "./resilience.js";
 
 const CLAUDE_CODE_BACKEND = "claude-code";
 const AIDER_BACKEND = "aider";
@@ -251,6 +251,10 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
       env: args.env,
       ...(override !== undefined ? { override } : {}),
     });
+    // The non-CC harnesses get the SHORTER harness session cap: they retry
+    // internally on a flaky/rate-limited model, so a wedged run is opaque to
+    // loom until the cap fires — a generous cap burns tokens with no result.
+    const harnessTimeouts = resolveHarnessSpawnTimeouts(args.env);
     if (harness === "aider") {
       return buildAiderBackend(
         {
@@ -260,7 +264,7 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
               ? () => aiderModelString(modelPin.family, modelPin.model)
               : harnessResolveModel(refs, aiderModelString),
           env: harnessChildEnv(args.env, family, creds),
-          timeouts: args.timeouts,
+          timeouts: harnessTimeouts,
         },
         sinks,
       );
@@ -274,7 +278,7 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
               ? () => opencodeModelString(modelPin.family, modelPin.model)
               : harnessResolveModel(refs, opencodeModelString),
           env: harnessChildEnv(args.env, family, creds),
-          timeouts: args.timeouts,
+          timeouts: harnessTimeouts,
         },
         sinks,
       );

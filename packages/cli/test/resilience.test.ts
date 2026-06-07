@@ -8,8 +8,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  DEFAULT_HARNESS_SPAWN_SESSION_TIMEOUT_MS,
   DEFAULT_SPAWN_SESSION_TIMEOUT_MS,
   parseDurationMs,
+  resolveHarnessSpawnTimeouts,
   resolveSpawnTimeouts,
 } from "../src/lib/resilience.js";
 
@@ -55,5 +57,43 @@ describe("resolveSpawnTimeouts — session cap defaults ON", () => {
   it("idle stays env-only — set only when explicitly given a positive value", () => {
     assert.equal(resolveSpawnTimeouts({ LOOM_SPAWN_IDLE_TIMEOUT_MS: "90s" }).idle_timeout_ms, 90_000);
     assert.equal(resolveSpawnTimeouts({ LOOM_SPAWN_IDLE_TIMEOUT_MS: "0" }).idle_timeout_ms, undefined);
+  });
+});
+
+describe("resolveHarnessSpawnTimeouts — shorter default for non-CC harnesses", () => {
+  it("defaults to the shorter harness cap (10m, vs the 30m Claude default)", () => {
+    const t = resolveHarnessSpawnTimeouts({});
+    assert.equal(t.session_timeout_ms, DEFAULT_HARNESS_SPAWN_SESSION_TIMEOUT_MS);
+    assert.equal(DEFAULT_HARNESS_SPAWN_SESSION_TIMEOUT_MS < DEFAULT_SPAWN_SESSION_TIMEOUT_MS, true);
+  });
+
+  it("honors LOOM_HARNESS_SPAWN_SESSION_TIMEOUT_MS override and 0=disable", () => {
+    assert.equal(
+      resolveHarnessSpawnTimeouts({ LOOM_HARNESS_SPAWN_SESSION_TIMEOUT_MS: "3m" }).session_timeout_ms,
+      180_000,
+    );
+    assert.equal(
+      resolveHarnessSpawnTimeouts({ LOOM_HARNESS_SPAWN_SESSION_TIMEOUT_MS: "0" }).session_timeout_ms,
+      undefined,
+    );
+  });
+
+  it("does NOT read the general session knob (that one stays Claude-only)", () => {
+    // A general 0 opt-out must not disable the harness cap — they are independent.
+    assert.equal(
+      resolveHarnessSpawnTimeouts({ LOOM_SPAWN_SESSION_TIMEOUT_MS: "0" }).session_timeout_ms,
+      DEFAULT_HARNESS_SPAWN_SESSION_TIMEOUT_MS,
+    );
+  });
+
+  it("idle: harness-specific knob wins, else falls back to the general idle knob", () => {
+    assert.equal(
+      resolveHarnessSpawnTimeouts({ LOOM_HARNESS_SPAWN_IDLE_TIMEOUT_MS: "45s" }).idle_timeout_ms,
+      45_000,
+    );
+    assert.equal(
+      resolveHarnessSpawnTimeouts({ LOOM_SPAWN_IDLE_TIMEOUT_MS: "30s" }).idle_timeout_ms,
+      30_000,
+    );
   });
 });

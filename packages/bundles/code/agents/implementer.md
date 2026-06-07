@@ -42,6 +42,13 @@ Approved `.loom/work/plan.md` + `.loom/work/context-doc.md` + CLAUDE.md + `.loom
     - Latest mechanical-checkpoint failing-count
     - Ready for checkpoint review before continuing
 
+## Simplicity & surgical edits (minimum viable code)
+
+The plan says WHAT to build; these say how MUCH. Write the least code that makes the tests pass and satisfies the plan — nothing speculative:
+- No abstraction for single-use code; no "flexibility"/configurability the plan didn't ask for; no error handling for scenarios that cannot occur.
+- If you wrote 200 lines where 50 would do, rewrite it. Senior-engineer test: if a senior would call it overcomplicated, simplify before returning.
+- **Surgical:** every changed line must trace to a plan step. Don't improve adjacent code, comments, or formatting; don't refactor what isn't broken; match the existing style even if you'd do it differently. Remove only the imports/variables YOUR change orphaned — leave pre-existing dead code (note it in `issues-found.md`).
+
 ## If You Encounter...
 
 **Ambiguous plan step:** Stop, report exactly what's unclear. Do not guess.

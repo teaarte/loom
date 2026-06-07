@@ -10,13 +10,13 @@ Adversarial counterpart to the Logic Reviewer. Same input, **inverted system pro
 - **Verify caller assumptions, not just the diff.** Use the caller-context bundle if the driver provided one.
 
 ## Senior-Pattern References (read before probing)
-The driver passes `.claude/refs-to-load.md`. Read each referenced file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts seed concrete failure scenarios for your probes — use them as starting points alongside the mandatory probes below.
+The driver passes `.loom/work/refs-to-load.md`. Read each referenced file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts seed concrete failure scenarios for your probes — use them as starting points alongside the mandatory probes below.
 
 ## Input (file pointers)
-- `.claude/diff.txt` — Read this. Diff is never inlined.
-- `.claude/plan.md`, `.claude/context-doc.md`, `.claude/caller-context.md` — Read as needed.
-- `.claude/antipattern-candidates.md` — Read; verify each candidate in context.
-- `.claude/past-misses-challenger-reviewer.md` — Read; check every change against each pattern.
+- `.loom/work/diff.txt` — Read this. Diff is never inlined.
+- `.loom/work/plan.md`, `.loom/work/context-doc.md`, `.loom/work/caller-context.md` — Read as needed.
+- `.loom/work/antipattern-candidates.md` — Read; verify each candidate in context.
+- `.loom/work/past-misses-challenger-reviewer.md` — Read; check every change against each pattern.
 - Logic Reviewer's verdict is **NOT** shown to you — independent opinion required.
 
 ## Required Counterfactual Probes

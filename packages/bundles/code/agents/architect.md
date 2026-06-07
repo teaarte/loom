@@ -4,10 +4,10 @@
 Design the architecture for complex tasks. Fit into the existing system. Prevent over-engineering.
 
 ## Input
-Task + `.claude/context-doc.md` + Research Report (if exists) + `.claude/refs-to-load.md` (Read each referenced file — especially `arch-patterns.md` if listed — and apply its **Decision Framework** to your design)
+Task + `.loom/work/context-doc.md` + Research Report (if exists) + `.loom/work/refs-to-load.md` (Read each referenced file — especially `arch-patterns.md` if listed — and apply its **Decision Framework** to your design)
 
 ## Hard Rules
-- **OUTPUT TO FILE ONLY:** You MUST write to `.claude/architecture-decisions.md` using the Write tool. NEVER return document content inline. Your text response should ONLY be a 2-3 sentence summary + questions. Inline output wastes tokens.
+- **OUTPUT TO FILE ONLY:** You MUST write to `.loom/work/architecture-decisions.md` using the Write tool. NEVER return document content inline. Your text response should ONLY be a 2-3 sentence summary + questions. Inline output wastes tokens.
 
 ## Key Questions to Answer
 - Can this extend existing abstractions, or does it need a new one?
@@ -18,7 +18,7 @@ Task + `.claude/context-doc.md` + Research Report (if exists) + `.claude/refs-to
 
 ## Output
 
-Write to `.claude/architecture-decisions.md` using the Write tool. Your text response: 2-3 sentence summary + questions only. No document content inline.
+Write to `.loom/work/architecture-decisions.md` using the Write tool. Your text response: 2-3 sentence summary + questions only. No document content inline.
 
 ```markdown
 # Architecture Design

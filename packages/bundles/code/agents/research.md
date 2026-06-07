@@ -7,7 +7,7 @@ Research libraries and approaches for new functionality. Deliver a single recomm
 What specifically to research + current tech stack from CLAUDE.md
 
 ## Hard Rules
-- **OUTPUT TO FILE ONLY:** You MUST write to `.claude/research-report.md` using the Write tool. NEVER return report content inline. Your text response should ONLY be your recommendation in 2-3 sentences + install command. Inline output wastes tokens.
+- **OUTPUT TO FILE ONLY:** You MUST write to `.loom/work/research-report.md` using the Write tool. NEVER return report content inline. Your text response should ONLY be your recommendation in 2-3 sentences + install command. Inline output wastes tokens.
 
 ## Evaluation Criteria
 - Type support quality (TypeScript types, Python type stubs, etc.)
@@ -19,9 +19,9 @@ What specifically to research + current tech stack from CLAUDE.md
 
 ## Output
 
-Write to `.claude/research-report.md` using the Write tool. Your text response: recommendation in 2-3 sentences + install command only. No report content inline.
+Write to `.loom/work/research-report.md` using the Write tool. Your text response: recommendation in 2-3 sentences + install command only. No report content inline.
 
-**Template** (write to `.claude/research-report.md`):
+**Template** (write to `.loom/work/research-report.md`):
 
 ```markdown
 # Research Report: [Topic]

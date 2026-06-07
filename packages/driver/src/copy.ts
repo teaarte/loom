@@ -23,7 +23,7 @@
 // kernel's replay graph.
 
 import { spawnSync } from "node:child_process";
-import { cpSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 export interface CopyResult {
@@ -106,52 +106,37 @@ const LOOM_STATE_PATHS = [
   "history",
   "transcripts",
   "task-exec.json",
+  // The agents' per-task working set (`context-doc.md`, `plan.md`, the
+  // architecture/migration docs, the self-diff, …) — written here so they do
+  // NOT collide with Claude Code's gated `.claude/`. A FRESH sandbox copy must
+  // start with this empty, or a spawn reads a PRIOR task's stale doc (a reviewer
+  // was seen "reviewing" a previous task's plan). The re-resume reuse path skips
+  // this clean, so an in-flight task keeps its own working set.
+  "work",
 ] as const;
 
-// Strip loom's own state and a prior task's leftover bundle artifacts from a
-// freshly-made sandbox copy, so each task starts from a clean working set. The
-// full-tree copy carries everything an agent needs to READ (gitignored
-// generated code, node_modules, `.git`) — but it ALSO carries loom's per-task
-// state (under `.loom/`) AND any working artifacts a prior task's agents wrote
-// (a plan, a findings log; written under `.claude/` per the agent prompts).
-// Left in the copy, an agent reviews the WRONG thing — a reviewer was seen
-// reading a prior task's plan / findings and "reviewing" stale content while
-// the real target file went untouched, leaving no worktree change.
+// Strip loom's own state and a prior task's leftover working set from a
+// freshly-made sandbox copy, so each task starts clean. The full-tree copy
+// carries everything an agent needs to READ (gitignored generated code,
+// node_modules, `.git`) — but it ALSO carries loom's per-task state and the
+// agents' working docs (a plan, a context doc, a findings log), all under
+// `.loom/`. Left in the copy, an agent reads the WRONG thing — a reviewer was
+// seen "reviewing" a prior task's plan while the real target went untouched.
 //
-// It removes ONLY loom-ecosystem paths. The user's own `.claude/` files (a
-// Claude Code `settings.json`, `commands/`, a project `CLAUDE.md`) and the loom
-// config a task reads (`.loom/loom.json` / `.loom/providers.json`) are KEPT —
-// the agent needs them. Best-effort: a missing path is the normal case. MUST
-// run only on a FRESH copy, never on the re-resume reuse path, which would wipe
-// the in-flight task's own working set.
+// It removes ONLY loom-ecosystem paths under `.loom/`. The user's own `.claude/`
+// files (Claude Code `settings.json`, `commands/`, a project `CLAUDE.md`) and the
+// loom config a task reads (`.loom/loom.json` / `.loom/providers.json`) are KEPT.
+// Best-effort: a missing path is the normal case. MUST run only on a FRESH copy,
+// never on the re-resume reuse path, which would wipe the in-flight task's own
+// working set.
 export function cleanLoomArtifacts(copyDir: string): void {
-  // 1. Loom's persistent runtime state lives under `.loom/`.
+  // Loom's per-task state + the agents' working set both live under `.loom/`.
   const loom = join(copyDir, ".loom");
   for (const rel of LOOM_STATE_PATHS) {
     try {
       rmSync(join(loom, rel), { recursive: true, force: true });
     } catch {
       /* best effort */
-    }
-  }
-  // 2. Stale prior-task bundle artifacts the agents write under `.claude/`: a
-  // plan, any `*.jsonl` (e.g. a findings log), any `*-state.json` (legacy JSON
-  // state). A fresh task regenerates whatever it needs; a leftover copy is what
-  // made a reviewer read the wrong thing.
-  const claude = join(copyDir, ".claude");
-  let entries: string[];
-  try {
-    entries = readdirSync(claude);
-  } catch {
-    return; // no `.claude/` artifacts in the copy → nothing more to clean
-  }
-  for (const name of entries) {
-    if (name === "plan.md" || name.endsWith(".jsonl") || name.endsWith("-state.json")) {
-      try {
-        rmSync(join(claude, name), { force: true });
-      } catch {
-        /* best effort */
-      }
     }
   }
 }

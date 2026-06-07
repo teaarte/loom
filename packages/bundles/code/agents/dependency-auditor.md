@@ -7,7 +7,7 @@ Map what will be affected by this task to prevent blind spots.
 Task description + complexity + project structure from CLAUDE.md
 
 ## Hard Rules
-- **OUTPUT TO FILE ONLY:** You MUST write to `.claude/dependency-audit.md` using the Write tool. NEVER return document content inline. Your text response should ONLY be a 2-3 sentence summary + risk count. Inline output wastes tokens.
+- **OUTPUT TO FILE ONLY:** You MUST write to `.loom/work/dependency-audit.md` using the Write tool. NEVER return document content inline. Your text response should ONLY be a 2-3 sentence summary + risk count. Inline output wastes tokens.
 
 ## Process
 1. Scan key directories listed in CLAUDE.md
@@ -18,7 +18,7 @@ Task description + complexity + project structure from CLAUDE.md
 
 ## Output
 
-Write to `.claude/dependency-audit.md` using the Write tool. Your text response: 2-3 sentence summary + risk count only. No document content inline.
+Write to `.loom/work/dependency-audit.md` using the Write tool. Your text response: 2-3 sentence summary + risk count only. No document content inline.
 ```markdown
 # Dependency Audit
 

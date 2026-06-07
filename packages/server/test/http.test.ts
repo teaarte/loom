@@ -431,23 +431,24 @@ describe("http — archived task browser (history + archived trace)", () => {
 });
 
 describe("http — read a prose artifact (whitelisted + traversal-guarded)", () => {
-  it("lists and reads a .claude/*.md doc, and refuses an escape", async () => {
+  it("lists and reads a .loom/work/*.md doc, and refuses an escape", async () => {
     const dir = await freshProject("loom-server-artifact-");
     dirs.push(dir);
     registries.set(dir, spawnRegistry());
     const add = await req("POST", "/workspace/projects", { token: TOKEN, body: { dir } });
     const id = add.json.id as string;
 
-    // Stand in for what a work agent writes into the task's isolated copy.
-    const sandboxClaude = join(worktreePathFor(dir), ".claude");
-    mkdirSync(sandboxClaude, { recursive: true });
-    writeFileSync(join(sandboxClaude, "plan.md"), "# the plan\n1. do it\n", "utf8");
+    // Stand in for what a work agent writes into the task's isolated copy. The
+    // agents write under `.loom/work/` (NOT `.claude/`, which Claude Code gates).
+    const sandboxWork = join(worktreePathFor(dir), ".loom", "work");
+    mkdirSync(sandboxWork, { recursive: true });
+    writeFileSync(join(sandboxWork, "plan.md"), "# the plan\n1. do it\n", "utf8");
 
     const list = await req("GET", `/projects/${id}/artifacts`, { token: TOKEN });
     assert.equal(list.status, 200);
-    assert.deepEqual(list.json.artifacts.map((a: any) => a.path), [".claude/plan.md"]);
+    assert.deepEqual(list.json.artifacts.map((a: any) => a.path), [".loom/work/plan.md"]);
 
-    const read = await req("GET", `/projects/${id}/artifact?path=${encodeURIComponent(".claude/plan.md")}`, { token: TOKEN });
+    const read = await req("GET", `/projects/${id}/artifact?path=${encodeURIComponent(".loom/work/plan.md")}`, { token: TOKEN });
     assert.equal(read.status, 200);
     assert.match(read.json.content, /the plan/);
     assert.equal(read.json.truncated, false);
@@ -456,13 +457,13 @@ describe("http — read a prose artifact (whitelisted + traversal-guarded)", () 
     const esc1 = await req("GET", `/projects/${id}/artifact?path=${encodeURIComponent("../../../etc/passwd")}`, { token: TOKEN });
     assert.equal(esc1.status, 400);
     assert.equal(esc1.json.error.code, "BAD_ARTIFACT_PATH");
-    const esc2 = await req("GET", `/projects/${id}/artifact?path=${encodeURIComponent(".claude/../../etc/passwd")}`, { token: TOKEN });
+    const esc2 = await req("GET", `/projects/${id}/artifact?path=${encodeURIComponent(".loom/work/../../etc/passwd")}`, { token: TOKEN });
     assert.equal(esc2.status, 400);
 
     // A symlinked leaf that PASSES the whitelist but escapes the sandbox is
     // refused by the canonical path guard (resolveSafePath), not served.
-    symlinkSync("/etc/hosts", join(sandboxClaude, "escape.md"));
-    const esc3 = await req("GET", `/projects/${id}/artifact?path=${encodeURIComponent(".claude/escape.md")}`, { token: TOKEN });
+    symlinkSync("/etc/hosts", join(sandboxWork, "escape.md"));
+    const esc3 = await req("GET", `/projects/${id}/artifact?path=${encodeURIComponent(".loom/work/escape.md")}`, { token: TOKEN });
     assert.equal(esc3.status, 400);
     assert.equal(esc3.json.error.code, "BAD_ARTIFACT_PATH");
   });

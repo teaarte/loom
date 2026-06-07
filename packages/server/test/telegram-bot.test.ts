@@ -349,13 +349,13 @@ describe("telegram-bot — ship + plan", () => {
     h = harness({
       loom: (method, path) =>
         path === "/projects/p1/artifact"
-          ? { body: { path: ".claude/plan.md", content: "# Plan\n- step one", truncated: false } }
+          ? { body: { path: ".loom/work/plan.md", content: "# Plan\n- step one", truncated: false } }
           : { body: {} },
     });
     getChat(h.ctx.state, CHAT).active_project = "p1";
     await handleUpdate(h.ctx, cbUpdate("pl"));
     const artifactCall = h.loomCalls.find((c) => c.path.startsWith("/projects/p1/artifact"));
-    assert.ok(artifactCall?.path.includes("path=.claude%2Fplan.md"));
+    assert.ok(artifactCall?.path.includes("path=.loom%2Fwork%2Fplan.md"));
     assert.match(lastText(h.tgCalls), /# Plan/);
   });
 });

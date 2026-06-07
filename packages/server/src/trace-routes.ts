@@ -9,7 +9,7 @@
 // `readTrace`) returns only generic FSM columns — agent / gate / output-kind
 // NAMES are DATA, never branched on; the control plane names no agent, tier, or
 // bundle. The artifact reader serves files the agent wrote, whitelisted to
-// `.claude/*.md` documents and traversal-guarded by the kernel's `resolveSafePath`
+// `.loom/work/*.md` documents and traversal-guarded by the kernel's `resolveSafePath`
 // (the same canonicalize-the-existing-ancestor guard the sandbox file tools use)
 // so a read can never escape the sandbox.
 //
@@ -44,10 +44,11 @@ function sendJson(res: ServerResponse, status: number, obj: unknown): void {
 const SAFE_ARCHIVE_ID = /^[A-Za-z0-9._-]+$/;
 
 // A whitelisted prose artifact: a single `.md` document directly under the
-// task's `.claude/` directory (e.g. a context doc, a plan, a hand-off). One
-// path segment after `.claude/`, no separators or dot-dot — the canonical
+// task's `.loom/work/` directory (e.g. a context doc, a plan, a hand-off). The
+// agents write here (NOT `.claude/`, which Claude Code gates as sensitive). One
+// path segment after `.loom/work/`, no separators or dot-dot — the canonical
 // traversal guard below then confirms the resolved path stays in the sandbox.
-const ARTIFACT_PATH = /^\.claude\/[^/\\]+\.md$/;
+const ARTIFACT_PATH = /^\.loom\/work\/[^/\\]+\.md$/;
 
 const HISTORY_DIRNAME = "history";
 const MAX_ARTIFACT_BYTES = 512 * 1024;
@@ -248,39 +249,39 @@ interface ArtifactInfo {
 // in Docker), reused across its spawns; the per-task pref records which. A
 // non-git project ran in place. Probe the pref-indicated copy first, then the
 // other, then the project dir — the first that exists wins. Returns null when
-// none carries a `.claude/` (nothing was written yet).
+// none carries a `.loom/work/` (nothing was written yet).
 function sandboxRootFor(dir: string): string | null {
   const docker = readTaskExecPrefs(dir).docker === true;
   const ordered = docker
     ? [clonePathFor(dir), worktreePathFor(dir), dir]
     : [worktreePathFor(dir), clonePathFor(dir), dir];
   for (const root of ordered) {
-    if (existsSync(join(root, ".claude"))) return root;
+    if (existsSync(join(root, ".loom", "work"))) return root;
   }
   return null;
 }
 
 // List the prose `.md` documents a task's work agents wrote into its sandbox
-// `.claude/` — domain-blind: it enumerates files and names none. A finished task
-// whose sandbox was discarded simply lists nothing.
+// `.loom/work/` — domain-blind: it enumerates files and names none. A finished
+// task whose sandbox was discarded simply lists nothing.
 export function listArtifacts(res: ServerResponse, dir: string): void {
   const root = sandboxRootFor(dir);
   if (root === null) {
     sendJson(res, 200, { artifacts: [] });
     return;
   }
-  const claudeDir = join(root, ".claude");
+  const workDir = join(root, ".loom", "work");
   let names: string[] = [];
   try {
-    names = readdirSync(claudeDir).filter((f) => f.endsWith(".md"));
+    names = readdirSync(workDir).filter((f) => f.endsWith(".md"));
   } catch {
     names = [];
   }
   const artifacts: ArtifactInfo[] = [];
   for (const name of names) {
-    const rel = `.claude/${name}`;
+    const rel = `.loom/work/${name}`;
     try {
-      const st = statSync(join(claudeDir, name));
+      const st = statSync(join(workDir, name));
       if (!st.isFile()) continue;
       artifacts.push({ path: rel, size: st.size, modified_at: st.mtime.toISOString() });
     } catch {
@@ -291,16 +292,16 @@ export function listArtifacts(res: ServerResponse, dir: string): void {
   sendJson(res, 200, { artifacts });
 }
 
-// ----- GET /projects/:id/artifact?path=.claude/<name>.md -----------------
+// ----- GET /projects/:id/artifact?path=.loom/work/<name>.md --------------
 
 // Read ONE whitelisted prose artifact (read-only). Two guards stack: the path
-// must match the `.claude/*.md` whitelist (no separators, no dot-dot), and the
+// must match the `.loom/work/*.md` whitelist (no separators, no dot-dot), and the
 // kernel's `resolveSafePath` then canonicalizes it against the sandbox root and
 // refuses anything that escapes (a symlinked parent, a sensitive store). A read
 // can never leave the sandbox.
 export async function getArtifact(res: ServerResponse, dir: string, relPath: string): Promise<void> {
   if (!ARTIFACT_PATH.test(relPath)) {
-    throw new ServerError("BAD_ARTIFACT_PATH", 400, "only .claude/*.md documents can be read");
+    throw new ServerError("BAD_ARTIFACT_PATH", 400, "only .loom/work/*.md documents can be read");
   }
   const root = sandboxRootFor(dir);
   if (root === null) {

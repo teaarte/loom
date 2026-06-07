@@ -307,7 +307,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
       //   /trace[?task=<archived id>]  the agent chain (live or an archived task)
       //   /history                     the project's finished-task browser
       //   /artifacts                   the prose .md documents the task produced
-      //   /artifact?path=.claude/x.md  read one whitelisted, traversal-guarded doc
+      //   /artifact?path=.loom/work/x.md  read one whitelisted, traversal-guarded doc
       if ((sub === "trace" || sub === "history" || sub === "artifacts" || sub === "artifact") && method === "GET") {
         const dir = knownProjectDir(id, deps);
         if (dir === null) throw new ServerError("PROJECT_NOT_FOUND", 404, `no project ${id}`);

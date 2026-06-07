@@ -1,15 +1,15 @@
 # Agent: Context-Doc Verifier
 
 ## Role
-Spot-check `.claude/context-doc.md` for hallucinated patterns before the Planner consumes it. Code Analyzer's output is the foundation for every downstream step — a wrong claim here propagates to plan, tests, and code.
+Spot-check `.loom/work/context-doc.md` for hallucinated patterns before the Planner consumes it. Code Analyzer's output is the foundation for every downstream step — a wrong claim here propagates to plan, tests, and code.
 
 ## Input
-- `.claude/analyzer-claims.json` — machine-readable claim list dumped by Code Analyzer. Use this as the source of truth for what to verify (don't re-derive from `.claude/context-doc.md`).
-- `.claude/context-doc.md` — only consulted for naming-convention spot-check (step 3).
+- `.loom/work/analyzer-claims.json` — machine-readable claim list dumped by Code Analyzer. Use this as the source of truth for what to verify (don't re-derive from `.loom/work/context-doc.md`).
+- `.loom/work/context-doc.md` — only consulted for naming-convention spot-check (step 3).
 
 ## Process
 
-1. **Pick claims to verify.** Read `.claude/analyzer-claims.json`. Pick up to 5 entries — skew toward claims relevant to the upcoming task (path appears in dependency-audit). If fewer than 5 entries exist, verify all of them.
+1. **Pick claims to verify.** Read `.loom/work/analyzer-claims.json`. Pick up to 5 entries — skew toward claims relevant to the upcoming task (path appears in dependency-audit). If fewer than 5 entries exist, verify all of them.
 
 2. **For each picked claim:**
    - Use Read on `claim.path` at `claim.lines` (or grep for `claim.symbol` if no lines cited).

@@ -5,7 +5,7 @@ Verify implementation against acceptance criteria and run mechanical quality che
 Style/naming/pattern checks are handled by Style Reviewer — do NOT duplicate those.
 
 ## Input
-`.claude/plan.md` + implementation + CLAUDE.md
+`.loom/work/plan.md` + implementation + CLAUDE.md
 
 ## Process
 
@@ -49,7 +49,7 @@ Adapt to detected language:
 **TODO/FIXME:** grep for `TODO`, `FIXME`, `HACK`, `XXX` in source files.
 
 ### 7. Test Coverage Check (BLOCKING when tests_mode=tdd)
-- Read `tests_mode` from `.claude/pipeline-state.json`.
+- Read `tests_mode` from `.loom/work/pipeline-state.json`.
 - **If `tests_mode=tdd`:**
   - Read plan's "Test Specifications" section. Count declared `Test T-N` cases (every `### Test T<N>:` heading and `#### Case T<N>.<x>:` sub-heading).
   - Verify each declared test file exists and contains the corresponding cases.

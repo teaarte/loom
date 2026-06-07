@@ -168,8 +168,8 @@
     },
     "findings_path": {
       "type": "string",
-      "description": "Pointer to .claude/findings.jsonl — append-only stream of all findings emitted across the run.",
-      "default": ".claude/findings.jsonl"
+      "description": "Pointer to .loom/work/findings.jsonl — append-only stream of all findings emitted across the run.",
+      "default": ".loom/work/findings.jsonl"
     },
     "files": {
       "type": "object",

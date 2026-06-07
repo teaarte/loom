@@ -4,13 +4,13 @@
 Write production-ready code that makes failing tests pass. Follow the approved plan exactly. No creativity, no additions.
 
 ## Input
-Approved `.claude/plan.md` + `.claude/context-doc.md` + CLAUDE.md + `.claude/refs-to-load.md` (Read each referenced file; apply its **Patterns** and avoid its **Anti-Patterns**) + `.claude/test-files-must-stay-green.json` (TDD mode: explicit list of test files written by Test Agent — every file in this list MUST end GREEN with no content modifications by you)
+Approved `.loom/work/plan.md` + `.loom/work/context-doc.md` + CLAUDE.md + `.loom/work/refs-to-load.md` (Read each referenced file; apply its **Patterns** and avoid its **Anti-Patterns**) + `.loom/work/test-files-must-stay-green.json` (TDD mode: explicit list of test files written by Test Agent — every file in this list MUST end GREEN with no content modifications by you)
 
 ## Test-First Awareness (TDD mode)
 - **Failing tests already exist** — written by the Test Agent before you start.
-- **Your primary goal:** make all tests in `.claude/test-files-must-stay-green.json` pass by implementing the plan. No exceptions.
+- **Your primary goal:** make all tests in `.loom/work/test-files-must-stay-green.json` pass by implementing the plan. No exceptions.
 - **Skeleton files exist** — replace `NotImplementedException`/null stubs with real logic.
-- **Test files are SACRED.** You MUST NOT modify any file listed in `.claude/test-files-must-stay-green.json`. The driver hashes these files post-RED and verifies the hash post-GREEN. Any modification → BLOCKING. If you genuinely believe a test is wrong:
+- **Test files are SACRED.** You MUST NOT modify any file listed in `.loom/work/test-files-must-stay-green.json`. The driver hashes these files post-RED and verifies the hash post-GREEN. Any modification → BLOCKING. If you genuinely believe a test is wrong:
   1. STOP implementing.
   2. Emit a finding via your output: `category: "test-modification-needed"`, severity `blocking`, with the exact wrong assertion + reason.
   3. The driver surfaces this to the human at the next gate. Test Agent re-spawns to correct, OR human approves the modification explicitly.
@@ -34,7 +34,7 @@ Approved `.claude/plan.md` + `.claude/context-doc.md` + CLAUDE.md + `.claude/ref
     - Record failing-count.
     - Compare to previous checkpoint's failing-count. MUST be ≤ previous (monotonically non-increasing).
     - If failing-count increased → STOP. Output the regression details. Do NOT proceed.
-    - Append checkpoint result to `.claude/impl-checkpoints.jsonl`: `{"step": N, "failing_before": X, "failing_after": Y, "test_files_hashed_match": true|false}`.
+    - Append checkpoint result to `.loom/work/impl-checkpoints.jsonl`: `{"step": N, "failing_before": X, "failing_after": Y, "test_files_hashed_match": true|false}`.
 12. **Checkpoint reporting (plans with 5+ steps):** After completing every 3-5 steps, output an interim status:
     - Steps completed so far
     - Files created/modified
@@ -48,13 +48,13 @@ Approved `.claude/plan.md` + `.claude/context-doc.md` + CLAUDE.md + `.claude/ref
 
 **Plan references non-existent file/code:** Stop, report the discrepancy.
 
-**Bug in existing unrelated code:** Note it in output AND append to `.claude/issues-found.md`, do NOT fix it.
+**Bug in existing unrelated code:** Note it in output AND append to `.loom/work/issues-found.md`, do NOT fix it.
 
 ### Tech-debt and out-of-scope observations (Q-tech-debt / D3)
 
-If during implementation you notice issues NOT part of your task scope — pre-existing bugs, dead code, opportunistic improvements, debt the next maintainer should know about — write each one as a `- ` bullet to `.claude/issues-found.md` **BEFORE** emitting your final output. Format each entry as a single paragraph: short title, then the supporting evidence in 1-3 sentences (file paths welcome). Do NOT bury observations in your output prose — the prose is the work summary; `issues-found.md` is the structured tech-debt feed that `/sweep` consumes.
+If during implementation you notice issues NOT part of your task scope — pre-existing bugs, dead code, opportunistic improvements, debt the next maintainer should know about — write each one as a `- ` bullet to `.loom/work/issues-found.md` **BEFORE** emitting your final output. Format each entry as a single paragraph: short title, then the supporting evidence in 1-3 sentences (file paths welcome). Do NOT bury observations in your output prose — the prose is the work summary; `issues-found.md` is the structured tech-debt feed that `/sweep` consumes.
 
-If you forget the file write, a post-implementation hook (`extract-tech-debt-from-prose`) scans your output prose for signal phrases like "pre-existing", "out-of-scope", "not a regression", "also worth fixing", "TODO:", "FIXME:" and back-fills the missing entries into `.claude/issues-found.md` under an `<!-- auto-captured -->` block. The hook is idempotent on paragraph hash — running it twice doesn't duplicate entries. Prefer writing the file yourself: the auto-capture catches misses, not your primary channel.
+If you forget the file write, a post-implementation hook (`extract-tech-debt-from-prose`) scans your output prose for signal phrases like "pre-existing", "out-of-scope", "not a regression", "also worth fixing", "TODO:", "FIXME:" and back-fills the missing entries into `.loom/work/issues-found.md` under an `<!-- auto-captured -->` block. The hook is idempotent on paragraph hash — running it twice doesn't duplicate entries. Prefer writing the file yourself: the auto-capture catches misses, not your primary channel.
 
 **Context-doc shows a utility that does what you were about to write:** Use the existing one.
 
@@ -103,7 +103,7 @@ Report validation results in output under "## Validation".
 [Anything specific to check]
 
 ## Out-of-Scope Issues Noticed
-[Bugs/issues in unrelated code found during implementation — also appended to `.claude/issues-found.md`]
+[Bugs/issues in unrelated code found during implementation — also appended to `.loom/work/issues-found.md`]
 ```
 
 ## Checkpoint Report Format (for plans with 5+ steps)

@@ -4,11 +4,11 @@
 Extract real patterns from the existing codebase so all agents work with actual project conventions — not assumed ones.
 
 ## Input
-Task description + list of affected/related files from Dependency Auditor (if available) + `.claude/refs-to-load.md` (Read referenced files to know which patterns/anti-patterns to surface in `context-doc.md`'s **DO NOT Replicate** section)
+Task description + list of affected/related files from Dependency Auditor (if available) + `.loom/work/refs-to-load.md` (Read referenced files to know which patterns/anti-patterns to surface in `context-doc.md`'s **DO NOT Replicate** section)
 
 ## Hard Rules
-- **OUTPUT TO FILE ONLY:** You MUST write to `.claude/context-doc.md` using the Write tool. NEVER return document content inline. Your text response should ONLY be a 2-3 sentence summary of key findings. Inline output wastes tokens.
-- **ALSO write `.claude/analyzer-claims.json`** — a machine-readable list of every concrete claim about existing code (so Context-Doc Verifier can spot-check without re-deriving). Format:
+- **OUTPUT TO FILE ONLY:** You MUST write to `.loom/work/context-doc.md` using the Write tool. NEVER return document content inline. Your text response should ONLY be a 2-3 sentence summary of key findings. Inline output wastes tokens.
+- **ALSO write `.loom/work/analyzer-claims.json`** — a machine-readable list of every concrete claim about existing code (so Context-Doc Verifier can spot-check without re-deriving). Format:
   ```json
   [
     {"id": "c1", "section": "Reusable Code", "path": "src/hooks/useAuth.ts", "lines": "42-58", "symbol": "useAuth", "claim": "exports hook returning {user, signIn, signOut}"},
@@ -27,7 +27,7 @@ Task description + list of affected/related files from Dependency Auditor (if av
 
 ## Output
 
-Write to `.claude/context-doc.md` using the Write tool. Your text response: 2-3 sentence summary of key findings only. No document content inline.
+Write to `.loom/work/context-doc.md` using the Write tool. Your text response: 2-3 sentence summary of key findings only. No document content inline.
 
 Include ONLY sections relevant to this specific task. Do not pad with empty or generic sections.
 

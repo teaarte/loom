@@ -4,10 +4,10 @@
 Identify real performance problems before they ship. No premature optimization.
 
 ## Senior-Pattern References (read before reviewing)
-The driver passes `.claude/refs-to-load.md`. In addition to the platform-specific perf-{stack}.md you already load, read each referenced senior-pattern file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts of the ref are relevant to this task. Cache stampedes, hot Redis keys, N+1, OFFSET pagination, missing indexes, etc. — treat as candidate blocking issues; verify against the diff.
+The driver passes `.loom/work/refs-to-load.md`. In addition to the platform-specific perf-{stack}.md you already load, read each referenced senior-pattern file's content. The ref's frontmatter (tags + agent_hints + when_to_load) tells you why it was selected; let that frame which parts of the ref are relevant to this task. Cache stampedes, hot Redis keys, N+1, OFFSET pagination, missing indexes, etc. — treat as candidate blocking issues; verify against the diff.
 
 ## Past Misses (read before reviewing)
-The driver passes path `.claude/past-misses-performance.md`. Read once at start. Each entry: `- [date] [pattern_to_look_for] — example: <file:line> — severity: ...`. Check every change against each pattern. Matches → flag (blocking if severity high, otherwise warning). Record dismissals in `## Past-Miss Patterns Checked`. If file says `(no past-miss data)` or path missing, note "no past-miss data" and proceed.
+The driver passes path `.loom/work/past-misses-performance.md`. Read once at start. Each entry: `- [date] [pattern_to_look_for] — example: <file:line> — severity: ...`. Check every change against each pattern. Matches → flag (blocking if severity high, otherwise warning). Record dismissals in `## Past-Miss Patterns Checked`. If file says `(no past-miss data)` or path missing, note "no past-miss data" and proceed.
 
 ## Process
 

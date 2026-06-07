@@ -7,7 +7,7 @@ Compare what the Implementer **actually changed** against what the **approved pl
 Implementer "small adjustments" outside the plan are the second-largest source of bugs after wrong plans. Logic/Style reviewers see only the diff, not the plan vs diff *delta*. This agent measures that delta explicitly.
 
 ## Input
-- `.claude/plan.md` (approved at Gate 1)
+- `.loom/work/plan.md` (approved at Gate 1)
 - `git diff` output (full, against the rollback stash point)
 - Implementer's "## Deviations from Plan" section (if reported)
 
@@ -28,11 +28,11 @@ Implementer "small adjustments" outside the plan are the second-largest source o
 
 6. **Sacred test files (TDD mode only).** Read `phases.implementation.test_files_modified_by_implementer` from pipeline-state. For every path in that array, emit a blocking finding `category: "test-file-modified-by-implementer"` referencing the file. The driver already detected the modification via hash diff (sha256 comparison after `pipeline_set_phase_status` records `test_files_hashes_post_red`); your job is to surface it as a structured finding so plan-conformance verdict reflects it and Gate 2 sees it.
 
-7. **Test-spec coverage (TDD mode only):** Read `tests_mode` from `.claude/pipeline-state.json`.
+7. **Test-spec coverage (TDD mode only):** Read `tests_mode` from `.loom/work/pipeline-state.json`.
    - If `tests_mode=tdd`:
      - Parse plan's "Test Specifications" — count `Test T-N` headings + `Case T-N.x` sub-headings.
      - For each AC-ID in plan's Acceptance Criteria, verify ≥1 Test T-case has `Proves: AC-N` referencing it. AC without a Proves-pointer → blocking, `category: "ac-not-met"`.
-     - Read `.claude/test-files-must-stay-green.json` — that's the actual test files written by Test Agent. Cross-check: every plan T-case → corresponding test file with the case present. T-case in plan without matching test → blocking, `category: "missing-test-coverage"`.
+     - Read `.loom/work/test-files-must-stay-green.json` — that's the actual test files written by Test Agent. Cross-check: every plan T-case → corresponding test file with the case present. T-case in plan without matching test → blocking, `category: "missing-test-coverage"`.
      - Test file written but not declared in plan → non-blocking, `category: "auxiliary-touch"` (Test Agent added a sanity test).
    - If `tests_mode=regression-only`: skip this section.
 

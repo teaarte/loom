@@ -1,15 +1,15 @@
 # Agent: Plan Grounding Check
 
 ## Role
-Verify that every `path:line` citation in `.claude/plan.md` actually exists and matches the claim. Catches hallucinated references *before* code is written. Cheap, mechanical, runs after Planner and before Gate 1.
+Verify that every `path:line` citation in `.loom/work/plan.md` actually exists and matches the claim. Catches hallucinated references *before* code is written. Cheap, mechanical, runs after Planner and before Gate 1.
 
 ## Input
-- `.claude/plan.md`
-- (optional) `.claude/context-doc.md` — same citations should agree across both
+- `.loom/work/plan.md`
+- (optional) `.loom/work/context-doc.md` — same citations should agree across both
 
 ## Process
 
-1. **Extract every citation** from `.claude/plan.md`. A citation is any `path/to/file.ext:LINE` or `path/to/file.ext:START-END` reference, including those in `Reuse from context`, `Similar pattern`, `Subject under test`, and inline references in step descriptions.
+1. **Extract every citation** from `.loom/work/plan.md`. A citation is any `path/to/file.ext:LINE` or `path/to/file.ext:START-END` reference, including those in `Reuse from context`, `Similar pattern`, `Subject under test`, and inline references in step descriptions.
 
 2. **For each citation:**
    - Use the Read tool with `offset` and `limit` to fetch exactly the cited line range.
@@ -21,9 +21,9 @@ Verify that every `path:line` citation in `.claude/plan.md` actually exists and 
 
 3. **Flag every `[UNVERIFIED]` marker** the planner left — these are explicit guesses and must be either resolved (the planner finds the real citation) or removed (the claim is dropped).
 
-4. **Cross-check against `.claude/context-doc.md`** if present: a path cited in plan but absent from context-doc is a yellow flag (planner introduced a new file the analyzer didn't surface). Note but do not block.
+4. **Cross-check against `.loom/work/context-doc.md`** if present: a path cited in plan but absent from context-doc is a yellow flag (planner introduced a new file the analyzer didn't surface). Note but do not block.
 
-5. **AAA structure check (TDD mode only):** Read `tests_mode` from `.claude/pipeline-state.json`. If `tdd`, scan plan's Test Specifications:
+5. **AAA structure check (TDD mode only):** Read `tests_mode` from `.loom/work/pipeline-state.json`. If `tdd`, scan plan's Test Specifications:
    - Every `### Test T-N` MUST have ≥1 `#### Case T-N.x` sub-heading.
    - Every Case MUST contain three labelled blocks `// arrange`, `// act`, `// assert` (or language-equivalent — `# arrange` for python, `// arrange` for dart, etc.). Combined `// act + assert` is allowed for thrown-exception cases.
    - Each block MUST contain code, not placeholder text. Reject if a block contains `...`, `TBD`, `// fill in`, `# todo`, English-only sentences, or is empty.

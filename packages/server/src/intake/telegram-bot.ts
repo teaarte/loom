@@ -411,7 +411,7 @@ async function sendStatus(ctx: BotContext, chatId: number, project: string): Pro
 }
 
 async function sendPlan(ctx: BotContext, chatId: number, project: string): Promise<void> {
-  let art = await ctx.loom.getArtifact(project, ".claude/plan.md");
+  let art = await ctx.loom.getArtifact(project, ".loom/work/plan.md");
   if (!art.ok) {
     // Fall back to whatever the bundle did write.
     const list = await ctx.loom.listArtifacts(project);
@@ -476,7 +476,7 @@ export async function watchTick(ctx: BotContext, chatId: number, chat: ChatState
     if (markTerminalAnnounced(chat, project, marker)) {
       persist(ctx);
       const trace = await ctx.loom.getTrace(project);
-      const summary = await ctx.loom.getArtifact(project, ".claude/summary.md");
+      const summary = await ctx.loom.getArtifact(project, ".loom/work/summary.md");
       await ctx.tg.sendMessage(
         chatId,
         completionText(title, status, trace.ok ? trace.data : null, summary.ok ? summary.data.content : null, ctx.nowMs()),

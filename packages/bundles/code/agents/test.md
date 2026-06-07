@@ -9,9 +9,9 @@ Write and run tests following the project's existing test patterns. Supports two
 The driver specifies the mode. If not specified, default to **Test-First** for new features, **Test-After** for bug fixes.
 
 ## Input
-- `.claude/plan.md` — acceptance criteria and **test specifications** (Test-First section)
+- `.loom/work/plan.md` — acceptance criteria and **test specifications** (Test-First section)
 - CLAUDE.md — test command, architecture, patterns
-- `.claude/refs-to-load.md` — Read referenced files; their frontmatter (tags + agent_hints + when_to_load) tells you why each ref was selected, and that frames which edge cases to test (e.g. db-postgres refs suggest tests for OFFSET pagination behavior at boundaries; redis refs suggest tests for stampede protection)
+- `.loom/work/refs-to-load.md` — Read referenced files; their frontmatter (tags + agent_hints + when_to_load) tells you why each ref was selected, and that frames which edge cases to test (e.g. db-postgres refs suggest tests for OFFSET pagination behavior at boundaries; redis refs suggest tests for stampede protection)
 - Mode: `test-first` or `test-after`
 - List of changed files from the driver (test-after mode only)
 - If not provided in test-after mode, detect changed files: `git diff --name-only HEAD~1`

@@ -10,6 +10,7 @@ import {
   buildPrompt,
   captureNow,
   closeDb,
+  resolveSpawnModel,
 } from "@loomfsm/kernel";
 import { loadBundle, reconcileExtensions } from "@loomfsm/loader";
 import type {
@@ -90,11 +91,13 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
       now,
     });
 
-    // 22 canonical agents (the source's 24 minus the three CC-harness
-    // trigger agents, plus the adjudicator).
-    assert.equal(registry.agents.size, 22);
+    // 24 canonical agents: the prior 22, plus the two premium `-deep` reviewer
+    // variants (logic-reviewer-deep / challenger-reviewer-deep) the complex flow
+    // uses. The prompt map keys by agent NAME, so the two variants that reuse a
+    // base template still get their own entry.
+    assert.equal(registry.agents.size, 24);
     // Every agent's `.md` is read off disk into the prompt map at load.
-    assert.equal(registry.prompts?.size, 22);
+    assert.equal(registry.prompts?.size, 24);
     assert.ok((registry.prompts?.get("classifier")?.body.length ?? 0) > 0);
     assert.equal(registry.flows.size, 4);
     assert.deepEqual(
@@ -261,8 +264,8 @@ describe("@loomfsm/bundle-code — agent templates", () => {
     }
   });
 
-  it("declares exactly the 22 canonical agents", () => {
-    assert.equal(codeBundle.agents.length, 22);
+  it("declares exactly the 24 canonical agents", () => {
+    assert.equal(codeBundle.agents.length, 24);
     const names = codeBundle.agents.map((a) => a.name).sort();
     // The three CC-harness trigger agents are NOT bundle agents.
     for (const excluded of ["fe-test-all-agent", "runtime-debug-agent", "test-all-agent"]) {
@@ -522,7 +525,11 @@ describe("@loomfsm/bundle-code — review panel gates on source presence", () =>
     return agent.applies_to(state);
   }
 
-  const ALWAYS_ON = ["logic-reviewer", "challenger-reviewer", "style-reviewer", "performance"];
+  const ALWAYS_ON = [
+    "logic-reviewer", "logic-reviewer-deep",
+    "challenger-reviewer", "challenger-reviewer-deep",
+    "style-reviewer", "performance",
+  ];
 
   it("pre-review sets source_changed=false for a doc-only OR an empty (no-op) diff", async () => {
     assert.equal(await runPreReview(["docs/HANDOFF.md"], []), false);
@@ -544,6 +551,127 @@ describe("@loomfsm/bundle-code — review panel gates on source presence", () =>
       assert.equal(reviewerApplies(name, { source_changed: true }), true, `${name} should run on source`);
       // unset (plan-review / no files) → run (guard is `!== false`).
       assert.equal(reviewerApplies(name, {}), true, `${name} should run when unset`);
+    }
+  });
+});
+
+// ============================================================================
+// complexity-scaled review-path models — the medium flow reviews on the
+// balanced tier, the complex flow on premium, via per-flow `-deep` variants
+// ============================================================================
+
+describe("@loomfsm/bundle-code — review model scales with complexity", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  // The fanout agent list for a stage, read off the assembled registry.
+  function fanoutAgents(registry: { stages?: Map<string, unknown> }, name: string): string[] {
+    const stage = registry.stages?.get(name) as { kind?: string; agents?: string[] } | undefined;
+    assert.ok(stage?.kind === "fanout", `stage '${name}' must be a fanout`);
+    return stage.agents ?? [];
+  }
+
+  it("wires balanced reviewers into medium and premium `-deep` reviewers into complex", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, now);
+    const registry = await loadBundle({
+      bundle: codeBundle,
+      bundle_source_dir: PKG_ROOT,
+      project_dir: projectDir,
+      providers: [shuttleStub()],
+      now,
+    });
+
+    // The medium flow reviews with the base (balanced) logic + challenger; the
+    // complex flow swaps in the `-deep` (premium) variants. The cheaper
+    // file-conditional validators are shared, unchanged.
+    assert.ok(fanoutAgents(registry, "review").includes("logic-reviewer"));
+    assert.ok(fanoutAgents(registry, "review").includes("challenger-reviewer"));
+    assert.ok(!fanoutAgents(registry, "review").includes("logic-reviewer-deep"));
+    assert.ok(fanoutAgents(registry, "review-deep").includes("logic-reviewer-deep"));
+    assert.ok(fanoutAgents(registry, "review-deep").includes("challenger-reviewer-deep"));
+    assert.ok(!fanoutAgents(registry, "review-deep").includes("logic-reviewer"));
+
+    // T3: the plan-stage logic review scales the same way.
+    assert.deepEqual(fanoutAgents(registry, "plan-review"), ["plan-grounding-check", "logic-reviewer"]);
+    assert.deepEqual(fanoutAgents(registry, "plan-review-deep"), ["plan-grounding-check", "logic-reviewer-deep"]);
+
+    // The flows select the matching stage — medium the balanced fanouts,
+    // complex the premium `-deep` fanouts.
+    const medium = registry.flows.get("medium") ?? [];
+    assert.ok(medium.includes("review") && medium.includes("plan-review"));
+    assert.ok(!medium.includes("review-deep") && !medium.includes("plan-review-deep"));
+    const complex = registry.flows.get("complex") ?? [];
+    assert.ok(complex.includes("review-deep") && complex.includes("plan-review-deep"));
+    assert.ok(!complex.includes("review") && !complex.includes("plan-review"));
+
+    // The whole point: the SAME review role resolves to a cheaper model on the
+    // medium flow and the premium model on the complex flow. resolveSpawnModel
+    // maps the agent's declared tier through default_model_tiers
+    // (balanced→sonnet, premium→opus) when no per-agent provider route overrides.
+    const state = makeClassifyState();
+    assert.equal(resolveSpawnModel(registry, "logic-reviewer", "implementation", state), "sonnet");
+    assert.equal(resolveSpawnModel(registry, "challenger-reviewer", "implementation", state), "sonnet");
+    assert.equal(resolveSpawnModel(registry, "logic-reviewer-deep", "implementation", state), "opus");
+    assert.equal(resolveSpawnModel(registry, "challenger-reviewer-deep", "implementation", state), "opus");
+    // T3: plan-stage logic review, same split.
+    assert.equal(resolveSpawnModel(registry, "logic-reviewer", "planning", state), "sonnet");
+    assert.equal(resolveSpawnModel(registry, "logic-reviewer-deep", "planning", state), "opus");
+  });
+});
+
+// ============================================================================
+// the adversarial challenger gates on change_kind — dropped on a change with
+// no logical-correctness-under-stress surface (config/docs/type-only/refactor)
+// ============================================================================
+
+describe("@loomfsm/bundle-code — challenger gates on change_kind", () => {
+  // Replicate the kernel fanout's documented change-kind filter contract
+  // (stages/fanout.ts): for a fanout with filter_by_change_kind, an agent that
+  // declares relevant_for_change_kinds is DROPPED when the run's change_kind is
+  // known and not listed; an unset/unknown change_kind drops no one.
+  function agentRunsForKind(name: string, changeKind: string | null): boolean {
+    const agent = codeBundle.agents.find((a) => a.name === name);
+    assert.ok(agent !== undefined, `${name} must be a declared agent`);
+    const relevant = agent.relevant_for_change_kinds;
+    if (changeKind === null) return true; // filter is a no-op on unknown kind
+    if (relevant === undefined) return true; // no gate → always runs
+    return relevant.includes(changeKind);
+  }
+
+  it("the review fanout opts into change-kind filtering", () => {
+    const review = codeBundle.stages["review"];
+    assert.ok(review?.kind === "fanout" && review.filter_by_change_kind === true);
+    const reviewDeep = codeBundle.stages["review-deep"];
+    assert.ok(reviewDeep?.kind === "fanout" && reviewDeep.filter_by_change_kind === true);
+  });
+
+  it("drops the challenger on config-only / docs-only / refactor, keeps it on logic / perf / security", () => {
+    for (const challenger of ["challenger-reviewer", "challenger-reviewer-deep"]) {
+      // No logical-correctness surface → dropped.
+      assert.equal(agentRunsForKind(challenger, "config-only"), false, `${challenger} skips config-only`);
+      assert.equal(agentRunsForKind(challenger, "docs-only"), false, `${challenger} skips docs-only`);
+      assert.equal(agentRunsForKind(challenger, "type-only"), false, `${challenger} skips type-only`);
+      assert.equal(agentRunsForKind(challenger, "refactor"), false, `${challenger} skips pure refactor`);
+      // Risk surface → runs.
+      assert.equal(agentRunsForKind(challenger, "logic"), true, `${challenger} runs on logic`);
+      assert.equal(agentRunsForKind(challenger, "perf-sensitive"), true, `${challenger} runs on perf`);
+      assert.equal(agentRunsForKind(challenger, "security-sensitive"), true, `${challenger} runs on security`);
+      // Unknown/unset change_kind never lowers scrutiny.
+      assert.equal(agentRunsForKind(challenger, null), true, `${challenger} runs when change_kind unknown`);
+    }
+  });
+
+  it("the core logic-reviewer is never gated by change_kind (runs on any kind)", () => {
+    // logic-reviewer carries no relevant_for_change_kinds, so a config-only or
+    // docs-only change still gets the baseline logic review — the change_kind
+    // gate only ever sheds the EXTRA adversarial pass, never the core.
+    for (const kind of ["config-only", "docs-only", "refactor", "logic", null]) {
+      assert.equal(agentRunsForKind("logic-reviewer", kind), true, `logic-reviewer runs on ${String(kind)}`);
+      assert.equal(agentRunsForKind("logic-reviewer-deep", kind), true, `logic-reviewer-deep runs on ${String(kind)}`);
     }
   });
 });

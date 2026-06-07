@@ -611,19 +611,51 @@ export default defineBundle({
     // `!== false` guard keeps them running everywhere the flag is unset —
     // `plan-review` (planning, before any diff) and any host that reports no
     // files — so the only suppression is the evidenced doc-only case.
+    // Review depth scales with the classifier's complexity. The base logic +
+    // challenger reviewers run the balanced tier — wired into the medium flow's
+    // `review` / `plan-review` fanouts and the simple flow's `review-light`. The
+    // `-deep` variants right below run the premium tier and are wired ONLY into
+    // the complex flow's `review-deep` / `plan-review-deep` fanouts. Same
+    // template, same self-gate — only the tier differs, so a routine change pays
+    // for the balanced reviewer while a high-blast-radius complex change still
+    // earns the premium one. A single static `default_model` cannot be
+    // tier-by-complexity (one agent name spans both the medium and complex
+    // fanouts), so the split is one agent per tier, selected by the flow.
     {
       name: "logic-reviewer",
+      template_path: "agents/logic-reviewer.md",
+      output_kind: "reviewer",
+      default_model: "balanced",
+      applies_to: (s) => s.decisions["source_changed"] !== false,
+    },
+    {
+      name: "logic-reviewer-deep",
       template_path: "agents/logic-reviewer.md",
       output_kind: "reviewer",
       default_model: "premium",
       applies_to: (s) => s.decisions["source_changed"] !== false,
     },
+    // The adversarial challenger is the most expensive reviewer, so it also
+    // gates on `change_kind`: a config-only / docs-only / type-only / pure
+    // refactor change has no logical-correctness-under-stress surface for it to
+    // probe, so the `review` fanout's `filter_by_change_kind` drops it there.
+    // An unset / unknown change_kind drops no one (the kernel filter is a no-op
+    // when the value is null) — scrutiny is never lowered on uncertainty.
     {
       name: "challenger-reviewer",
       template_path: "agents/challenger-reviewer.md",
       output_kind: "reviewer",
+      default_model: "balanced",
+      applies_to: (s) => s.decisions["source_changed"] !== false,
+      relevant_for_change_kinds: ["logic", "perf-sensitive", "security-sensitive"],
+    },
+    {
+      name: "challenger-reviewer-deep",
+      template_path: "agents/challenger-reviewer.md",
+      output_kind: "reviewer",
       default_model: "premium",
       applies_to: (s) => s.decisions["source_changed"] !== false,
+      relevant_for_change_kinds: ["logic", "perf-sensitive", "security-sensitive"],
     },
     {
       name: "style-reviewer",
@@ -746,6 +778,16 @@ export default defineBundle({
       agents: ["plan-grounding-check", "logic-reviewer"],
       iteration_budget: { kind: "attempt", max_iterations: 2, on_exhaustion: "audit-only" },
     },
+    // Premium-tier plan review for the complex flow — identical to `plan-review`
+    // but the logical-correctness pass runs the `-deep` (premium) reviewer. Only
+    // the complex flow wires this in; medium keeps `plan-review` (balanced).
+    "plan-review-deep": {
+      kind: "fanout",
+      name: "plan-review-deep",
+      phase: "planning",
+      agents: ["plan-grounding-check", "logic-reviewer-deep"],
+      iteration_budget: { kind: "attempt", max_iterations: 2, on_exhaustion: "audit-only" },
+    },
     "gate-plan": {
       kind: "gate",
       name: "gate-plan",
@@ -807,6 +849,28 @@ export default defineBundle({
     // gets one logic review instead of the full adversarial fanout. The
     // fanout `review` stays for the medium/complex flows.
     "review-light": { kind: "spawn", name: "review-light", phase: "implementation", agent: "logic-reviewer" },
+    // Premium-tier code review for the complex flow — identical to `review` but
+    // the logic + challenger passes run the `-deep` (premium) reviewers. The
+    // file-conditional validators and the cheaper style/security/perf reviewers
+    // are unchanged (already on appropriate tiers). Only the complex flow wires
+    // this in; medium keeps `review` (balanced logic + challenger).
+    "review-deep": {
+      kind: "fanout",
+      name: "review-deep",
+      phase: "implementation",
+      agents: [
+        "logic-reviewer-deep",
+        "challenger-reviewer-deep",
+        "style-reviewer",
+        "security",
+        "performance",
+        "ui-consistency",
+        "playwright",
+        "api-contract",
+      ],
+      filter_by_change_kind: true,
+      iteration_budget: { kind: "attempt", max_iterations: 3, on_exhaustion: "audit-only" },
+    },
     // Guarded escalation: spawn the adjudicator ONLY when a live blocking
     // runtime claim warrants one empirical observation (`shouldAdjudicate`).
     // When the predicate is false the stage advances launching nothing — the
@@ -896,8 +960,8 @@ export default defineBundle({
     complex: [
       "initialize", "classify", "classify-agent", "stack-to-bundle-state", "gate-classify",
       "enrich", "context-verify", "architect",
-      "plan", "plan-review", "gate-plan",
-      "test-first", "git-stash", "implement", "git-diff", "pre-review", "review",
+      "plan", "plan-review-deep", "gate-plan",
+      "test-first", "git-stash", "implement", "git-diff", "pre-review", "review-deep",
       "adjudicate", "reconcile", "iterate", "sacred-tests",
       "final-checks", "test-verify", "gate-final", "finish-summary", "finalize",
     ],
@@ -905,7 +969,7 @@ export default defineBundle({
 
   hooks: [
     { name: "observe-implementer-output", event: "after-agent-result", filter: (ctx) => ctx.agent === "implementer", run: observeImplementerOutput, idempotent: true },
-    { name: "observe-review-fanout", event: "before-fanout", filter: (ctx) => ctx.stage === "review", run: observeReviewFanout, idempotent: true },
+    { name: "observe-review-fanout", event: "before-fanout", filter: (ctx) => ctx.stage === "review" || ctx.stage === "review-deep", run: observeReviewFanout, idempotent: true },
   ],
 
   invariants: codeBundleInvariants,

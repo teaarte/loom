@@ -55,6 +55,8 @@ import {
 import type { TransportResponse } from "@loomfsm/transport-types";
 
 import { createTransportAdapter } from "@loomfsm/driver";
+
+import { identifierOf, kernelErrorOrThrow, transportError } from "../lib/refusal.js";
 import type {
   RecoverTaskInput,
   RecoverTaskResponse,
@@ -116,7 +118,7 @@ export function createRecoverTool(
     const reentrant = REENTRANT.has(input.choice);
     if (reentrant && deps.resolveRegistry === undefined) {
       return {
-        response: errorResponse(
+        response: transportError(
           driverStateId,
           "REGISTRY_UNAVAILABLE",
           "no registry resolver is wired for the re-entrant recovery path",
@@ -125,11 +127,7 @@ export function createRecoverTool(
       };
     }
 
-    const identifier =
-      typeof input.client_identifier_unverified === "string" &&
-      input.client_identifier_unverified.length > 0
-        ? input.client_identifier_unverified
-        : "unknown";
+    const identifier = identifierOf(input);
 
     // 4. Owner check + recover + co-committed audit row, all in one tx. The
     //    cross-owner marker (if any) is verified and CONSUMED here, atomic
@@ -185,7 +183,7 @@ export function createRecoverTool(
         }
       } catch (err) {
         if (!(err instanceof KernelError)) throw err;
-        response = errorResponse(driverStateId, err.code, err.message);
+        response = transportError(driverStateId, err.code, err.message);
       }
     } else {
       response = await terminalResponse(input.project_dir, input.choice);
@@ -312,25 +310,9 @@ function refusal(
   driverStateId: string,
   recoveryId: string,
 ): RecoverTaskResponse {
-  if (err instanceof KernelError) {
-    return {
-      response: errorResponse(driverStateId, err.code, err.message),
-      recovery_id: recoveryId,
-    };
-  }
-  throw err;
-}
-
-function errorResponse(
-  driverStateId: string,
-  code: string,
-  message: string,
-): TransportResponse {
+  const ke = kernelErrorOrThrow(err);
   return {
-    status: "error",
-    driver_state_id: driverStateId,
-    code,
-    message,
-    recovery_options: [],
+    response: transportError(driverStateId, ke.code, ke.message),
+    recovery_id: recoveryId,
   };
 }

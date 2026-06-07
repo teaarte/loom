@@ -18,7 +18,6 @@
 import {
   assertProjectDirAllowed,
   captureNow,
-  KernelError,
   openDb,
   readLedgerRow,
   TransactionImpl,
@@ -27,6 +26,7 @@ import {
 import { deliverAndAdvance, ledgerKeysFor } from "@loomfsm/driver";
 import type { TransportResponse } from "@loomfsm/transport-types";
 
+import { identifierOf, refuseTransport, transportError } from "../lib/refusal.js";
 import type {
   ContinueTaskRequestInput,
   ContinueTaskResponse,
@@ -57,7 +57,7 @@ export function createContinueTaskTool(
     // 2. Variant refusals handled on this surface.
     if (input.input.type === "recovery") {
       return {
-        response: errorResponse(
+        response: transportError(
           driverStateId,
           "RECOVERY_VIA_CONTINUE_REFUSED",
           "recovery is delivered through the recovery primitive, not pipeline_continue_task",
@@ -66,7 +66,7 @@ export function createContinueTaskTool(
     }
     if (input.input.type === "agents-results" && input.input.partial === true) {
       return {
-        response: errorResponse(
+        response: transportError(
           driverStateId,
           "PARTIAL_FANOUT_REFUSED",
           "partial fanout delivery is not accepted on this surface",
@@ -82,7 +82,7 @@ export function createContinueTaskTool(
 
     if (deps.resolveRegistry === undefined) {
       return {
-        response: errorResponse(
+        response: transportError(
           driverStateId,
           "REGISTRY_UNAVAILABLE",
           "no registry resolver is wired for the active-task path",
@@ -91,11 +91,7 @@ export function createContinueTaskTool(
     }
     const registry = await deps.resolveRegistry(input.project_dir);
 
-    const identifier =
-      typeof input.client_identifier_unverified === "string" &&
-      input.client_identifier_unverified.length > 0
-        ? input.client_identifier_unverified
-        : "unknown";
+    const identifier = identifierOf(input);
 
     // 4. Delegate delivery + the next tick to the shared composition.
     try {
@@ -129,22 +125,5 @@ async function readCachedDelivery(
 }
 
 function refusal(err: unknown, driverStateId: string): ContinueTaskResponse {
-  if (err instanceof KernelError) {
-    return { response: errorResponse(driverStateId, err.code, err.message) };
-  }
-  throw err;
-}
-
-function errorResponse(
-  driverStateId: string,
-  code: string,
-  message: string,
-): TransportResponse {
-  return {
-    status: "error",
-    driver_state_id: driverStateId,
-    code,
-    message,
-    recovery_options: [],
-  };
+  return refuseTransport(err, driverStateId);
 }

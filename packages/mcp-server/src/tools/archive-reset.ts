@@ -17,9 +17,9 @@ import {
   archiveAndReset,
   assertProjectDirAllowed,
   captureNow,
-  KernelError,
 } from "@loomfsm/kernel";
 
+import { kernelErrorOrThrow } from "../lib/refusal.js";
 import type { ArchiveResetInput, ArchiveResetResponse, ToolHandler } from "../types.js";
 
 export interface ArchiveResetDeps {
@@ -62,14 +62,12 @@ export function createArchiveResetTool(
 }
 
 function refusal(err: unknown, ts: string): ArchiveResetResponse {
-  if (err instanceof KernelError) {
-    return {
-      archived: false,
-      task_id: null,
-      history_path: null,
-      ts,
-      error: { code: err.code, message: err.message },
-    };
-  }
-  throw err;
+  const ke = kernelErrorOrThrow(err);
+  return {
+    archived: false,
+    task_id: null,
+    history_path: null,
+    ts,
+    error: { code: ke.code, message: ke.message },
+  };
 }

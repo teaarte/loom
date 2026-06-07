@@ -17,10 +17,10 @@ import {
   assertProjectDirAllowed,
   captureNow,
   issueCrossOwnerMarker,
-  KernelError,
   withStateTransaction,
 } from "@loomfsm/kernel";
 
+import { kernelErrorOrThrow } from "../lib/refusal.js";
 import type {
   IssueCrossOwnerMarkerInput,
   IssueCrossOwnerMarkerResponse,
@@ -70,15 +70,13 @@ export function createIssueCrossOwnerMarkerTool(
 }
 
 function refusal(err: unknown): IssueCrossOwnerMarkerResponse {
-  if (err instanceof KernelError) {
-    return {
-      key_id: null,
-      hmac: null,
-      issued_at: null,
-      expires_at: null,
-      reason: null,
-      error: { code: err.code, message: err.message },
-    };
-  }
-  throw err;
+  const ke = kernelErrorOrThrow(err);
+  return {
+    key_id: null,
+    hmac: null,
+    issued_at: null,
+    expires_at: null,
+    reason: null,
+    error: { code: ke.code, message: ke.message },
+  };
 }

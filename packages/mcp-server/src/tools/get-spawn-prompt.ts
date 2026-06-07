@@ -20,11 +20,11 @@ import {
   buildPrompt,
   loadState,
   withReadTransaction,
-  KernelError,
   type Registry,
   type Transaction,
 } from "@loomfsm/kernel";
 
+import { kernelErrorOrThrow } from "../lib/refusal.js";
 import type {
   GetSpawnPromptInput,
   GetSpawnPromptResponse,
@@ -100,10 +100,8 @@ async function readPendingAgent(
 }
 
 function refusal(err: unknown): GetSpawnPromptResponse {
-  if (err instanceof KernelError) {
-    return errorResponse(err.code, err.message);
-  }
-  throw err;
+  const ke = kernelErrorOrThrow(err);
+  return errorResponse(ke.code, ke.message);
 }
 
 function errorResponse(code: string, message: string): GetSpawnPromptResponse {

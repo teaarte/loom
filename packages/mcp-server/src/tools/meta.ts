@@ -6,6 +6,7 @@
 import { openDb } from "@loomfsm/kernel";
 
 import { FLAG_TO_PRESET } from "../lib/parse-task-args.js";
+import { identifierOf } from "../lib/refusal.js";
 import type {
   MetaInput,
   PipelineMetaResponse,
@@ -60,11 +61,7 @@ export function createMetaTool(): ToolHandler<MetaInputWithProject, PipelineMeta
       protocol_version: PROTOCOL_VERSION,
       plugin_api_version: PLUGIN_API_VERSION,
       kernel_version: KERNEL_VERSION,
-      client_identifier_unverified:
-        typeof input.client_identifier_unverified === "string" &&
-        input.client_identifier_unverified.length > 0
-          ? input.client_identifier_unverified
-          : "unknown",
+      client_identifier_unverified: identifierOf(input),
       flag_vocabulary: Object.keys(FLAG_TO_PRESET),
       transports: {
         active: ACTIVE_TRANSPORT,

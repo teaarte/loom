@@ -60,6 +60,8 @@ import {
 } from "@loomfsm/kernel";
 import { createTransportAdapter, resumeDirective } from "@loomfsm/driver";
 import type { TransportResponse } from "@loomfsm/transport-types";
+
+import { refuseTransport, transportError } from "../lib/refusal.js";
 import type { ResumeInput, ResumeResponse, ToolHandler } from "../types.js";
 
 export interface ResumeDeps {
@@ -110,7 +112,7 @@ export function createResumeTool(
     }
     if (slot === null) {
       return {
-        response: errorResponse(
+        response: transportError(
           fallbackDriver,
           "NO_ACTIVE_TASK",
           "no active task in this project to resume",
@@ -132,7 +134,7 @@ export function createResumeTool(
     //    needs the registry to resolve providers / agents / the gate stage.
     if (deps.resolveRegistry === undefined) {
       return {
-        response: errorResponse(
+        response: transportError(
           driverStateId,
           "REGISTRY_UNAVAILABLE",
           "no registry resolver is wired for resume",
@@ -147,7 +149,7 @@ export function createResumeTool(
       response = adapter.shape(directive, { driver_state_id: driverStateId });
     } catch (err) {
       if (!(err instanceof KernelError)) throw err;
-      response = errorResponse(driverStateId, err.code, err.message);
+      response = transportError(driverStateId, err.code, err.message);
     }
 
     return { response };
@@ -178,22 +180,5 @@ async function readState(projectDir: string): Promise<PipelineState> {
 // Map a thrown KernelError into an error-shaped wire envelope; rethrow
 // anything that is not a kernel-coded refusal (programmer error).
 function refusal(err: unknown, driverStateId: string): ResumeResponse {
-  if (err instanceof KernelError) {
-    return { response: errorResponse(driverStateId, err.code, err.message) };
-  }
-  throw err;
-}
-
-function errorResponse(
-  driverStateId: string,
-  code: string,
-  message: string,
-): TransportResponse {
-  return {
-    status: "error",
-    driver_state_id: driverStateId,
-    code,
-    message,
-    recovery_options: [],
-  };
+  return refuseTransport(err, driverStateId);
 }

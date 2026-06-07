@@ -21,6 +21,7 @@ import {
   withStateTransaction,
 } from "@loomfsm/kernel";
 
+import { kernelErrorOrThrow } from "../lib/refusal.js";
 import type { BackupInput, BackupResponse, ToolHandler } from "../types.js";
 
 export interface BackupDeps {
@@ -82,13 +83,11 @@ async function resolveBackupPath(projectDir: string, to: string): Promise<string
 }
 
 function refusal(err: unknown, ts: string): BackupResponse {
-  if (err instanceof KernelError) {
-    return {
-      bytes_written: null,
-      ts,
-      backup_path: null,
-      error: { code: err.code, message: err.message },
-    };
-  }
-  throw err;
+  const ke = kernelErrorOrThrow(err);
+  return {
+    bytes_written: null,
+    ts,
+    backup_path: null,
+    error: { code: ke.code, message: ke.message },
+  };
 }

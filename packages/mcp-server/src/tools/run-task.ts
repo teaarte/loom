@@ -27,7 +27,6 @@ import {
   archiveStateDb,
   assertProjectDirAllowed,
   captureNow,
-  KernelError,
   openDb,
   peekArchiveSlot,
   readLedgerRow,
@@ -41,6 +40,7 @@ import { createAndStart } from "@loomfsm/driver";
 import type { TransportResponse } from "@loomfsm/transport-types";
 
 import { parseTaskArgs } from "../lib/parse-task-args.js";
+import { identifierOf, refuseTransport, transportError } from "../lib/refusal.js";
 import type { RunTaskInput, RunTaskResponse, ToolHandler } from "../types.js";
 
 export interface RunTaskDeps {
@@ -75,7 +75,7 @@ export function createRunTaskTool(
       input.client_idempotency_uuid.length === 0
     ) {
       return {
-        response: errorResponse(
+        response: transportError(
           UNKNOWN_DRIVER,
           "TASK_IDEMPOTENCY_REQUIRED",
           "client_idempotency_uuid is required on every pipeline_run_task call",
@@ -111,7 +111,7 @@ export function createRunTaskTool(
 
     if (deps.resolveRegistry === undefined) {
       return {
-        response: errorResponse(
+        response: transportError(
           UNKNOWN_DRIVER,
           "REGISTRY_UNAVAILABLE",
           "no registry resolver is wired for the active-task path",
@@ -131,11 +131,7 @@ export function createRunTaskTool(
       warnings = parsed.warnings;
     }
 
-    const identifier =
-      typeof input.client_identifier_unverified === "string" &&
-      input.client_identifier_unverified.length > 0
-        ? input.client_identifier_unverified
-        : "unknown";
+    const identifier = identifierOf(input);
 
     // 5. Delegate the atomic create + first tick to the shared composition.
     try {
@@ -217,22 +213,5 @@ function occupiedSlotRefusal(slot: SlotPeek): RunTaskResponse {
 // Map a thrown KernelError into an error-shaped wire envelope; rethrow
 // anything that is not a kernel-coded refusal (programmer error).
 function refusal(err: unknown): RunTaskResponse {
-  if (err instanceof KernelError) {
-    return { response: errorResponse(UNKNOWN_DRIVER, err.code, err.message) };
-  }
-  throw err;
-}
-
-function errorResponse(
-  driverStateId: string,
-  code: string,
-  message: string,
-): TransportResponse {
-  return {
-    status: "error",
-    driver_state_id: driverStateId,
-    code,
-    message,
-    recovery_options: [],
-  };
+  return refuseTransport(err, UNKNOWN_DRIVER);
 }

@@ -14,10 +14,14 @@ and verify it, rather than rubber-stamp or block on a guess. Do not reason your
 way to a verdict you could instead *observe*.
 
 ## What you are handed
-The spawn context carries the live blocking findings flagged as runtime claims
-(their `file` / `line_start` / `line_end`, `category`, and `summary`). Adjudicate
-each one. You also get the repo, the stack (`pnpm` and friends), and a sandbox
-to build and run in.
+You get the repo, the self-diff (`.loom/work/diff.txt` — what the implementer
+changed), the stack (`pnpm` and friends), and a sandbox to build and run in.
+
+> Per-finding delivery into this spawn — the specific blocking findings flagged as
+> runtime claims (their `file` / `line_start` / `line_end`, `category`, and
+> `summary`) — is not part of the spawn context today; injecting that run-state is
+> a separate capability the findings-injection work will add. The procedure below
+> is the intended flow for once those targets are delivered.
 
 ## Procedure (cheapest sufficient observation first)
 1. **Witness the claim.** Restate exactly what runtime behavior the finding

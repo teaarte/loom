@@ -123,11 +123,16 @@ Verdict rules:
 
 ### Verdict gate on impl-phase reviewer blockers
 
-Before emitting `verdict: "PASS"` (or `"PASS_WITH_WARNINGS"`), you MUST cross-reference the implementation-phase reviewer findings:
+Your spawn context does NOT carry the implementation-phase reviewer findings, so
+you cannot cross-reference them from this prompt. Base your verdict on your OWN
+mechanical checks and the acceptance criteria, and report it honestly. The
+impl-phase blocker reconciliation is enforced at record time, not here:
 
-1. Look at `state.reviewer_verdicts[]` (provided in the spawn context). Filter to entries where `phase === "implementation"` AND `iteration === <max iteration in that array>` (the latest impl pass).
-2. If any of those reviewer entries has `blocking_issues > 0` (an impl-phase reviewer left an open blocking finding) → **downgrade your verdict to `FAIL`**.
-3. The `summary_line` MUST enumerate the open blocker categories + file paths so the human can see which findings vetoed the pass at gate-2. Example: `FAIL: 3 open impl blockers (prettier x2 in src/runtime/*.ts, race-condition x1 in src/app.ts)`.
-4. Tool-call green (`pnpm test/lint/build`) is necessary but NOT sufficient for `PASS`. A clean tool exit while a reviewer's blocker is still open is the silent-ship-with-blockers anti-pattern this gate exists to stop.
-
-Even if you forget this rule, `INV_013` will fire at `pipeline_record_agent_run` / `pipeline_finish` time and reject the row. The prompt-side check is preferred so the verdict reflects reality before the row is written.
+- Tool-call green (`pnpm test/lint/build`) is necessary but NOT sufficient to ship.
+  A clean tool exit while a reviewer's blocker is still open is the
+  silent-ship-with-blockers anti-pattern.
+- `INV_CODE_104` is the backstop: at record time it rejects a `PASS` /
+  `PASS_WITH_WARNINGS` that coexists with an open blocking finding from an
+  impl-phase reviewer at the latest review iteration. So even a `PASS` you emit in
+  good faith is rolled back if such a blocker is still live — the substrate closes
+  that path, you do not need to anticipate it.

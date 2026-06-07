@@ -980,3 +980,27 @@ describe("@loomfsm/bundle-code — per-agent category vocab is inlined from the 
     }
   });
 });
+
+// ============================================================================
+// surgical context-loading — the analyzer and implementer prompts scope their
+// reads to the affected set + task targets instead of sweeping the tree. A
+// regression guard so the scoping guidance can't silently revert to a sweep.
+// ============================================================================
+
+describe("@loomfsm/bundle-code — analyzer/implementer prompts scope their reads", () => {
+  function body(file: string): string {
+    return readFileSync(join(PKG_ROOT, "agents", file), "utf8");
+  }
+
+  it("code-analyzer reads the affected set + task targets, not the whole tree", () => {
+    const b = body("code-analyzer.md");
+    assert.match(b, /affected set/i);
+    assert.match(b, /do not sweep the tree/i);
+  });
+
+  it("implementer reads the plan/context-doc targets, not the whole tree", () => {
+    const b = body("implementer.md");
+    assert.match(b, /Read scope \(surgical\)/);
+    assert.match(b, /don't re-sweep/i);
+  });
+});

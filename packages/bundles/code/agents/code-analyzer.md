@@ -19,7 +19,7 @@ Task description + list of affected/related files from Dependency Auditor (if av
 
 ## Process
 1. Read CLAUDE.md for project conventions
-2. Read all affected files and relevant similar code
+2. Read the affected set — the Dependency Auditor's affected/related files (if provided) and the files the task names as its targets — plus, only as far as needed to capture a convention, the few files directly similar to them. Do not sweep the tree: the affected set + task targets are the scope. If no affected set was provided, read the closest existing analogue to the task and stop there.
 3. Extract naming, structure, and pattern conventions actually used
 4. Identify reusable code the task should use (not recreate)
 5. Flag anti-patterns not to replicate

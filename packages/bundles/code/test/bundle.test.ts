@@ -639,6 +639,27 @@ describe("@loomfsm/bundle-code — review model scales with complexity", () => {
     assert.equal(resolveSpawnModel(registry, "logic-reviewer", "planning", state), "sonnet");
     assert.equal(resolveSpawnModel(registry, "logic-reviewer-deep", "planning", state), "opus");
   });
+
+  it("resolves the design-advisory architect to the balanced model, not premium", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, now);
+    const registry = await loadBundle({
+      bundle: codeBundle,
+      bundle_source_dir: PKG_ROOT,
+      project_dir: projectDir,
+      providers: [shuttleStub()],
+      now,
+    });
+    // The architect only advises (it writes architecture-decisions.md, never
+    // code) and is biased toward the smallest design — so it runs the balanced
+    // tier (sonnet). The planner + implementer that turn its advice into code
+    // stay premium (opus); this asserts the tier drop is surgical to the
+    // architect alone.
+    const state = makeClassifyState();
+    assert.equal(resolveSpawnModel(registry, "architect", "context", state), "sonnet");
+    assert.equal(resolveSpawnModel(registry, "planner", "planning", state), "opus");
+    assert.equal(resolveSpawnModel(registry, "implementer", "implementation", state), "opus");
+  });
 });
 
 // ============================================================================

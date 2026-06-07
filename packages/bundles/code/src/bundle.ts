@@ -602,7 +602,11 @@ export default defineBundle({
       name: "architect",
       template_path: "agents/architect.md",
       output_kind: "nonreview",
-      default_model: "premium",
+      // Design-advisory only: it writes architecture-decisions.md on a complex
+      // task and is biased toward the smallest design that fits — it never
+      // writes code. The balanced tier carries that judgement; the planner and
+      // implementer that turn the advice into code keep the premium tier.
+      default_model: "balanced",
       applies_to: (s) => decisionEquals(s, "complexity", "complex"),
     },
     // The always-relevant reviewers self-gate on `source_changed`: a doc-only

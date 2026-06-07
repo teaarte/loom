@@ -476,10 +476,12 @@ export async function watchTick(ctx: BotContext, chatId: number, chat: ChatState
     if (markTerminalAnnounced(chat, project, marker)) {
       persist(ctx);
       const trace = await ctx.loom.getTrace(project);
-      const summary = await ctx.loom.getArtifact(project, ".loom/work/summary.md");
+      // The completion summary rides in the trace (the bundle's
+      // `completion_summary`, surfaced via the read-model) — there is no
+      // summary.md artifact to read.
       await ctx.tg.sendMessage(
         chatId,
-        completionText(title, status, trace.ok ? trace.data : null, summary.ok ? summary.data.content : null, ctx.nowMs()),
+        completionText(title, status, trace.ok ? trace.data : null, null, ctx.nowMs()),
         { reply_markup: { inline_keyboard: shipKeyboard() } },
       );
     }

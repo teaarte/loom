@@ -92,6 +92,7 @@ Use test command from CLAUDE.md. If new test file, run just that file first, the
 - Tests must fail because logic is **missing** (NotImplementedException, null return), NOT because of syntax/import errors.
 - If tests error (won't compile) → fix skeleton/imports, re-run (max 2 iterations).
 - Report exact failure messages — Implementer uses these as targets.
+- **Write the sacred-test list.** Once the tests are RED, write the JSON array of the test files you created to `.loom/work/test-files-must-stay-green.json` (e.g. `["src/foo/foo.service.test.ts"]`). The Implementer reads this exact list and must keep every file in it GREEN and unmodified; the engine hashes the listed files to enforce it.
 
 **Test-After mode:**
 - If tests fail because of test code errors → fix and re-run (max 2 iterations).

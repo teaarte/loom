@@ -97,13 +97,16 @@ function setModel(rest: string[], env: CliEnv, home: string, roster: BundleRoste
   const resolved = resolveModelRef(ref, roster.default_model_tiers);
   env.out(`set ${roster.name}/${agent} → ${ref} (model ${resolved.model})`);
 
-  // Phase boundary notice: a non-Claude model is stored, but dispatch to a
-  // non-Claude backend is not wired yet — today's runs go through Claude Code.
+  // A non-Claude model under `auto` dispatches LIVE to its provider backend.
+  // Flag its prerequisites here so a misconfigured run fails loudly at set-time
+  // rather than mid-spawn: the provider credential, plus — for a file-editing
+  // agent — the work-agent harness CLI (opencode by default).
   const { family } = parseModelRef(ref);
   if (backend === AUTO_BACKEND && family !== undefined && family !== "anthropic") {
     env.err(
-      `loom models: note — '${ref}' targets a ${family} model; stored now, but runs ` +
-        `currently execute on Claude Code (per-backend dispatch arrives in a later phase).`,
+      `loom models: note — '${ref}' dispatches to the ${family} backend; ensure its ` +
+        `credential is configured (see 'loom secrets') and, for an editing agent, the ` +
+        `work-agent harness CLI (opencode) is installed.`,
     );
   }
   return 0;

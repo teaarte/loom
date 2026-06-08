@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/daemon",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "type": "module",
   "description": "Long-lived supervisor over loom's headless driver-loop — drives a project's task server-side, parks on a human gate and wakes on the answer, retries transient failures, recovers in-flight work on restart, and owns the worktree lifecycle.",
   "license": "Apache-2.0",

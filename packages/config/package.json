@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/config",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "type": "module",
   "description": "loom's persistent control layer — the global config + secrets + project catalog, and the one layered resolver every face (CLI today, server/UI later) reads. A leaf: it depends on nothing else in loom and learns no domain. Configure keys/models once; inherit them in every project.",
   "license": "Apache-2.0",

@@ -148,6 +148,14 @@ export interface DriveOptions {
   // Re-resume + re-execute budget for a failing executor before the loop
   // surfaces EXECUTOR_FAILED. Default 2.
   max_executor_retries?: number;
+  // HARD ceiling on the TOTAL number of agent spawns a single drive may run
+  // before it stops with DRIVE_SPAWN_CAP_EXCEEDED — a belt-and-suspenders
+  // spend guard ON TOP OF the per-stage iteration/replan budgets. Those bound
+  // each loop (review max 2-3 rounds → audit-only, replan max 3 → human), but
+  // nothing bounded the SUM across a whole drive, so a compounding revise loop
+  // (or a future flow bug) could quietly run up the bill. 0 / undefined → no
+  // cap (the budgets still apply). The transport supplies the value + default.
+  max_total_spawns?: number;
   signal?: AbortSignal;
 }
 
@@ -273,6 +281,9 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
 
   // ----- loop ------------------------------------------------------------
   let executorFailures = 0;
+  // Cumulative spawns this drive — checked against the optional hard cap below.
+  let totalSpawns = 0;
+  const spawnCap = opts.max_total_spawns ?? 0;
   for (;;) {
     if (opts.signal?.aborted) {
       return {
@@ -293,6 +304,22 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
           response.status === "spawn-agent"
             ? [response.agent_run_id]
             : response.spawns.map((s) => s.agent_run_id);
+        // Enforce the total-spawn ceiling BEFORE running the batch — a runaway
+        // revise loop (or a flow bug) stops here instead of running up the bill.
+        // The task stays in_progress (resumable): raise the cap or investigate.
+        totalSpawns += agentRunIds.length;
+        if (spawnCap > 0 && totalSpawns > spawnCap) {
+          return {
+            kind: "error",
+            driver_state_id: driverStateId,
+            code: "DRIVE_SPAWN_CAP_EXCEEDED",
+            message:
+              `drive hit the spawn cap (${spawnCap}) — likely a revise loop that is not ` +
+              `converging. The task is left in progress; investigate, or raise LOOM_MAX_SPAWNS ` +
+              `(0 disables the cap) and resume.`,
+            recovery_options: [],
+          };
+        }
         const intents = buildExecIntents(state, registry, agentRunIds);
         const cap = resolveConcurrencyCap(state, registry, opts.max_concurrent);
         const budgetMs = resolveSpawnBudgetMs(state, registry);

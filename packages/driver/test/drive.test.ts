@@ -295,6 +295,36 @@ describe("drive — happy path", () => {
       cleanup(dir);
     }
   });
+
+  it("stops at the total-spawn cap with DRIVE_SPAWN_CAP_EXCEEDED (spend guard)", async () => {
+    const dir = await freshProject();
+    try {
+      let ran = 0;
+      const executor: Executor = {
+        execute: async () => {
+          ran += 1;
+          return { agent_output: "" };
+        },
+      };
+      // spawnRegistry runs two sequential spawns (impl-1, impl-2); a cap of 1
+      // lets the first run, then trips on the second BEFORE executing it.
+      const outcome = await drive(dir, {
+        executor,
+        resolveRegistry: () => spawnRegistry(),
+        task: "do the work",
+        client_idempotency_uuid: "cidem-cap",
+        max_total_spawns: 1,
+      });
+      assert.equal(outcome.kind, "error");
+      if (outcome.kind === "error") assert.equal(outcome.code, "DRIVE_SPAWN_CAP_EXCEEDED");
+      assert.equal(ran, 1, "ran up to the cap then stopped");
+      // The cap is a stop, not a finish — the task stays resumable.
+      const state = await readState(dir);
+      assert.equal(state.status, "in_progress");
+    } finally {
+      cleanup(dir);
+    }
+  });
 });
 
 describe("drive — resolves an agent's model tier through the bundle's default_model_tiers", () => {

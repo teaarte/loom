@@ -98,6 +98,27 @@ export function resolveHarnessSpawnTimeouts(env: NodeJS.ProcessEnv): SpawnTimeou
   return out;
 }
 
+// Default HARD ceiling on the total agent spawns a single drive may run before
+// it stops with DRIVE_SPAWN_CAP_EXCEEDED. The per-stage iteration/replan budgets
+// already bound each loop (review 2-3 rounds → audit-only, replan 3 → human),
+// but nothing bounded the SUM across a whole drive — a non-converging revise loop
+// (a weak implementer that keeps drawing reviewer blockers) or a flow bug could
+// quietly run up the bill. A clean complex run is ~15-18 spawns, ~30-35 with the
+// full revise budget, so 40 leaves headroom for the legit worst case while
+// catching a runaway. Override with LOOM_MAX_SPAWNS; 0 disables the cap.
+export const DEFAULT_MAX_TOTAL_SPAWNS = 40;
+
+// Resolve the total-spawn cap: unset / blank / malformed → the default (so a
+// ceiling is always in force); an explicit 0 → no cap (opt-out); an explicit
+// positive integer → that value.
+export function resolveSpawnCap(env: NodeJS.ProcessEnv): number {
+  const raw = env["LOOM_MAX_SPAWNS"];
+  if (raw === undefined || raw.trim().length === 0) return DEFAULT_MAX_TOTAL_SPAWNS;
+  const n = Number(raw.trim());
+  if (!Number.isInteger(n) || n < 0) return DEFAULT_MAX_TOTAL_SPAWNS;
+  return n;
+}
+
 // Supervisor-level resilience knobs (daemon + serve).
 export interface SupervisionKnobs {
   rate_limit_wait_ms?: number;

@@ -34,7 +34,7 @@ import { effectiveEnv } from "../lib/config.js";
 import { containerModeFrom, formatUsage, resolveContainerPlan } from "../lib/container.js";
 import { buildDispatchExecutor, preflightDispatch } from "../lib/dispatch.js";
 import { claudeAvailable, dockerAvailableDefault } from "../lib/probes.js";
-import { resolveSpawnTimeouts } from "../lib/resilience.js";
+import { resolveSpawnCap, resolveSpawnTimeouts } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
 // The complexity levels the operator may pin via `--complexity` (skips the
@@ -200,6 +200,9 @@ export async function runTask(
     // replacement task would refuse with "no enabled bundle".
     resolveRegistry,
     task,
+    // Hard total-spawn ceiling (LOOM_MAX_SPAWNS, default 40; 0 disables) so a
+    // non-converging revise loop stops before it runs up the bill.
+    max_total_spawns: resolveSpawnCap(cfgEnv),
     ...(policy_preset !== undefined ? { policy_preset } : {}),
     ...(replaceFlag ? { on_active_task: "archive" as const } : {}),
     // Pin the complexity (skip the classifier) when the operator asked. The

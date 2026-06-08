@@ -9,9 +9,11 @@ import { describe, it } from "node:test";
 
 import {
   DEFAULT_HARNESS_SPAWN_SESSION_TIMEOUT_MS,
+  DEFAULT_MAX_TOTAL_SPAWNS,
   DEFAULT_SPAWN_SESSION_TIMEOUT_MS,
   parseDurationMs,
   resolveHarnessSpawnTimeouts,
+  resolveSpawnCap,
   resolveSpawnTimeouts,
 } from "../src/lib/resilience.js";
 
@@ -95,5 +97,22 @@ describe("resolveHarnessSpawnTimeouts — shorter default for non-CC harnesses",
       resolveHarnessSpawnTimeouts({ LOOM_SPAWN_IDLE_TIMEOUT_MS: "30s" }).idle_timeout_ms,
       30_000,
     );
+  });
+});
+
+describe("resolveSpawnCap — hard total-spawn ceiling", () => {
+  it("defaults to the ceiling when unset/blank/malformed", () => {
+    assert.equal(resolveSpawnCap({}), DEFAULT_MAX_TOTAL_SPAWNS);
+    assert.equal(resolveSpawnCap({ LOOM_MAX_SPAWNS: "  " }), DEFAULT_MAX_TOTAL_SPAWNS);
+    assert.equal(resolveSpawnCap({ LOOM_MAX_SPAWNS: "lots" }), DEFAULT_MAX_TOTAL_SPAWNS);
+    assert.equal(resolveSpawnCap({ LOOM_MAX_SPAWNS: "-3" }), DEFAULT_MAX_TOTAL_SPAWNS);
+  });
+
+  it("honors an explicit positive integer", () => {
+    assert.equal(resolveSpawnCap({ LOOM_MAX_SPAWNS: "12" }), 12);
+  });
+
+  it("an explicit 0 disables the cap (opt-out)", () => {
+    assert.equal(resolveSpawnCap({ LOOM_MAX_SPAWNS: "0" }), 0);
   });
 });

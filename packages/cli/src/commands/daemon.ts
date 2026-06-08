@@ -35,7 +35,7 @@ import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../
 import { buildDispatchExecutor, preflightDispatch } from "../lib/dispatch.js";
 import { resolveNotifier } from "../lib/notify.js";
 import { claudeAvailable, dockerAvailableDefault } from "../lib/probes.js";
-import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
+import { resolveSpawnCap, resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
 type CompleteOutcome = Extract<DriveOutcome, { kind: "complete" }>;
@@ -184,6 +184,10 @@ async function start(argv: string[], env: CliEnv, overrides: DaemonOverrides): P
     resolveRegistry,
     ...(task.length > 0 ? { task } : {}),
     ...(factory.mergeBack !== undefined ? { mergeBack: factory.mergeBack } : {}),
+    // Hard total-spawn ceiling (LOOM_MAX_SPAWNS, default 40; 0 disables) — the
+    // same spend guard as `loom run`, so an unattended daemon run can't run up
+    // the bill on a non-converging revise loop.
+    max_total_spawns: resolveSpawnCap(cfgEnv),
     ...resolveSupervisionKnobs(cfgEnv),
     logger,
     notifier,

@@ -490,7 +490,12 @@ async function gatePlanResume(
       directive: { task_id: state.task_id, verdict: "rejected", summary: "plan abandoned at gate-plan" },
     };
   }
-  return { type: "walk_back_to", step: "plan", reason: "plan rejected — revising" };
+  // Walk back to the planner stage THIS flow uses: the complex flow runs the
+  // premium `plan-deep`, every other flow the balanced `plan`. The substrate
+  // validates the target is in the active flow (WALK_BACK_TARGET_NOT_FOUND), so a
+  // mismatch fails loudly rather than silently mis-routing the revise.
+  const planStep = decisionEquals(state, "complexity", "complex") ? "plan-deep" : "plan";
+  return { type: "walk_back_to", step: planStep, reason: "plan rejected — revising" };
 }
 
 function gateFinalMsg(state: BundleStateView): string {
@@ -610,7 +615,14 @@ export default defineBundle({
 
   agents: [
     { name: "classifier", template_path: "agents/classifier.md", output_kind: "classifier", default_model: "balanced" },
-    { name: "planner", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "premium" },
+    // Planning tier scales with complexity, same split as the reviewers: the
+    // balanced `planner` carries simple/medium (dogfood showed a sonnet plan on
+    // par with — sometimes sharper than — opus, at ~1/4 the cost), while the
+    // premium `planner-deep` runs ONLY the complex flow, where the blast radius
+    // earns the deeper model. Same template; the flow selects the tier (a static
+    // default_model can't be tier-by-complexity — one agent name would span both).
+    { name: "planner", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "balanced" },
+    { name: "planner-deep", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "premium" },
     { name: "implementer", template_path: "agents/implementer.md", output_kind: "nonreview", default_model: "premium" },
     { name: "code-analyzer", template_path: "agents/code-analyzer.md", output_kind: "nonreview", default_model: "balanced" },
     {
@@ -789,6 +801,8 @@ export default defineBundle({
     "context-verify": { kind: "spawn", name: "context-verify", phase: "context", agent: "context-doc-verifier" },
     architect: { kind: "spawn", name: "architect", phase: "context", agent: "architect" },
     plan: { kind: "spawn", name: "plan", phase: "planning", agent: "planner" },
+    // Premium-tier planner for the complex flow only (same template as `plan`).
+    "plan-deep": { kind: "spawn", name: "plan-deep", phase: "planning", agent: "planner-deep" },
     "plan-grounding": { kind: "spawn", name: "plan-grounding", phase: "planning", agent: "plan-grounding-check" },
     "plan-review": {
       kind: "fanout",
@@ -979,7 +993,7 @@ export default defineBundle({
     complex: [
       "initialize", "classify", "classify-agent", "stack-to-bundle-state", "gate-classify",
       "enrich", "context-verify", "architect",
-      "plan", "plan-review-deep", "gate-plan",
+      "plan-deep", "plan-review-deep", "gate-plan",
       "test-first", "git-stash", "implement", "git-diff", "pre-review", "review-deep",
       "adjudicate", "reconcile", "iterate", "sacred-tests",
       "final-checks", "test-verify", "gate-final", "finish-summary", "finalize",

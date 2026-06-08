@@ -21,6 +21,7 @@ import type {
   NowToken,
   PipelineState,
   StageContext,
+  UserAnswer,
 } from "@loomfsm/kernel";
 
 import codeBundle from "../src/bundle.js";
@@ -91,13 +92,13 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
       now,
     });
 
-    // 24 canonical agents: the prior 22, plus the two premium `-deep` reviewer
-    // variants (logic-reviewer-deep / challenger-reviewer-deep) the complex flow
-    // uses. The prompt map keys by agent NAME, so the two variants that reuse a
-    // base template still get their own entry.
-    assert.equal(registry.agents.size, 24);
+    // 25 canonical agents: the prior 22, the two premium `-deep` reviewer
+    // variants (logic-reviewer-deep / challenger-reviewer-deep), plus the premium
+    // `planner-deep` the complex flow uses. The prompt map keys by agent NAME, so
+    // the variants that reuse a base template still get their own entry.
+    assert.equal(registry.agents.size, 25);
     // Every agent's `.md` is read off disk into the prompt map at load.
-    assert.equal(registry.prompts?.size, 24);
+    assert.equal(registry.prompts?.size, 25);
     assert.ok((registry.prompts?.get("classifier")?.body.length ?? 0) > 0);
     assert.equal(registry.flows.size, 4);
     assert.deepEqual(
@@ -282,8 +283,8 @@ describe("@loomfsm/bundle-code — agent templates", () => {
     }
   });
 
-  it("declares exactly the 24 canonical agents", () => {
-    assert.equal(codeBundle.agents.length, 24);
+  it("declares exactly the 25 canonical agents", () => {
+    assert.equal(codeBundle.agents.length, 25);
     const names = codeBundle.agents.map((a) => a.name).sort();
     // The three CC-harness trigger agents are NOT bundle agents.
     for (const excluded of ["fe-test-all-agent", "runtime-debug-agent", "test-all-agent"]) {
@@ -652,13 +653,40 @@ describe("@loomfsm/bundle-code — review model scales with complexity", () => {
     });
     // The architect only advises (it writes architecture-decisions.md, never
     // code) and is biased toward the smallest design — so it runs the balanced
-    // tier (sonnet). The planner + implementer that turn its advice into code
-    // stay premium (opus); this asserts the tier drop is surgical to the
-    // architect alone.
+    // tier (sonnet). Planning tier scales with complexity: the base `planner`
+    // (simple/medium) is balanced (sonnet); only the complex flow's `planner-deep`
+    // is premium (opus). The implementer that turns the plan into code stays
+    // premium (opus).
     const state = makeClassifyState();
     assert.equal(resolveSpawnModel(registry, "architect", "context", state), "sonnet");
-    assert.equal(resolveSpawnModel(registry, "planner", "planning", state), "opus");
+    assert.equal(resolveSpawnModel(registry, "planner", "planning", state), "sonnet");
+    assert.equal(resolveSpawnModel(registry, "planner-deep", "planning", state), "opus");
     assert.equal(resolveSpawnModel(registry, "implementer", "implementation", state), "opus");
+  });
+
+  it("gate-plan revise walks back to the flow's planner stage (plan-deep for complex, plan otherwise)", async () => {
+    const stage = codeBundle.stages["gate-plan"];
+    assert.ok(stage?.kind === "gate" && stage.on_resume !== undefined, "gate-plan has an on_resume");
+    const onResume = stage.on_resume;
+    const view = (complexity: string): BundleStateView =>
+      ({ decisions: { complexity }, task_id: "t-1" }) as unknown as BundleStateView;
+    const revise = { decision: "reject", reject_intent: "revise" } as unknown as UserAnswer;
+    const ctx = {} as unknown as StageContext;
+
+    const complexRes = await onResume(view("complex"), revise, ctx);
+    assert.equal(complexRes.type, "walk_back_to");
+    if (complexRes.type === "walk_back_to") assert.equal(complexRes.step, "plan-deep");
+
+    for (const c of ["simple", "medium"]) {
+      const res = await onResume(view(c), revise, ctx);
+      assert.equal(res.type, "walk_back_to");
+      if (res.type === "walk_back_to") assert.equal(res.step, "plan", `${c} → plan`);
+    }
+    // The walk-back targets must actually be in the flows they serve, or the
+    // substrate's WALK_BACK_TARGET_NOT_FOUND guard would reject the revise.
+    assert.ok(codeBundle.flows["complex"]?.includes("plan-deep"));
+    assert.ok(codeBundle.flows["medium"]?.includes("plan"));
+    assert.ok(codeBundle.flows["simple"]?.includes("plan"));
   });
 });
 

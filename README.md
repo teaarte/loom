@@ -37,11 +37,12 @@ It's for **high-stakes, multi-step, review-gated work where being wrong is expen
 throwaway prompts. Think *"Temporal for LLM agents"*, with human-in-the-loop, structured
 review, and provable safety as first-class primitives.
 
-It runs **four ways**, all driving the *identical* state machine, gates, and invariants:
+It runs **five ways**, all driving the *identical* state machine, gates, and invariants:
 
 | | mode | when to use |
 |---|---|---|
 | 🖥️ | **Web dashboard** — `loom up` | a browser console for the whole fleet — submit, watch, approve, configure |
+| 📱 | **Telegram bot** — `loom bot telegram` | drive the fleet from your phone — submit, approve gates, ship — over a chat |
 | 💬 | **Inside your agent host** — `/task …` | zero setup; runs through Claude Code, no API key |
 | ⚡ | **Headless one-shot** — `loom run "…"` | drive one task to the end from a terminal |
 | 🤖 | **Autonomous daemon** — `loom daemon` | set-and-forget; parks on your gates, wakes when you answer |
@@ -70,7 +71,7 @@ loom allowlist add    # authorize the current project (once per project; default
 
 then, in that project: `/task add rate limiting to the login endpoint`.
 
-State lives at `<project>/.claude/state.db` — a plain SQLite file you own. `loom setup` is
+State lives at `<project>/.loom/state.db` — a plain SQLite file you own. `loom setup` is
 idempotent and never overwrites a command you've edited.
 
 ## Running loom
@@ -93,11 +94,12 @@ loom up --token "$(openssl rand -hex 16)"  # require a bearer token on the API
 From the dashboard you can:
 
 - **browse projects** and their live status — running, parked at a gate, or stalled — with total elapsed time;
-- **submit a task**, choose its policy, **flag it ⚡ fast** for a single-pass run (or pick a complexity), and optionally **run it in Docker** (see [Container isolation](#container-isolation));
-- **pause / resume / cancel** — pause stops spending but keeps progress; resume re-drives from where it left off; cancel frees the slot;
-- **answer a gate** (accept / reject / auto-apply) and **tail a human-readable live log** over SSE, with tokens / turns / cache as the cost signal;
-- **inspect the agent chain** — each run with its model, tokens, and duration, drilling into the findings / verdicts it produced and the documents it wrote — for the live task and for any **finished task** in history;
-- **configure once** — global config, secrets (write-only, masked), and the per-agent model map, through forms generated from the config schema.
+- **add a project** by browsing to its folder in an in-app picker (works for a brand-new empty directory), or by path; it's named by its folder, not its full path;
+- **submit a task**, choose its policy, **flag it ⚡ fast** for a single-pass run (or pick a complexity), optionally **run it in Docker** (see [Container isolation](#container-isolation)), and pre-arm **push / squash-merge on accept**;
+- **pause / resume / cancel** — pause stops spending but keeps progress; resume re-drives from where it left off; cancel frees the slot — then **push or squash-merge** a finished task on demand;
+- **answer a gate** (accept / reject / auto-apply) — reading the exact spawn output you're approving — and **tail a collapsible live log** over SSE, with tokens / turns / cache as the cost signal;
+- **inspect the agent chain** — a horizontal timeline of runs, each with its model, tokens, and duration; click one to read its **prompt + output** and the findings / verdicts it produced — for the live task and for any **finished task** in history;
+- **configure once** — tabbed settings for global config, secrets (write-only, masked), the per-agent model map, and **provider keys managed per backend**, through forms generated from the config schema.
 
 The server binds loopback by default. Pass `--token` (or set `LOOM_SERVER_TOKEN`) to require
 `Authorization: Bearer …` on every API call. This is a localhost operator console, not a
@@ -105,6 +107,24 @@ multi-tenant service.
 
 `loom serve` is the same control plane without a browser — for a remote box or an always-on
 supervisor (`loom serve --project ./svc --token "$TOKEN"`; `loom serve status | stop`).
+
+### Telegram bot — `loom bot telegram`
+
+Drive the fleet from your phone. The bot is a thin client of the control plane
+(`loom up` / `loom serve`): pick a project, submit a task, **approve or answer gates with
+inline buttons**, read the plan and live status on a tap, and **push / squash-merge** a
+finished task — all from a chat.
+
+```bash
+export LOOM_TG_BOT_TOKEN="<token from @BotFather>"
+export LOOM_TG_ALLOWED_USERS="<your Telegram user id>"   # comma-separated; default-deny
+loom bot telegram                                         # needs a control plane running (loom up / loom serve)
+```
+
+It is **outbound-only** (long-poll, no webhook), so the control plane stays loopback-bound —
+there is no inbound port to open. The one auth surface is the user-id allowlist: the bot can
+launch agents on your repos, so an un-listed sender is refused (message the bot once and it
+replies with your id). Point it at a remote plane with `LOOM_SERVER_URL` / `LOOM_SERVER_TOKEN`.
 
 ### Inside your agent host — `/task`
 
@@ -181,6 +201,7 @@ loom serve stop | status
 loom run "<task>" [--docker|--no-docker]                        drive one task to the end (headless)
 loom daemon start [--watch] [--detach] [--docker] ["<task>"]    supervise a project: park/wake, retry, recover
 loom daemon stop | status [path]
+loom bot telegram                                               drive the fleet from a Telegram chat (needs a running plane)
 
 # configure once (global; every project inherits it)
 loom config get [key] | set <key> <value>                       backend mode + notify / resilience defaults
@@ -191,7 +212,7 @@ loom projects add [path] [--label <l>] | list | remove <id>     the catalog of p
 # host setup & project lifecycle
 loom setup [--user|--project] [--dry-run] [--force]             register the MCP server + /task,/done,/resume
 loom allowlist add [path] [--dry-run] | list                    authorize a project directory (default-deny)
-loom init [--dry-run]                                           ensure .claude/ + authorize this project
+loom init [--dry-run]                                           ensure .loom/ + authorize this project
 loom status  [path]                                             read-only snapshot of the task (flags a stall)
 loom reset   [path] [--force] [--dry-run]                       archive a finished task, free the slot
 loom history [path]                                             list this project's archived tasks
@@ -212,6 +233,8 @@ loom models list                                                 # each agent's 
 
 - **`auto`** prefers the Claude Code CLI (your subscription, no key) and falls back to a
   configured provider — **OpenRouter**, **Ollama** (local), or **Anthropic**.
+- Each agent can declare a **fallback chain** — try your subscription first, fall back to a
+  provider on a rate limit or a hard failure — so a long run doesn't stall on one backend.
 - Decision agents (classify, review) run as a single model call; a **file-editing** agent runs
   through an agentic-CLI harness — **Aider** or **opencode** — behind the same isolated-worktree
   seam as `claude -p`, so an implementer can run on DeepSeek or a local Ollama model and actually
@@ -265,7 +288,7 @@ never changes for a new domain.
 
 ## Packages
 
-Install **`@loomfsm/pipeline`** — the meta-package that pulls the runtime (kernel, driver,
+Install **`@loomfsm/pipeline`** — the meta-package that pulls the runtime (kernel, loader, driver,
 daemon, server, dashboard, mcp-server, cli, the `code` bundle, and the zero-config provider).
 The `anthropic-sdk` / `openrouter` / `ollama` providers install on demand, so the base stays
 lean.
@@ -274,9 +297,10 @@ lean.
 packages/
   kernel/      generic FSM, invariants, ledger, gate-policy, types — no vendor names
   config/      configure-once control layer — keys, per-agent model map, project catalog
+  loader/      build-time assembly of the bundle / provider / extension registry
   driver/      orchestration runtime — drive() loop, Executor seam, backend executors
   daemon/      long-lived supervisor over drive() — park/wake, retry, recovery, merge-back
-  server/      HTTP control plane — submit / read-model / answer / SSE, multi-project
+  server/      HTTP control plane — submit / read-model / answer / SSE, multi-project; Telegram bot intake
   dashboard/   React web control plane (SPA), served as prebuilt static assets by the server
   mcp-server/  MCP transport (stdio); the /task, /done, /resume commands
   cli/         the `loom` binary
@@ -294,8 +318,8 @@ packages/
 
 ## Status
 
-**`v0.3.x` (current)** — configure once, any model, drive it from a browser, and run without
-Claude:
+**`v0.3.x` (current)** — configure once, any model, drive it from a browser or your phone, and
+run without Claude:
 
 - **0.3.0** — the configure-once control layer (`loom config / secrets / models`), per-spawn
   multi-backend resolution (`auto`, else OpenRouter / Ollama / Anthropic), non-Claude
@@ -305,6 +329,15 @@ Claude:
 - **0.3.2** — observability: the per-task **agent-chain view** (model, tokens, derived
   duration, findings / verdicts, the documents each run wrote) and an **archived-task browser**
   that reopens any finished task in the same view.
+- **0.3.3** — pipeline hardening: a finished task finalizes and frees its slot cleanly, a
+  permanent provider error (a bad model id, a missing credential) parks instead of retry-looping,
+  and each task starts from a clean sandbox.
+- **0.3.4** — models, observability, and remote control: per-agent **model fallback chains**,
+  real cost from every backend, a per-spawn **transcript** you can read at the gate, **push /
+  squash-merge** a finished task on demand, the **Telegram remote-control bot**, and a rebuilt
+  dashboard (tabbed settings, an in-app folder picker, provider-key management, a horizontal
+  agent chain). loom's per-project state moved to `<project>/.loom/` — existing `.claude/` state
+  is migrated automatically.
 
 Earlier: the HTTP control plane, container isolation, and unattended hardening in `0.2.1`;
 headless `loom run` + the `loom daemon` in `0.2.0`; the interactive kernel + `code` bundle +

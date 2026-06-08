@@ -20,6 +20,10 @@ function label(t: HistoryTask): string {
 
 function verdictLabel(t: HistoryTask): string {
   if (t.verdict !== null) return t.verdict;
+  // A task archived while still in_progress (no verdict) was discarded via a
+  // force-reset — show that rather than the frozen "in_progress", which reads
+  // as if it were still running.
+  if (t.status === "in_progress") return "discarded";
   if (t.status !== null) return t.status;
   return "archived";
 }

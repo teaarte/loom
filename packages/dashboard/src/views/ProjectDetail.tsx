@@ -16,6 +16,7 @@ import {
   Select,
   Spoiler,
   Stack,
+  Tabs,
   Text,
   Textarea,
   TextInput,
@@ -119,59 +120,69 @@ export function ProjectDetail({
         )}
       </div>
 
-      {status?.task && status.task.length > 0 && (
-        <Paper withBorder radius="md" p="xs" bg="var(--mantine-color-default)">
-          <Text size="xs" c="dimmed" mb={4}>
-            task
-          </Text>
-          <Spoiler maxHeight={72} showLabel="show full task" hideLabel="hide">
-            <Text size="sm" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-              {status.task}
-            </Text>
-          </Spoiler>
-        </Paper>
-      )}
+      <Tabs defaultValue="task">
+        <Tabs.List>
+          <Tabs.Tab value="task">task</Tabs.Tab>
+          <Tabs.Tab value="archive">archive</Tabs.Tab>
+        </Tabs.List>
 
-      <TaskControls projectId={projectId} status={status} supervised={supervised} />
+        <Tabs.Panel value="task" pt="sm">
+          <Stack gap="sm">
+            {status?.task && status.task.length > 0 && (
+              <Paper withBorder radius="md" p="xs" bg="var(--mantine-color-default)">
+                <Text size="xs" c="dimmed" mb={4}>
+                  task
+                </Text>
+                <Spoiler maxHeight={72} showLabel="show full task" hideLabel="hide">
+                  <Text size="sm" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    {status.task}
+                  </Text>
+                </Spoiler>
+              </Paper>
+            )}
 
-      {status?.parked_gate && <AnswerForm projectId={projectId} gate={status.parked_gate} />}
+            <TaskControls projectId={projectId} status={status} supervised={supervised} />
 
-      {status && status.pending_agents.length > 0 && (
-        <Paper withBorder radius="md" p="xs" className={cx(status.stalled && styles.stalledBox)}>
-          <Text size="sm">
-            {status.pending_agents.length} pending
-            {status.stalled ? " · stalled (likely dropped transport)" : ""}
-          </Text>
-          {status.pending_agents.map((p) => (
-            <Text key={`${p.agent}:${p.phase}`} size="xs" c="dimmed">
-              {p.agent} · {p.phase} · {Math.round(p.age_ms / 1000)}s
-            </Text>
-          ))}
-        </Paper>
-      )}
+            {status?.parked_gate && <AnswerForm projectId={projectId} gate={status.parked_gate} />}
 
-      {!activeTask && (
-        <SubmitForm
-          projectId={projectId}
-          {...(providers?.docker !== undefined ? { docker: providers.docker } : {})}
-        />
-      )}
+            {status && status.pending_agents.length > 0 && (
+              <Paper withBorder radius="md" p="xs" className={cx(status.stalled && styles.stalledBox)}>
+                <Text size="sm">
+                  {status.pending_agents.length} pending
+                  {status.stalled ? " · stalled (likely dropped transport)" : ""}
+                </Text>
+                {status.pending_agents.map((p) => (
+                  <Text key={`${p.agent}:${p.phase}`} size="xs" c="dimmed">
+                    {p.agent} · {p.phase} · {Math.round(p.age_ms / 1000)}s
+                  </Text>
+                ))}
+              </Paper>
+            )}
 
-      <LogPanel log={snapshot?.log ?? null} connected={connected} />
+            {!activeTask && (
+              <SubmitForm
+                projectId={projectId}
+                {...(providers?.docker !== undefined ? { docker: providers.docker } : {})}
+              />
+            )}
 
-      <section>
-        <Title order={4} mb="xs">
-          chain
-        </Title>
-        <Trace projectId={projectId} />
-      </section>
+            <section>
+              <Title order={4} mb="xs">
+                chain
+              </Title>
+              <Trace projectId={projectId} />
+            </section>
 
-      <section>
-        <Title order={4} mb="xs">
-          history
-        </Title>
-        <History projectId={projectId} />
-      </section>
+            {/* The log lives UNDER the chain and is collapsed by default — the chain
+                is the primary read; the log is the drill-down. */}
+            <LogPanel log={snapshot?.log ?? null} connected={connected} />
+          </Stack>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="archive" pt="sm">
+          <History projectId={projectId} />
+        </Tabs.Panel>
+      </Tabs>
 
       <Text size="sm" c="dimmed">
         Models for this project's bundle are edited in{" "}
@@ -187,8 +198,9 @@ export function ProjectDetail({
 // The complexity selector values, sent as the generic `initial_decisions
 // .complexity` create arg. "" = auto (let the bundle decide — the default). The
 // rest PIN the complexity, which a bundle may honour to skip re-deciding it.
-// "trivial" is the fast-task path: the leanest flow the bundle offers. The
-// dashboard names no agent/flow — it forwards a value the bundle interprets.
+// "trivial" is the leanest flow the bundle offers (the former ⚡ fast-task path;
+// it is just complexity=trivial, so the dropdown subsumes a separate toggle).
+// The dashboard names no agent/flow — it forwards a value the bundle interprets.
 const COMPLEXITY_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "auto (classify)" },
   { value: "trivial", label: "trivial (fast)" },
@@ -197,27 +209,34 @@ const COMPLEXITY_OPTIONS: { value: string; label: string }[] = [
   { value: "complex", label: "complex" },
 ];
 
+// Plain-language hint for the Docker-off state: the server reports the raw
+// `--docker requires container isolation, but <why>` (a CLI-flag message); strip
+// that prefix so the dashboard shows just the actionable cause.
+function dockerHint(reason?: string): string {
+  const r = reason ?? "Docker is not set up";
+  return r.replace(/^--docker requires container isolation, but\s*/i, "");
+}
+
 function SubmitForm({ projectId, docker }: { projectId: string; docker?: { available: boolean; reason?: string } }) {
+  const dockerAvailable = docker?.available === true;
   const [task, setTask] = useState("");
   const [policy, setPolicy] = useState("");
-  const [fast, setFast] = useState(false);
   const [complexity, setComplexity] = useState("");
-  const [useDocker, setUseDocker] = useState(false);
+  // Default ON when Docker isolation is actually usable (daemon + image + cred),
+  // so an equipped project runs in a container by default; falls back to the
+  // host worktree (and the box is disabled) when it is not — "Docker if present,
+  // else without", no manual ticking.
+  const [useDocker, setUseDocker] = useState(() => dockerAvailable);
   const [pushOnAccept, setPushOnAccept] = useState(false);
   const [mergeOnAccept, setMergeOnAccept] = useState(false);
   const { busy, msg, submit } = useSubmitTask(projectId);
-
-  // Fast-task is the trivial flow — it pins complexity=trivial, so it wins over
-  // (and disables) the complexity dropdown.
-  const effectiveComplexity = fast ? "trivial" : complexity;
-  const dockerAvailable = docker?.available === true;
 
   const onSubmit = (): void => {
     // Keep the textarea so the operator can re-read / re-submit what they asked.
     void submit({
       task,
       policy,
-      complexity: effectiveComplexity,
+      complexity,
       docker: useDocker && dockerAvailable,
       push: pushOnAccept,
       squashMerge: mergeOnAccept,
@@ -250,33 +269,27 @@ function SubmitForm({ projectId, docker }: { projectId: string; docker?: { avail
             label="complexity"
             size="xs"
             allowDeselect={false}
-            disabled={fast}
             data={COMPLEXITY_OPTIONS}
             value={complexity}
             onChange={(v) => setComplexity(v ?? "")}
             w={180}
           />
         </Group>
-        <Group gap="lg" wrap="wrap">
-          <Checkbox
-            label="⚡ fast task"
-            checked={fast}
-            onChange={(e) => setFast(e.currentTarget.checked)}
-          />
-          {docker !== undefined && (
+        {docker !== undefined && (
+          <Group gap="sm" wrap="wrap" align="center">
             <Checkbox
-              label="run in Docker"
+              label="run in Docker (isolated)"
               checked={useDocker && dockerAvailable}
               disabled={!dockerAvailable}
               onChange={(e) => setUseDocker(e.currentTarget.checked)}
             />
-          )}
-          {docker !== undefined && !dockerAvailable && (
-            <Text size="xs" c="dimmed">
-              Docker unavailable{docker.reason ? ` — ${docker.reason}` : ""}
-            </Text>
-          )}
-        </Group>
+            {!dockerAvailable && (
+              <Text size="xs" c="dimmed">
+                off — {dockerHint(docker.reason)}
+              </Text>
+            )}
+          </Group>
+        )}
         <Group gap="lg" wrap="wrap">
           <Checkbox
             label="push branch on accept"
@@ -485,7 +498,7 @@ function ApprovalPreview({ projectId }: { projectId: string }) {
 // section stays compact while a long task runs; expanded it shows the token
 // economy line + the bounded tail.
 function LogPanel({ log, connected }: { log: LogLine[] | null; connected: boolean }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const lastLine = log !== null && log.length > 0 ? logParts(log[log.length - 1] as LogLine) : null;
 
   return (

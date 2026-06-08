@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/loader",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "type": "module",
   "description": "loom's build-time assembly layer — discovers and reconciles extensions, validates a bundle's declarative shape, and assembles the Registry the kernel ticks. Runs once at start-up, off the replay hot path; the kernel needs none of it to tick.",
   "license": "Apache-2.0",

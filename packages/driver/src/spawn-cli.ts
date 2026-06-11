@@ -72,6 +72,12 @@ export interface SpawnCaptureOptions {
   // Child environment (the container backend passes the OAuth token here so it
   // is forwarded by `-e NAME` and never lands on the command line).
   env?: NodeJS.ProcessEnv;
+  // Text to feed the child on stdin, then close it. Used to keep a large/secret
+  // prompt OFF argv (where `ps aux` would expose it): the claude backend pipes
+  // the prompt here instead of as a positional. Omitted → stdin is `ignore`
+  // (immediate EOF), the posture every other backend needs (opencode wedges on
+  // an open, never-written stdin).
+  stdin?: string;
   signal?: AbortSignal;
   // Kill the child if the whole run exceeds this wall-time → reject
   // EXECUTOR_TIMEOUT (transient). Omitted → no session cap.
@@ -111,17 +117,25 @@ export interface SpawnCaptureResult {
 export function spawnCapture(opts: SpawnCaptureOptions): Promise<SpawnCaptureResult> {
   return new Promise<SpawnCaptureResult>((resolveRun, reject) => {
     const child = spawn(opts.bin, opts.args, {
-      // No stdin: this is a non-interactive capture seam — the backend's input
-      // rides in argv, never on stdin. `ignore` gives the child immediate EOF on
-      // fd 0 (stdout/stderr stay piped for capture). Leaving stdin an open,
-      // never-written pipe (node's default) hangs any backend that READS stdin
-      // before acting — opencode's `run` does exactly that and wedged at startup;
-      // claude -p / aider / docker never read it, so this is a no-op for them.
-      stdio: ["ignore", "pipe", "pipe"],
+      // stdin posture: `ignore` (immediate EOF on fd 0) by default — the backend's
+      // input rides in argv, and leaving stdin an open, never-written pipe (node's
+      // default) hangs any backend that READS stdin before acting (opencode's `run`
+      // does exactly that and wedged at startup). When `opts.stdin` is set we `pipe`
+      // it instead, write the text, and close it — used to keep a large/secret
+      // prompt off argv. stdout/stderr stay piped for capture either way.
+      stdio: [opts.stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
+
+    // Feed stdin and close it. A child that exits before draining stdin makes the
+    // write fail with EPIPE — swallow it (the close/exit path settles the result);
+    // an unhandled stdin 'error' would otherwise crash the process.
+    if (opts.stdin !== undefined && child.stdin !== null) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(opts.stdin);
+    }
 
     // Timer source — global by default; a test injects a controllable pair.
     const setT = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));

@@ -382,7 +382,6 @@ describe("claude -p runner helpers", () => {
     );
     assert.deepEqual(args, [
       "-p",
-      "do the work",
       "--output-format",
       "json",
       "--permission-mode",
@@ -392,6 +391,8 @@ describe("claude -p runner helpers", () => {
       "--append-system-prompt",
       "you are the implementer",
     ]);
+    // The prompt is NEVER on argv — it rides on stdin (off `ps aux`).
+    assert.equal(args.includes("do the work"), false);
     // Never --bare: that would force ANTHROPIC_API_KEY instead of the login.
     assert.equal(args.includes("--bare"), false);
   });

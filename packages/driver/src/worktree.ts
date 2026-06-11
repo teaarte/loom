@@ -16,8 +16,9 @@
 // copy instead of recreating it — idempotent, the same property the loop relies
 // on for `agent_run_id` reuse.
 //
-// The copy lives OUTSIDE the repo (under the OS temp dir) so the main tree's
-// `git status` stays clean. A project that is NOT a git work tree DEGRADES
+// The copy lives OUTSIDE the repo (under a private per-user base in the OS temp
+// dir — see `sandbox-root.ts`) so the main tree's `git status` stays clean. A
+// project that is NOT a git work tree DEGRADES
 // gracefully: with no git there is no baseline to self-diff and no branch to
 // merge back to, so a copy would orphan the edits — instead the spawn runs in
 // the project directory directly (no isolation) and the caller is told, mirroring
@@ -34,7 +35,6 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { KernelError } from "@loomfsm/kernel";
@@ -42,6 +42,7 @@ import { KernelError } from "@loomfsm/kernel";
 import { clonePathFor } from "./clone.js";
 import { cleanLoomArtifacts, clearGitLocks, copyTree, heavyCopyNotice } from "./copy.js";
 import { gitBaselineRef } from "./git-delta.js";
+import { ensureSandboxRoot, sandboxRoot } from "./sandbox-root.js";
 
 export interface WorktreeProvision {
   // Where the spawn runs: an isolated full copy, or the project itself when the
@@ -59,12 +60,12 @@ export interface WorktreeProvision {
 }
 
 // The deterministic sandbox path for a project — a stable hash of the canonical
-// project root under the OS temp dir, so re-resume finds the same copy.
+// project root under the private per-user base, so re-resume finds the same copy.
 // Exported for tests/inspection. (Name kept for API stability; it is now a full
 // copy, not a git worktree.)
 export function worktreePathFor(projectDir: string): string {
   const hash = createHash("sha1").update(resolve(projectDir)).digest("hex").slice(0, 16);
-  return join(tmpdir(), `loom-wt-${hash}`);
+  return join(sandboxRoot(), `wt-${hash}`);
 }
 
 // Discard the project's isolated sandbox copies so the NEXT task provisions
@@ -113,6 +114,8 @@ export function provisionWorktree(
     return { dir: dest, baseline, isolated: true };
   }
 
+  // The private 0700 base must exist (and be verified ours) before the copy lands.
+  ensureSandboxRoot();
   const copied = copyTree(projectDir, dest, opts.forcePlainCopy === true ? { forcePlain: true } : {});
   if (!copied.ok) {
     throw new KernelError({

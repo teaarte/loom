@@ -101,7 +101,7 @@ export type { ContainerExecutorOptions, DockerArgsOptions } from "./container-ex
 // The Aider work-agent backend — an agentic CLI (model-agnostic) behind the
 // same sandboxed shell, giving a non-Claude work-agent the file/shell tool loop
 // `claude -p` has for free. Aider IS the loop; loom only shells out + self-diffs.
-export { createAiderExecutor, buildAiderArgs, parseAiderUsage } from "./aider-executor.js";
+export { createAiderExecutor, aiderMessage, buildAiderArgs, parseAiderUsage } from "./aider-executor.js";
 export type { AiderExecutorOptions } from "./aider-executor.js";
 
 // The opencode work-agent backend — a sibling agentic CLI (model-agnostic)

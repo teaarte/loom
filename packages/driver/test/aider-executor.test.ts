@@ -23,6 +23,7 @@ import { describe, it } from "node:test";
 import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import {
+  aiderMessage,
   buildAiderArgs,
   createAiderExecutor,
   parseAiderUsage,
@@ -67,15 +68,17 @@ function cleanup(projectDir: string): void {
 
 describe("buildAiderArgs — headless, hermetic argv", () => {
   it("shapes a non-interactive single-turn invocation with side effects off", () => {
-    const args = buildAiderArgs(intent(), "openrouter/deepseek-chat", {
+    const args = buildAiderArgs("openrouter/deepseek-chat", {
       mapTokens: 0,
       scratchDir: "/tmp/scratch-x",
+      messageFile: "/tmp/scratch-x/message.txt",
     });
-    // model + message
+    // model + message-file (the prompt rides in a file, never on argv)
     const mi = args.indexOf("--model");
     assert.equal(args[mi + 1], "openrouter/deepseek-chat");
-    const msgi = args.indexOf("--message");
-    assert.equal(args[msgi + 1], "add a subtract function");
+    assert.equal(args.includes("--message"), false, "the prompt must never be a --message argv value");
+    const msgi = args.indexOf("--message-file");
+    assert.equal(args[msgi + 1], "/tmp/scratch-x/message.txt");
     // non-interactive + hermetic flags
     for (const flag of [
       "--yes-always",
@@ -104,18 +107,19 @@ describe("buildAiderArgs — headless, hermetic argv", () => {
   });
 
   it("folds a system_prompt into the message (aider has no --append-system-prompt)", () => {
-    const args = buildAiderArgs(intent({ system_prompt: "You are precise." }), "ollama_chat/x", {
-      mapTokens: 0,
-      scratchDir: "/tmp/s",
-    });
-    const msg = args[args.indexOf("--message") + 1];
-    assert.equal(msg, "You are precise.\n\nadd a subtract function");
+    assert.equal(
+      aiderMessage(intent({ system_prompt: "You are precise." })),
+      "You are precise.\n\nadd a subtract function",
+    );
+    // …and with no system_prompt the message is just the task.
+    assert.equal(aiderMessage(intent()), "add a subtract function");
   });
 
   it("appends extra args last", () => {
-    const args = buildAiderArgs(intent(), "ollama_chat/x", {
+    const args = buildAiderArgs("ollama_chat/x", {
       mapTokens: 0,
       scratchDir: "/tmp/s",
+      messageFile: "/tmp/s/message.txt",
       extraArgs: ["--reasoning-effort", "high"],
     });
     assert.deepEqual(args.slice(-2), ["--reasoning-effort", "high"]);

@@ -28,23 +28,23 @@
 
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { KernelError } from "@loomfsm/kernel";
 
 import { cleanLoomArtifacts, clearGitLocks, copyTree, heavyCopyNotice } from "./copy.js";
 import { gitBaselineRef } from "./git-delta.js";
+import { ensureSandboxRoot, sandboxRoot } from "./sandbox-root.js";
 import type { WorktreeProvision } from "./worktree.js";
 
 // The deterministic copy path for a project — a stable hash of the canonical
-// project root under the OS temp dir, distinct from the non-container copy path
-// so the two backends never collide. Exported for tests/inspection and for the
-// merge-back, which extracts `loom/<task>` from this copy. (Name kept for API
-// stability; it is now a full copy, not a `git clone --local`.)
+// project root under the private per-user base, distinct from the non-container
+// copy path so the two backends never collide. Exported for tests/inspection and
+// for the merge-back, which extracts `loom/<task>` from this copy. (Name kept for
+// API stability; it is now a full copy, not a `git clone --local`.)
 export function clonePathFor(projectDir: string): string {
   const hash = createHash("sha1").update(resolve(projectDir)).digest("hex").slice(0, 16);
-  return join(tmpdir(), `loom-clone-${hash}`);
+  return join(sandboxRoot(), `clone-${hash}`);
 }
 
 // Provision (or reuse) the active task's dedicated copy. Returns the copy
@@ -76,6 +76,8 @@ export function provisionClone(
     return { dir: dest, baseline, isolated: true };
   }
 
+  // The private 0700 base must exist (and be verified ours) before the copy lands.
+  ensureSandboxRoot();
   const copied = copyTree(projectDir, dest, opts.forcePlainCopy === true ? { forcePlain: true } : {});
   if (!copied.ok) {
     throw new KernelError({

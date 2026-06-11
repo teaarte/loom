@@ -76,7 +76,10 @@ export interface ClaudeCodeExecutorOptions {
 }
 
 // Build the argv for one `claude -p` invocation. Pure → unit-tested directly.
-// Deliberately omits `--bare` so the run uses the subscription login.
+// Deliberately omits `--bare` so the run uses the subscription login. The PROMPT
+// is NOT here — it is fed on stdin (see `spawnClaude`) so the full task text
+// never appears in `ps aux`; `claude -p` reads the prompt from stdin when no
+// positional argument is given.
 export function buildClaudeArgs(
   intent: ProviderShuttleIntent,
   permissionMode: string,
@@ -84,7 +87,6 @@ export function buildClaudeArgs(
 ): string[] {
   const args = [
     "-p",
-    intent.prompt,
     "--output-format",
     "json",
     "--permission-mode",
@@ -273,6 +275,7 @@ interface SpawnClaudeOptions {
 async function spawnClaude(
   bin: string,
   args: string[],
+  prompt: string,
   cwd: string,
   signal: AbortSignal | undefined,
   capture: SpawnClaudeOptions,
@@ -281,6 +284,9 @@ async function spawnClaude(
     bin,
     args,
     cwd,
+    // The prompt rides on stdin (not argv) so it never shows in `ps aux`;
+    // `claude -p` with no positional reads its prompt from stdin.
+    stdin: prompt,
     label: "claude -p",
     notFoundMessage:
       `Claude Code CLI '${bin}' was not found; install Claude Code and ` +
@@ -302,7 +308,7 @@ export function createClaudeCodeExecutor(opts: ClaudeCodeExecutorOptions): Execu
   const runSpawn: RunSpawn =
     opts.runSpawn ??
     ((intent, worktreeDir, signal) =>
-      spawnClaude(bin, buildClaudeArgs(intent, permissionMode, opts.max_turns), worktreeDir, signal, {
+      spawnClaude(bin, buildClaudeArgs(intent, permissionMode, opts.max_turns), intent.prompt, worktreeDir, signal, {
         detectRateLimit,
         ...(opts.session_timeout_ms !== undefined ? { session_timeout_ms: opts.session_timeout_ms } : {}),
         ...(opts.idle_timeout_ms !== undefined ? { idle_timeout_ms: opts.idle_timeout_ms } : {}),

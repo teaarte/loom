@@ -72,6 +72,9 @@ describe("buildDockerArgs — the spike-proven run posture", () => {
     // run --rm, non-root, writable tmpfs HOME kept OUT of the workspace.
     assert.equal(args[0], "run");
     assert.ok(args.includes("--rm"));
+    // `-i` keeps stdin open so the prompt reaches the in-container `claude -p`
+    // on stdin (off the host's `docker run … claude -p` command line).
+    assert.ok(args.includes("-i"));
     assert.equal(args[args.indexOf("--user") + 1], "501:20");
     assert.ok(args.includes("--tmpfs"));
     assert.equal(args[args.indexOf("--tmpfs") + 1], "/home/app:rw,mode=1777");
@@ -116,7 +119,8 @@ describe("clonePathFor — deterministic, distinct from the worktree", () => {
     assert.equal(clonePathFor(dir), clonePathFor(dir));
     assert.notEqual(clonePathFor(dir), clonePathFor("/other/project"));
     assert.notEqual(clonePathFor(dir), worktreePathFor(dir));
-    assert.match(clonePathFor(dir), /loom-clone-/);
+    // Lives under the private per-user sandbox base as `clone-<hash>`.
+    assert.match(clonePathFor(dir), /[/\\]loom-[^/\\]+[/\\]clone-[0-9a-f]+$/);
   });
 });
 

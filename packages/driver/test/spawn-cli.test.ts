@@ -106,6 +106,38 @@ describe("spawnCapture — idle (output-silence) timeout", () => {
   });
 });
 
+describe("spawnCapture — stdin delivery (prompt off argv)", () => {
+  it("feeds opts.stdin to the child and closes it (the prompt rides on stdin, not argv)", async () => {
+    // Echo whatever arrives on stdin — proves the prompt reaches the child there.
+    const args = [
+      "-e",
+      "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>process.stdout.write('GOT:'+s))",
+    ];
+    const out = await spawnCapture({
+      bin: NODE,
+      args,
+      label: "claude -p",
+      notFoundMessage: "n/a",
+      stdin: "the secret task prompt",
+    });
+    assert.equal(out.stdout, "GOT:the secret task prompt");
+    // And the prompt is NOT in argv.
+    assert.equal(args.join(" ").includes("the secret task prompt"), false);
+  });
+
+  it("does not crash when the child exits before draining stdin (EPIPE swallowed)", async () => {
+    // Exits immediately, never reading stdin — writing stdin then would EPIPE.
+    const out = await spawnCapture({
+      bin: NODE,
+      args: ["-e", "process.stdout.write('done');process.exit(0)"],
+      label: "claude -p",
+      notFoundMessage: "n/a",
+      stdin: "x".repeat(100_000),
+    });
+    assert.equal(out.stdout, "done");
+  });
+});
+
 describe("spawnCapture — rate-limit recognition on a non-zero exit", () => {
   it("reads the api_error_status:429 envelope off stdout → EXECUTOR_RATE_LIMITED", async () => {
     const envelope = JSON.stringify({ is_error: true, api_error_status: 429, result: "rate_limit_error" });

@@ -35,7 +35,7 @@
 // No npm dependency: it shells out to the external `aider` binary, the same
 // posture as shelling to `claude`.
 
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -112,20 +112,26 @@ export interface AiderExecutorOptions {
 // human in the loop. loom feeds the agent every file it needs explicitly; it
 // never wants Aider's own URL fetching. Both are real aider flags
 // (`AIDER_DETECT_URLS` / `AIDER_DISABLE_PLAYWRIGHT`).
+// The message aider is given: the bundle's persona (aider has no
+// `--append-system-prompt`) folded ahead of the task prompt. Pure → unit-tested.
+export function aiderMessage(intent: ProviderShuttleIntent): string {
+  return intent.system_prompt !== undefined && intent.system_prompt !== ""
+    ? `${intent.system_prompt}\n\n${intent.prompt}`
+    : intent.prompt;
+}
+
 export function buildAiderArgs(
-  intent: ProviderShuttleIntent,
   model: string,
-  opts: { mapTokens: number; scratchDir: string; extraArgs?: string[] },
+  opts: { mapTokens: number; scratchDir: string; messageFile: string; extraArgs?: string[] },
 ): string[] {
-  const message =
-    intent.system_prompt !== undefined && intent.system_prompt !== ""
-      ? `${intent.system_prompt}\n\n${intent.prompt}`
-      : intent.prompt;
   const args = [
     "--model",
     model,
-    "--message",
-    message,
+    // The message is read from a FILE (written into the scratch dir, OUT of the
+    // worktree) rather than `--message <text>`, so the task prompt + persona never
+    // appear in `ps aux`.
+    "--message-file",
+    opts.messageFile,
     "--yes-always",
     "--no-stream",
     "--no-pretty",
@@ -239,12 +245,17 @@ export function createAiderExecutor(opts: AiderExecutorOptions): Executor {
 
   const runSpawn: RunSpawn =
     opts.runSpawn ??
-    ((intent, worktreeDir, signal) =>
-      spawnAider(
+    ((intent, worktreeDir, signal) => {
+      // Write the message to a file in the scratch dir (OUT of the worktree) and
+      // pass it via `--message-file`, so the prompt + persona stay off argv.
+      const messageFile = join(scratch(), "message.txt");
+      writeFileSync(messageFile, aiderMessage(intent), "utf8");
+      return spawnAider(
         bin,
-        buildAiderArgs(intent, resolveModel(intent), {
+        buildAiderArgs(resolveModel(intent), {
           mapTokens,
           scratchDir: scratch(),
+          messageFile,
           ...(opts.extra_args !== undefined ? { extraArgs: opts.extra_args } : {}),
         }),
         worktreeDir,
@@ -255,7 +266,8 @@ export function createAiderExecutor(opts: AiderExecutorOptions): Executor {
           ...(opts.session_timeout_ms !== undefined ? { session_timeout_ms: opts.session_timeout_ms } : {}),
           ...(opts.idle_timeout_ms !== undefined ? { idle_timeout_ms: opts.idle_timeout_ms } : {}),
         },
-      ));
+      );
+    });
 
   return createSandboxedExecutor({
     project_dir: opts.project_dir,

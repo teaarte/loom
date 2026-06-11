@@ -140,7 +140,11 @@ export interface DockerArgsOptions {
 export function buildDockerArgs(opts: DockerArgsOptions, command: string[]): string[] {
   const workspace = opts.workspace ?? DEFAULT_WORKSPACE;
   const home = opts.home ?? DEFAULT_HOME;
-  const args = ["run", "--rm", "--init"];
+  // `-i` keeps stdin open and connects it to the container's PID1 (tini, via
+  // `--init`), which forwards it to `claude -p` — that is how the prompt reaches
+  // the agent on stdin instead of on argv (off the host's `docker run … claude -p`
+  // command line, which `ps aux` would expose).
+  const args = ["run", "--rm", "--init", "-i"];
   if (opts.user !== undefined && opts.user !== "") args.push("--user", opts.user);
   // Writable HOME for an arbitrary (host) uid, kept OUT of the clone so the
   // agent's CLI config never shows up in the self-diff.
@@ -207,6 +211,9 @@ export function createContainerExecutor(opts: ContainerExecutorOptions): Executo
       const { stdout, stderr, exitCode } = await spawnCapture({
         bin: dockerBin,
         args: dockerArgs,
+        // The prompt rides on stdin (docker `-i` → tini → `claude -p`), off the
+        // host command line; `claude -p` reads its prompt from stdin.
+        stdin: intent.prompt,
         label: "docker run (claude -p)",
         notFoundMessage:
           `Docker CLI '${dockerBin}' was not found or its daemon is unreachable; ` +

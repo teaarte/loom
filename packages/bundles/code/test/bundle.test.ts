@@ -92,13 +92,13 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
       now,
     });
 
-    // 25 canonical agents: the prior 22, the two premium `-deep` reviewer
-    // variants (logic-reviewer-deep / challenger-reviewer-deep), plus the premium
-    // `planner-deep` the complex flow uses. The prompt map keys by agent NAME, so
-    // the variants that reuse a base template still get their own entry.
-    assert.equal(registry.agents.size, 25);
+    // 26 canonical agents: the prior 25 plus the deterministic `checks-runner`
+    // (whose spawn is routed to the checks executor, not a model). The prompt map
+    // keys by agent NAME, so the variants that reuse a base template still get
+    // their own entry.
+    assert.equal(registry.agents.size, 26);
     // Every agent's `.md` is read off disk into the prompt map at load.
-    assert.equal(registry.prompts?.size, 25);
+    assert.equal(registry.prompts?.size, 26);
     assert.ok((registry.prompts?.get("classifier")?.body.length ?? 0) > 0);
     assert.equal(registry.flows.size, 4);
     assert.deepEqual(
@@ -106,8 +106,8 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
       [
         "initialize", "classify", "classify-agent", "stack-to-bundle-state", "gate-classify",
         "enrich", "plan", "plan-review", "gate-plan",
-        "git-stash", "implement", "git-diff", "pre-review", "review",
-        "adjudicate", "reconcile", "iterate", "final-checks", "test-verify",
+        "git-stash", "implement", "git-diff", "run-checks", "apply-checks", "pre-review", "review",
+        "adjudicate", "reconcile", "iterate", "final-checks",
         "gate-final", "finish-summary", "finalize",
       ],
     );
@@ -283,13 +283,16 @@ describe("@loomfsm/bundle-code — agent templates", () => {
     }
   });
 
-  it("declares exactly the 25 canonical agents", () => {
-    assert.equal(codeBundle.agents.length, 25);
+  it("declares exactly the 26 canonical agents", () => {
+    assert.equal(codeBundle.agents.length, 26);
     const names = codeBundle.agents.map((a) => a.name).sort();
     // The three CC-harness trigger agents are NOT bundle agents.
     for (const excluded of ["fe-test-all-agent", "runtime-debug-agent", "test-all-agent"]) {
       assert.ok(!names.includes(excluded), `${excluded} must not be a bundle agent`);
     }
+    // The deterministic checks runner is a bundle agent (routed to the checks
+    // executor, not a model).
+    assert.ok(names.includes("checks-runner"));
   });
 
   it("maps each gate to its intended kernel role", () => {

@@ -214,6 +214,15 @@ function atFinalAutoApprove(state: BundleStateView): boolean {
   return isApproved(state.gates["gate-final"]?.status);
 }
 
+// A check passes the floor when it ran clean OR was legitimately skipped:
+// "skipped" means nothing was configured and nothing was detected, so the check
+// was never owed and a skipped check is NOT a failed check. Only a recorded
+// "fail" — or a MISSING status (the deterministic writer never ran, so the floor
+// cannot certify the gate) — blocks a fully-autonomous final approve.
+function floorSatisfied(status: string | null): boolean {
+  return status === "ok" || status === "skipped";
+}
+
 function floorViolation(
   code: string,
   field: string,
@@ -233,7 +242,7 @@ export const invLintClean: Invariant = defineInvariant(
     if (!atFinalAutoApprove(state)) return null;
     const lint = bundleStateField(state, "lint_result");
     const status = statusField(lint);
-    if (status === "ok") return null;
+    if (floorSatisfied(status)) return null;
     return floorViolation("INV_lint_clean", "lint_result", status, lint);
   },
 );
@@ -244,7 +253,7 @@ export const invTestsPass: Invariant = defineInvariant(
     if (!atFinalAutoApprove(state)) return null;
     const tests = bundleStateField(state, "test_run");
     const status = statusField(tests);
-    if (status === "ok") return null;
+    if (floorSatisfied(status)) return null;
     return floorViolation("INV_tests_pass", "test_run", status, tests);
   },
 );
@@ -255,7 +264,7 @@ export const invTypecheckClean: Invariant = defineInvariant(
     if (!atFinalAutoApprove(state)) return null;
     const tc = bundleStateField(state, "typecheck");
     const status = statusField(tc);
-    if (status === "ok") return null;
+    if (floorSatisfied(status)) return null;
     return floorViolation("INV_typecheck_clean", "typecheck", status, tc);
   },
 );

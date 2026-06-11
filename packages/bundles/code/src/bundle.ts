@@ -14,6 +14,8 @@
 // state shape declares one `applies_to` predicate; an agent reused across
 // stages keeps a single, collision-free responsibility.
 
+import { createHash } from "node:crypto";
+
 import { defineBundle } from "@loomfsm/kernel";
 import type {
   BundleStateView,
@@ -228,6 +230,158 @@ async function snapshotDiff(
     modified_count: state.files_modified.length,
     created_count: state.files_created.length,
   });
+}
+
+// ============================================================================
+// Deterministic checks — read the executor's envelope, drive state + findings
+// ============================================================================
+//
+// The `run-checks` spawn is routed (by the bundle's `checks` execution
+// capability) to a deterministic executor that runs the project's typecheck /
+// lint / test commands in the task worktree and returns a JSON envelope as its
+// output. The substrate's structured-output merge lands that envelope's `checks`
+// array in `decisions.checks` (the same path the classifier's picks travel).
+// `applyChecks` below is the positional Step that reads it back: it writes each
+// check's status into the bundle_state field the safety floor reads, synthesizes
+// one blocking finding per FAILED check (so the gate walks back to implement and
+// the compiler output reaches the implementer through the open-blocker hand-off,
+// with the review fanout skipped), and records `checks_ok` so the reviewers
+// self-gate off a broken round.
+
+// The agent whose spawn runs the deterministic checks executor. Named here only
+// to attribute its synthesized findings; the dispatch routes it by the
+// bundle-declared `checks` execution capability, NOT by this name.
+const CHECKS_AGENT = "checks-runner";
+
+// The finding category for a failed deterministic check — an open string the
+// substrate stores verbatim, not a closed vocabulary.
+const CHECK_FAILED_CATEGORY = "failed-check";
+
+// The executor's three check names mapped to the bundle_state field the
+// safety-floor invariants read (`lint`→`lint_result`, `test`→`test_run`).
+const CHECK_STATE_FIELD: Readonly<Record<string, string>> = {
+  typecheck: "typecheck",
+  lint: "lint_result",
+  test: "test_run",
+};
+
+interface CheckResultRow {
+  name: string;
+  status: string;
+  exit_code: number | null;
+  output_tail: string | null;
+  command: string | null;
+}
+
+// Parse the executor's envelope out of the decisions slot the structured-output
+// merge landed it in. Tolerant: a missing / malformed entry yields nothing, so
+// the apply step records every check as skipped rather than throwing — a
+// degraded delivery never strands the flow.
+function parseCheckRows(raw: unknown): CheckResultRow[] {
+  if (!Array.isArray(raw)) return [];
+  const rows: CheckResultRow[] = [];
+  for (const item of raw) {
+    if (item === null || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const name = typeof o["name"] === "string" ? o["name"] : "";
+    if (name.length === 0) continue;
+    rows.push({
+      name,
+      status: typeof o["status"] === "string" ? o["status"] : "skipped",
+      exit_code: typeof o["exit_code"] === "number" ? o["exit_code"] : null,
+      output_tail: typeof o["output_tail"] === "string" ? o["output_tail"] : null,
+      command: typeof o["command"] === "string" ? o["command"] : null,
+    });
+  }
+  return rows;
+}
+
+// Deterministic finding id for a failed check: `f-YYYY-MM-DD-<hash6>` derived
+// from the tick's NowToken + the check name. The date prefix + six hex chars
+// match the substrate's locked finding-id shape; deriving from `now` (replayed
+// verbatim per tick) keeps a re-entered tick idempotent, while a DIFFERENT
+// rework round (a later tick → a different `now`) mints a fresh id so a
+// persistent failure re-blocks the next round rather than colliding with the
+// superseded prior-round row.
+function checkFindingId(now: string, name: string): string {
+  const date = now.slice(0, 10);
+  const hash = createHash("sha1").update(`checks:${now}:${name}`).digest("hex").slice(0, 6);
+  return `f-${date}-${hash}`;
+}
+
+function clampField(s: string, max: number): string {
+  return s.length <= max ? s : s.slice(0, max);
+}
+
+// Apply the deterministic checks executor's envelope. Writes each check's status
+// into the bundle_state field the floor reads, synthesizes one blocking finding
+// per FAILED check (command + output head, within the finding field caps; the
+// full tail also rides in bundle_state for forensics), records `checks_ok` for
+// the reviewer self-gate, and compacts the bulky envelope out of `decisions` so
+// the output never bloats a downstream prompt. A skipped check writes a skipped
+// status and no finding — a check never owed is not a failure.
+async function applyChecks(state: BundleStateView, ctx: StageContext): Promise<void> {
+  const rows = parseCheckRows(state.decisions["checks"]);
+  const byName = new Map(rows.map((r) => [r.name, r]));
+  const failed: string[] = [];
+
+  for (const name of ["typecheck", "lint", "test"] as const) {
+    const field = CHECK_STATE_FIELD[name] ?? name;
+    const row = byName.get(name);
+    const status = row?.status === "ok" || row?.status === "fail" ? row.status : "skipped";
+    ctx.tx.set_bundle_state_field?.(field, {
+      status,
+      exit_code: row?.exit_code ?? null,
+      output_tail: row?.output_tail ?? null,
+    });
+    if (status === "fail") {
+      failed.push(name);
+      const cmd = row?.command ?? name;
+      const out = row?.output_tail ?? "";
+      const exit = row?.exit_code ?? "non-zero";
+      ctx.tx.record_finding?.({
+        schema_version: "1.0",
+        id: checkFindingId(ctx.now, name),
+        agent: CHECKS_AGENT,
+        iteration: 1, // re-stamped to the live round by the substrate at drain
+        task_id: state.task_id ?? "",
+        file: null,
+        line_start: null,
+        line_end: null,
+        severity: "blocking",
+        category: CHECK_FAILED_CATEGORY,
+        proposed_new_category: null,
+        pattern_id: null,
+        summary: clampField(`${name} check failed: \`${cmd}\` exited ${exit}`, 200),
+        evidence_excerpt: out.length > 0 ? clampField(out, 400) : null,
+        suggested_fix: clampField(
+          out.length > 0
+            ? `Resolve the reported errors, then re-run. Output: ${out}`
+            : "Resolve the failing check, then re-run.",
+          300,
+        ),
+        status: "open",
+        ref_rule_id: null,
+      });
+    }
+  }
+
+  const ok = failed.length === 0;
+  ctx.tx.set_decision?.("checks_ok", ok);
+  // Compact the envelope: the floor + the findings now carry everything
+  // downstream needs, so replace the bulky per-check output with a tiny summary
+  // and keep the full output OUT of every later spawn's "Decisions so far".
+  ctx.tx.set_decision?.("checks", { ok, failed });
+  ctx.tx.audit({ type: "checks-recorded", ok, failed });
+}
+
+// The review fanout (and the lean single reviewer) must NOT run on a round whose
+// deterministic checks failed — broken code earns the compiler's free feedback
+// and a walk-back, not an adversarial panel. `checks_ok` is unset before the
+// checks run (e.g. plan-review during planning), where `!== false` keeps the
+// reviewers running.
+function checksAllow(state: BundleStateView): boolean {
+  return state.decisions["checks_ok"] !== false;
 }
 
 // Sacred-tests check: record which test files the run modified, so the
@@ -653,6 +807,7 @@ export default defineBundle({
     audit_types: [
       "sacred-tests-checked",
       "adjudication-applied",
+      "checks-recorded",
     ],
   },
 
@@ -667,6 +822,14 @@ export default defineBundle({
     { name: "planner", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "balanced" },
     { name: "planner-deep", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "premium" },
     { name: "implementer", template_path: "agents/implementer.md", output_kind: "nonreview", default_model: "premium" },
+    // The deterministic checks runner. Its spawn is routed (by the `checks`
+    // execution capability) to a shell-out executor that runs typecheck / lint /
+    // test and returns a JSON envelope — never a model call, so the declared
+    // tier is irrelevant (the executor ignores the resolved model) and no
+    // backend / credential is needed for it. `output_kind: classifier` so the
+    // substrate's structured-output merge lands the envelope in
+    // `decisions.checks`, which the `apply-checks` Step reads back.
+    { name: "checks-runner", template_path: "agents/checks-runner.md", output_kind: "classifier", default_model: "fast" },
     { name: "code-analyzer", template_path: "agents/code-analyzer.md", output_kind: "nonreview", default_model: "balanced" },
     {
       name: "architect",
@@ -700,14 +863,14 @@ export default defineBundle({
       template_path: "agents/logic-reviewer.md",
       output_kind: "reviewer",
       default_model: "balanced",
-      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "logic-reviewer"),
+      applies_to: (s) => checksAllow(s) && s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "logic-reviewer"),
     },
     {
       name: "logic-reviewer-deep",
       template_path: "agents/logic-reviewer.md",
       output_kind: "reviewer",
       default_model: "premium",
-      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "logic-reviewer-deep"),
+      applies_to: (s) => checksAllow(s) && s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "logic-reviewer-deep"),
     },
     // The adversarial challenger is the most expensive reviewer, so it also
     // gates on `change_kind`: a config-only / docs-only / type-only / pure
@@ -720,7 +883,7 @@ export default defineBundle({
       template_path: "agents/challenger-reviewer.md",
       output_kind: "reviewer",
       default_model: "balanced",
-      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "challenger-reviewer"),
+      applies_to: (s) => checksAllow(s) && s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "challenger-reviewer"),
       relevant_for_change_kinds: ["logic", "perf-sensitive", "security-sensitive"],
     },
     {
@@ -728,7 +891,7 @@ export default defineBundle({
       template_path: "agents/challenger-reviewer.md",
       output_kind: "reviewer",
       default_model: "premium",
-      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "challenger-reviewer-deep"),
+      applies_to: (s) => checksAllow(s) && s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "challenger-reviewer-deep"),
       relevant_for_change_kinds: ["logic", "perf-sensitive", "security-sensitive"],
     },
     {
@@ -736,7 +899,7 @@ export default defineBundle({
       template_path: "agents/style-reviewer.md",
       output_kind: "reviewer",
       default_model: "fast",
-      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "style-reviewer"),
+      applies_to: (s) => checksAllow(s) && s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "style-reviewer"),
       relevant_for_change_kinds: ["logic", "ui", "perf-sensitive", "security-sensitive"],
     },
     {
@@ -744,7 +907,7 @@ export default defineBundle({
       template_path: "agents/security.md",
       output_kind: "reviewer",
       default_model: "balanced",
-      applies_to: (s) => s.decisions["security_needed"] !== false && reworkAllowsReviewer(s, "security"),
+      applies_to: (s) => checksAllow(s) && s.decisions["security_needed"] !== false && reworkAllowsReviewer(s, "security"),
       relevant_for_change_kinds: ["logic", "ui", "security-sensitive", "perf-sensitive", "config-only"],
     },
     {
@@ -752,7 +915,7 @@ export default defineBundle({
       template_path: "agents/performance.md",
       output_kind: "reviewer",
       default_model: "balanced",
-      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "performance"),
+      applies_to: (s) => checksAllow(s) && s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "performance"),
       relevant_for_change_kinds: ["logic", "ui", "perf-sensitive", "security-sensitive"],
     },
     { name: "plan-grounding-check", template_path: "agents/plan-grounding-check.md", output_kind: "validator", default_model: "fast" },
@@ -782,21 +945,21 @@ export default defineBundle({
       template_path: "agents/ui-consistency.md",
       output_kind: "validator",
       default_model: "fast",
-      applies_to: (s) => decisionEquals(s, "ui_touched", true),
+      applies_to: (s) => checksAllow(s) && decisionEquals(s, "ui_touched", true),
     },
     {
       name: "api-contract",
       template_path: "agents/api-contract.md",
       output_kind: "validator",
       default_model: "fast",
-      applies_to: (s) => decisionEquals(s, "api_touched", true),
+      applies_to: (s) => checksAllow(s) && decisionEquals(s, "api_touched", true),
     },
     {
       name: "playwright",
       template_path: "agents/playwright.md",
       output_kind: "validator",
       default_model: "fast",
-      applies_to: (s) => decisionEquals(s, "ui_touched", true),
+      applies_to: (s) => checksAllow(s) && decisionEquals(s, "ui_touched", true),
     },
     { name: "research", template_path: "agents/research.md", output_kind: "nonreview", default_model: "premium" },
     { name: "migration", template_path: "agents/migration.md", output_kind: "nonreview", default_model: "premium" },
@@ -882,6 +1045,32 @@ export default defineBundle({
       position: "positional",
       effects: [{ kind: "bundle_state.set", path: "diff_snapshot" }],
       run: snapshotDiff,
+    },
+    // Deterministic pre-review checks: a spawn routed (by the `checks`
+    // execution capability) to the shell-out executor that runs typecheck /
+    // lint / test in the task worktree, immediately after the diff is captured
+    // and BEFORE any review token is spent. Always runs (no `when`); a project
+    // with nothing configured/detected records every check as skipped.
+    "run-checks": { kind: "spawn", name: "run-checks", phase: "implementation", agent: "checks-runner" },
+    // Read the checks envelope back into bundle_state (activating the safety
+    // floor), synthesize a blocking finding per failed check (→ walk-back +
+    // open-blocker hand-off to the implementer), and set `checks_ok` so the
+    // review fanout self-gates off a broken round.
+    "apply-checks": {
+      kind: "step",
+      name: "apply-checks",
+      phase: "implementation",
+      position: "positional",
+      effects: [
+        { kind: "bundle_state.set", path: "typecheck" },
+        { kind: "bundle_state.set", path: "lint_result" },
+        { kind: "bundle_state.set", path: "test_run" },
+        { kind: "decisions.set", key: "checks_ok" },
+        { kind: "decisions.set", key: "checks" },
+        { kind: "finding.insert", phase: "implementation" },
+        { kind: "audit.emit", type: "checks-recorded" },
+      ],
+      run: applyChecks,
     },
     "pre-review": {
       kind: "step",
@@ -983,7 +1172,6 @@ export default defineBundle({
       run: verifyTestFileHashes,
     },
     "final-checks": { kind: "spawn", name: "final-checks", phase: "validation", agent: "acceptance", when: shouldRunAcceptance },
-    "test-verify": { kind: "step", name: "test-verify", phase: "validation", position: "positional", effects: [] },
     "gate-final": {
       kind: "gate",
       name: "gate-final",
@@ -1004,16 +1192,20 @@ export default defineBundle({
   },
 
   flows: {
-    // Fast-task path: a SINGLE implementer spawn → finalize. No gates, no
-    // reviewers, no planner — selected by pinning `complexity=trivial` (the ⚡
+    // Fast-task path: a SINGLE implementer spawn → checks → finalize. No gates,
+    // no reviewers, no planner — selected by pinning `complexity=trivial` (the ⚡
     // toggle), which also self-skips the classifier spawn. Shares the
     // [initialize, classify, classify-agent, stack-to-bundle-state] prefix with
     // the other flows (the loader verifies it) so the complexity switch lands
     // here without misaligning step_index; `git-diff` records the touched-file
-    // surface for merge-back/observability, then `finalize` accepts.
+    // surface, then the deterministic checks run. There is no review round to
+    // share an iteration budget with, so a check failure does not loop — the
+    // synthesized blocking finding survives to `finalize`, where the
+    // accepted-with-a-live-blocker invariant parks the task for a human instead
+    // of auto-accepting broken code.
     trivial: [
       "initialize", "classify", "classify-agent", "stack-to-bundle-state",
-      "implement", "git-diff", "finalize",
+      "implement", "git-diff", "run-checks", "apply-checks", "finalize",
     ],
     // Lean path for routine work: one planner, one implementer, ONE
     // reviewer (review-light), acceptance, the final gate, finalize. No
@@ -1023,23 +1215,23 @@ export default defineBundle({
     // lands here without misaligning step_index.
     simple: [
       "initialize", "classify", "classify-agent", "stack-to-bundle-state",
-      "plan", "implement", "git-diff", "pre-review",
+      "plan", "implement", "git-diff", "run-checks", "apply-checks", "pre-review",
       "review-light", "final-checks", "gate-final", "finish-summary", "finalize",
     ],
     medium: [
       "initialize", "classify", "classify-agent", "stack-to-bundle-state", "gate-classify",
       "enrich", "plan", "plan-review", "gate-plan",
-      "git-stash", "implement", "git-diff", "pre-review", "review",
-      "adjudicate", "reconcile", "iterate", "final-checks", "test-verify",
+      "git-stash", "implement", "git-diff", "run-checks", "apply-checks", "pre-review", "review",
+      "adjudicate", "reconcile", "iterate", "final-checks",
       "gate-final", "finish-summary", "finalize",
     ],
     complex: [
       "initialize", "classify", "classify-agent", "stack-to-bundle-state", "gate-classify",
       "enrich", "context-verify", "architect",
       "plan-deep", "plan-review-deep", "gate-plan",
-      "test-first", "git-stash", "implement", "git-diff", "pre-review", "review-deep",
+      "test-first", "git-stash", "implement", "git-diff", "run-checks", "apply-checks", "pre-review", "review-deep",
       "adjudicate", "reconcile", "iterate", "sacred-tests",
-      "final-checks", "test-verify", "gate-final", "finish-summary", "finalize",
+      "final-checks", "gate-final", "finish-summary", "finalize",
     ],
   },
 

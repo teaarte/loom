@@ -15,8 +15,13 @@
 // or a document from their prompt context) defaults to `single-shot`, so the
 // map lists only the exception. A future agent that edits files adds a row here.
 
-export type AgentExecution = "single-shot" | "agentic";
+// A third shape beyond agentic/single-shot: `checks` is NOT a model call. The
+// agent runs the project's deterministic validation commands (typecheck / lint
+// / test) and reports their exit codes, so the dispatch routes it to the
+// deterministic checks executor and resolves no backend or credential for it.
+export type AgentExecution = "single-shot" | "agentic" | "checks";
 
 export const CODE_BUNDLE_AGENT_EXECUTION: Readonly<Record<string, AgentExecution>> = {
   implementer: "agentic",
+  "checks-runner": "checks",
 };

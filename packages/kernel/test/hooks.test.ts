@@ -468,6 +468,38 @@ describe("HookRunner.fire", () => {
     assert.equal(results["error"], "boom");
   });
 
+  it("a hook ledger marker carries the full TTL window, not a born-expired one", async () => {
+    const h: Hook = {
+      name: "noop-hook",
+      event: "after-spawn",
+      idempotent: true,
+      async run() {
+        /* ok marker */
+      },
+    };
+    const runner = new HookRunner(buildRegistry([h]));
+    const now = await seedBaseline(projectDir, "d-ttl-1", "t-ttl-1");
+    const state = buildState(projectDir, now, "d-ttl-1", "t-ttl-1");
+    const ctx = buildCtx(state, "pre-or-post:d-ttl-1:0");
+
+    await runner.fire("after-spawn", ctx);
+
+    const row = await withStateTransaction(projectDir, now, async (tx) =>
+      tx.queryRow<{ now_token: string; expires_at: string }>(
+        "SELECT now_token, expires_at FROM kernel_idempotency_ledger WHERE key LIKE 'side-effect-hook:%'",
+      ),
+    );
+    assert.ok(row !== null, "the dedup marker was written");
+    if (row === null) return;
+    // Expiry is a full window AFTER the write — NOT at write time. A
+    // born-expired marker (the prior `expires_at = now` bug) would be dropped
+    // by lazy ledger eviction on the very next write, re-firing the hook on a
+    // walk-back re-visit. Revert the hook-runner fix → this reddens.
+    assert.ok(row.expires_at > row.now_token, "expiry is in the future, not born-expired");
+    const windowMs = Date.parse(row.expires_at) - Date.parse(row.now_token);
+    assert.equal(windowMs, 24 * 60 * 60 * 1000, "the uniform 24h dedup window");
+  });
+
   it("executes two hooks with requires:[A] AFTER A in topo order", async () => {
     const order: string[] = [];
     const a: Hook = {

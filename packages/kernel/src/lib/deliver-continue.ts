@@ -409,18 +409,13 @@ async function mergeFileColumn(
   const row = await tx.queryRow<Record<string, string | null>>(
     `SELECT ${column} FROM pipeline_state WHERE id = 1`,
   );
-  let current: string[] = [];
-  const raw = row?.[column];
-  if (raw !== null && raw !== undefined && raw.length > 0) {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed)) {
-        current = parsed.filter((v): v is string => typeof v === "string");
-      }
-    } catch {
-      current = [];
-    }
-  }
+  // A corrupt blob fails loud (STATE_CORRUPT rolls this delivery back)
+  // rather than resetting the file accounting to `[]` and silently
+  // dropping it — the same discipline the state-merge helpers hold to.
+  const parsed = parseStateJson<unknown>(row?.[column] ?? null, null);
+  const current: string[] = Array.isArray(parsed)
+    ? parsed.filter((v): v is string => typeof v === "string")
+    : [];
   const merged = [...new Set([...current, ...clean])];
   await tx.exec(
     `UPDATE pipeline_state SET ${column} = ? WHERE id = 1`,

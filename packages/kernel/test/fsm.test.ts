@@ -2152,6 +2152,123 @@ describe("runFSM — conditional spawn (SpawnStage.when)", () => {
   });
 });
 
+// ============================================================================
+// Resume point + forensic audit are co-committed with the stage's effects
+// ============================================================================
+
+describe("runFSM — co-commits the resume point with the stage effect", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    _resetInvariantsForTest();
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  it("persists step_index past every committed positional step before a shuttle", async () => {
+    const stages: Record<string, Stage> = {
+      m1: { kind: "step", name: "m1", phase: "p1", position: "positional", effects: [] },
+      m2: { kind: "step", name: "m2", phase: "p1", position: "positional", effects: [] },
+      s1: { kind: "spawn", name: "s1", phase: "p1", agent: "a1" } as SpawnStage,
+    };
+    const registry = buildRegistry({
+      stages,
+      flow: ["m1", "m2", "s1"],
+      agents: [makeAgent("a1")],
+    });
+
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    const out = await runFSM(state, registry);
+    assert.equal(out.directive.kind, "shuttle");
+
+    // The two positional steps advanced INSIDE their own txs, so the resume
+    // index on disk is already past them (2 = the spawn's index) — a restart
+    // resumes at the spawn, never re-running m1/m2 and re-applying their
+    // writes. Revert the co-commit → disk stays at the seeded 0 and this
+    // reddens. (The in-memory value mirrors it.)
+    const onDisk = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(onDisk.driver.step_index, 2, "resume index co-committed past the steps");
+    assert.equal(state.driver.step_index, 2);
+  });
+
+  it("drains the tick's audit buffer into the audit table, stamped with tx.now", async () => {
+    const replayNow = "2026-06-11T08:30:00.000Z" as NowToken;
+    const stages: Record<string, Stage> = {
+      "audit-step": {
+        kind: "step",
+        name: "audit-step",
+        phase: "p1",
+        position: "positional",
+        effects: [],
+        run: async (_s, ctx) => {
+          ctx.tx.audit({ type: "tool-call", note: "did-a-thing" });
+        },
+      },
+      finalize: { kind: "finalize", name: "finalize" },
+    };
+    const registry = buildRegistry({ stages, flow: ["audit-step", "finalize"] });
+
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    await runFSM(state, registry, { replay_now_token: replayNow });
+
+    const db = openDb(projectDir);
+    const row = db
+      .prepare("SELECT ts, type, payload, verdict FROM audit WHERE type = 'tool-call'")
+      .get() as { ts: string; type: string; payload: string; verdict: string } | undefined;
+    assert.ok(row !== undefined, "the buffered audit entry landed as a real row");
+    if (row === undefined) return;
+    // ts is the threaded NowToken, not a fresh wall-clock read at drain time —
+    // so a replay reproduces the same row bit-for-bit.
+    assert.equal(row.ts, replayNow);
+    assert.equal(row.verdict, "ok");
+    const payload = JSON.parse(row.payload) as { type: string; note: string };
+    assert.equal(payload.note, "did-a-thing");
+  });
+
+  it("rolls the whole tick back when a buffered audit entry names an undeclared type", async () => {
+    const stages: Record<string, Stage> = {
+      "bad-audit": {
+        kind: "step",
+        name: "bad-audit",
+        phase: "p1",
+        position: "positional",
+        effects: [{ kind: "decisions.set", key: "should_not_persist" }],
+        run: async (_s, ctx) => {
+          // A decision write AND an undeclared audit type in the same tick.
+          ctx.tx.set_decision?.("should_not_persist", "yes");
+          ctx.tx.audit({ type: "totally-undeclared-type" });
+        },
+      },
+    };
+    const registry = buildRegistry({ stages, flow: ["bad-audit"] });
+
+    const now = await seedBaseline(projectDir, { flow_name: "default" });
+    const state = buildInMemoryState(projectDir, now, { flow_name: "default" });
+
+    await assert.rejects(
+      runFSM(state, registry),
+      (err: unknown) => err instanceof KernelError && err.code === "VOCAB_UNKNOWN",
+    );
+
+    // The whole tick rolled back: neither the undeclared audit row NOR the
+    // co-staged decision landed — the drain is atomic with the effect.
+    const db = openDb(projectDir);
+    const auditCount = (
+      db.prepare("SELECT COUNT(*) AS c FROM audit").get() as { c: number }
+    ).c;
+    assert.equal(auditCount, 0, "no audit row landed");
+    const onDisk = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
+    assert.equal(
+      onDisk.decisions["should_not_persist"],
+      undefined,
+      "the co-staged decision rolled back too",
+    );
+  });
+});
+
 // Suppress unused-import warnings for fixture-side types that the
 // type system needs for the test fixtures above but the runtime
 // path doesn't reference directly.

@@ -23,6 +23,7 @@
 import { makeAgentRunId } from "./ids.js";
 import { HookRunner } from "./hook-runner.js";
 import { applyBundleOps } from "./lib/apply-bundle-ops.js";
+import { drainAuditBuffer } from "./lib/audit-drain.js";
 import {
   emptyAgentRecordsAccess,
   emptyAuditAccess,
@@ -206,6 +207,18 @@ export async function runFSM(
         // later same-pass stage just as an interpreter Step's does.
         appliedOps = [...eventOps, ...ops];
         ops.length = 0;
+        // Co-commit the FSM resume point with this stage's effects: a
+        // crash after this COMMIT resumes AFTER the committed step rather
+        // than re-running it (and re-applying its writes) on restart.
+        await persistStepAdvance(tx, state, flow, result);
+        // Land the forensic audit entries this tick accumulated INSIDE the
+        // same commit as the effects they describe — a rolled-back tick
+        // leaves no orphan row, a committed one keeps its whole trail.
+        await drainAuditBuffer(tx, {
+          task_id: state.task_id,
+          driver_state_id: state.driver_state_id,
+          audit_types: registry.vocabularies.audit_types,
+        });
         return result;
       },
       // Thread the active bundle's invariants into the commit check so a
@@ -363,6 +376,39 @@ function selectComplexityFlow(
   if (target === undefined || target === state.driver.flow_name) return null;
   if (!registry.flows.has(target)) return null;
   return target;
+}
+
+// Persist the FSM resume point INSIDE the stage tx, co-committed with the
+// stage's effects. `advance` moves one step on; `walk_back_to` rewinds to
+// the resolved target. shuttle / shuttle-batch / ask_user / complete / halt
+// park or end at this stage — the next index is owned by the delivery path
+// (advance-on-drain) or the completion sweep, so the index is left
+// unchanged. Without this, the resume index moved only in memory (persisted
+// once, after the whole tick walk); a crash between a positional step's
+// commit and that final persist re-ran the committed step on restart,
+// re-applying its writes. Writing the index alongside the effect closes
+// that gap: on resume the kernel reads an index already past the committed
+// step. A `walk_back_to` whose target is absent leaves the index untouched
+// — the loop returns WALK_BACK_TARGET_NOT_FOUND and the mis-declared flow
+// halts deterministically rather than jumping to a guessed step.
+async function persistStepAdvance(
+  tx: Transaction,
+  state: PipelineState,
+  flow: readonly string[],
+  result: StageResult,
+): Promise<void> {
+  if (result.type === "advance") {
+    await tx.exec("UPDATE driver_state SET step_index = ? WHERE id = 1", [
+      state.driver.step_index + 1,
+    ]);
+    return;
+  }
+  if (result.type === "walk_back_to") {
+    const target = flow.indexOf(result.step);
+    if (target >= 0) {
+      await tx.exec("UPDATE driver_state SET step_index = ? WHERE id = 1", [target]);
+    }
+  }
 }
 
 // Mirror committed BundleOps onto the in-memory PipelineState so a later

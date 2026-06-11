@@ -87,3 +87,125 @@ describe("idempotency ledger reader/writer", () => {
     assert.equal(row, null);
   });
 });
+
+// ============================================================================
+// Eviction — every ledger write co-commits a bounded delete of expired rows
+// ============================================================================
+
+// The batch a single write may evict. Mirrors the module-private cap; if the
+// constant changes these bounds-assertions are expected to follow.
+const EVICTION_BATCH = 64;
+
+// A point after the expired rows' expiry but well before the live rows'.
+const EVICT_AT = "2026-06-11T12:00:00.000Z" as NowToken;
+const EXPIRED_AT = "2026-06-01T00:00:00.000Z" as NowToken; // < EVICT_AT
+const LIVE_UNTIL = "2026-12-31T00:00:00.000Z" as NowToken; // > EVICT_AT + TTL
+
+describe("idempotency ledger — lazy bounded eviction", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "loom-ledger-evict-"));
+    openDb(dir);
+  });
+  afterEach(() => {
+    try {
+      closeDb(dir);
+    } catch {
+      /* ignore */
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function seedRow(db: ReturnType<typeof openDb>, key: string, expiresAt: NowToken): void {
+    db.prepare(
+      "INSERT INTO kernel_idempotency_ledger " +
+        "(key, first_seen_ts, last_seen_ts, response_blob, hook_results_json, " +
+        " driver_state_id, task_id, now_token, expires_at) " +
+        "VALUES (?, ?, ?, NULL, NULL, 'd-1', 't-1', ?, ?)",
+    ).run(key, expiresAt, expiresAt, expiresAt, expiresAt);
+  }
+
+  function countWhere(db: ReturnType<typeof openDb>, sql: string, ...params: string[]): number {
+    const row = db.prepare(sql).get(...params) as { c: number };
+    return row.c;
+  }
+
+  it("a single write evicts at most one batch of expired rows; live rows are untouched", async () => {
+    const db = openDb(dir);
+    for (let i = 0; i < 200; i++) seedRow(db, `provider-call:exp-${i}`, EXPIRED_AT);
+    for (let i = 0; i < 3; i++) seedRow(db, `agent-result:live-${i}`, LIVE_UNTIL);
+
+    const expiredBefore = countWhere(
+      db,
+      "SELECT COUNT(*) AS c FROM kernel_idempotency_ledger WHERE expires_at < ?",
+      EVICT_AT,
+    );
+    assert.equal(expiredBefore, 200);
+
+    // One write co-commits one bounded eviction pass.
+    await writeLedgerRow(new TransactionImpl(db, EVICT_AT), "agent-result:new-0", {
+      driver_state_id: "d-1",
+      task_id: "t-1",
+      response_blob: null,
+    });
+
+    const expiredAfter = countWhere(
+      db,
+      "SELECT COUNT(*) AS c FROM kernel_idempotency_ledger WHERE expires_at < ?",
+      EVICT_AT,
+    );
+    // Exactly one batch removed — bounded, never the whole backlog at once.
+    assert.equal(expiredBefore - expiredAfter, EVICTION_BATCH);
+
+    // Live rows (well inside their TTL) are never candidates.
+    const liveCount = countWhere(
+      db,
+      "SELECT COUNT(*) AS c FROM kernel_idempotency_ledger WHERE key LIKE 'agent-result:live-%'",
+    );
+    assert.equal(liveCount, 3, "live rows survive eviction");
+  });
+
+  it("repeated writes drain the backlog to the live set — commit cost stops scaling with history", async () => {
+    const db = openDb(dir);
+    for (let i = 0; i < 200; i++) seedRow(db, `provider-call:exp-${i}`, EXPIRED_AT);
+    for (let i = 0; i < 3; i++) seedRow(db, `agent-result:live-${i}`, LIVE_UNTIL);
+
+    // ceil(200 / batch) writes fully drain the expired backlog.
+    const writes = Math.ceil(200 / EVICTION_BATCH);
+    for (let i = 0; i < writes; i++) {
+      await writeLedgerRow(new TransactionImpl(db, EVICT_AT), `agent-result:new-${i}`, {
+        driver_state_id: "d-1",
+        task_id: "t-1",
+        response_blob: null,
+      });
+    }
+
+    const expiredRemaining = countWhere(
+      db,
+      "SELECT COUNT(*) AS c FROM kernel_idempotency_ledger WHERE expires_at < ?",
+      EVICT_AT,
+    );
+    assert.equal(expiredRemaining, 0, "expired backlog fully drained");
+
+    // What remains is bounded by the live set + the rows these writes added —
+    // NOT the 200 rows of history the invariants would otherwise full-scan.
+    const total = countWhere(db, "SELECT COUNT(*) AS c FROM kernel_idempotency_ledger");
+    assert.equal(total, 3 + writes);
+  });
+
+  it("never evicts a row still inside its TTL window", async () => {
+    const db = openDb(dir);
+    seedRow(db, "agent-result:fresh", LIVE_UNTIL);
+
+    for (let i = 0; i < 5; i++) {
+      await writeLedgerRow(new TransactionImpl(db, EVICT_AT), `agent-result:w-${i}`, {
+        driver_state_id: "d-1",
+        task_id: "t-1",
+        response_blob: null,
+      });
+    }
+
+    const fresh = await readLedgerRow(new TransactionImpl(db, EVICT_AT), "agent-result:fresh");
+    assert.ok(fresh !== null, "an unexpired row is never evicted");
+  });
+});

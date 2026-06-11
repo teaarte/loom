@@ -12,12 +12,17 @@
 // concurrent writers from racing the read/write pair.
 
 import { KernelError } from "../state/db.js";
+import { parseStateJson } from "../state/json.js";
 import type { BundleOp } from "../types/context.js";
 import type { Finding, FindingSeverity, FindingStatus } from "../types/findings.js";
 import type { Phase } from "../types/row-types.js";
 import type { Transaction } from "../types/transaction.js";
 
-const BUNDLE_TABLE_NAME = /^[a-z_][a-z0-9_]*$/;
+// Bundle-supplied identifier shape — the single rule both a bundle table
+// name and a bundle column key must satisfy before either is interpolated
+// into SQL text. A value failing it is refused, never coerced.
+const BUNDLE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
+const BUNDLE_TABLE_NAME = BUNDLE_IDENTIFIER;
 
 // `phase` is the active stage's phase, threaded from the FSM tick so a
 // `record_finding` op buffered by a bundle Step lands under the real
@@ -75,16 +80,12 @@ async function applyOne(
       tx.audit_buffer.push(op.payload);
       return;
     case "render_view":
-      // Output rendering lands with the bundle output surface. The
-      // op is accepted (so bundles can reference it today), recorded
-      // for audit, and otherwise discarded — keeps bundles forward-
-      // compatible without forcing the rendering subsystem into
-      // every session.
-      tx.audit_buffer.push({
-        kind: "render_view-noop",
-        path: op.path,
-        bytes: op.content.length,
-      });
+      // Output rendering lands with the bundle output surface. The op is
+      // accepted (so bundles can reference it today) and otherwise a no-op
+      // — it writes nothing. It deliberately emits NO audit entry: the
+      // forensic drain now lands every buffered entry as a real row, and a
+      // no-op that rendered nothing has no honest forensic event to record.
+      // Real rendering + its audit arrive with the output subsystem.
       return;
     default: {
       const _exhaustive: never = op;
@@ -110,12 +111,20 @@ async function insertFinding(
   // applies only when the active stage genuinely has none (FinalizeStage /
   // a phase-less event Step). A fresh row is LIVE — `superseded_by_iteration`
   // defaults to NULL (omitted from the column list below).
+  //
+  // Idempotent on the finding `id` (the PRIMARY KEY, the dedup key): a Step
+  // that re-runs on restart — or a replayed tick — pushing the same finding
+  // re-derives the same `id` and lands a no-op rather than a duplicate row
+  // (or a PK-conflict abort). The bundle owns `id` stability: a finding it
+  // means to dedupe across a re-run supplies a deterministic id (derived
+  // from its content/location), and ON CONFLICT keeps a single row.
   await tx.exec(
     "INSERT INTO findings (id, task_id, agent, iteration, phase, file, " +
       "line_start, line_end, severity, category, proposed_new_category, " +
       "pattern_id, summary, evidence_excerpt, suggested_fix, status, " +
       "ref_rule_id, recorded_at) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT(id) DO NOTHING",
     [
       f.id,
       f.task_id.length > 0 ? f.task_id : null,
@@ -169,6 +178,13 @@ async function updateFindingStatus(
   );
 }
 
+interface ColumnInfoRow {
+  name: unknown;
+  // PRAGMA table_info `pk`: 0 for a non-key column, else the 1-based
+  // position of the column within the primary key.
+  pk: unknown;
+}
+
 async function upsertBundleRow(
   tx: Transaction,
   table: string,
@@ -183,12 +199,64 @@ async function upsertBundleRow(
   }
   const keys = Object.keys(row);
   if (keys.length === 0) return;
+
+  // Resolve the live schema of the target. The table name passed the
+  // identifier shape above, so it is safe to interpolate into the PRAGMA;
+  // a non-existent table returns zero columns.
+  const info = await tx.queryAll<ColumnInfoRow>(`PRAGMA table_info(${table})`);
+  if (info.length === 0) {
+    throw new KernelError({
+      code: "BUNDLE_TABLE_UNKNOWN",
+      message: `upsert_bundle_row table='${table}' has no columns — the bundle table does not exist`,
+      detail: { table },
+    });
+  }
+  const columns = new Set(info.map((c) => String(c.name)));
+  const pk = info
+    .filter((c) => Number(c.pk) > 0)
+    .sort((a, b) => Number(a.pk) - Number(b.pk))
+    .map((c) => String(c.name));
+
+  // Validate every ROW KEY before it reaches the column list. The table
+  // name is checked above; the keys flow into SQL text too, so an
+  // unchecked key is an injection vector. Each must be a bare identifier
+  // AND a real column of the target — a key failing either is refused, not
+  // silently coerced or dropped.
+  for (const k of keys) {
+    if (!BUNDLE_IDENTIFIER.test(k) || !columns.has(k)) {
+      throw new KernelError({
+        code: "BUNDLE_COLUMN_INVALID",
+        message: `upsert_bundle_row column '${k}' is not a valid column of '${table}'`,
+        detail: { table, column: k },
+      });
+    }
+  }
+
   const placeholders = keys.map(() => "?").join(", ");
   const values = keys.map((k) => row[k] as unknown);
-  await tx.exec(
-    `INSERT OR REPLACE INTO ${table} (${keys.join(", ")}) VALUES (${placeholders})`,
-    values,
-  );
+  const cols = keys.join(", ");
+
+  // A table with no declared primary key has no conflict target, so a true
+  // UPSERT has no key to match on — every row is distinct and a plain
+  // INSERT is the only meaningful semantics.
+  if (pk.length === 0) {
+    await tx.exec(`INSERT INTO ${table} (${cols}) VALUES (${placeholders})`, values);
+    return;
+  }
+
+  // True UPSERT on the declared primary key. `ON CONFLICT ... DO UPDATE`
+  // preserves the existing rowid and fires UPDATE (not DELETE) triggers,
+  // unlike `INSERT OR REPLACE` (delete-then-insert, which churns the rowid
+  // and fires delete triggers). A row that supplies only key columns has
+  // nothing to update → DO NOTHING.
+  const updatable = keys.filter((k) => !pk.includes(k));
+  const conflict = pk.join(", ");
+  const sql =
+    updatable.length === 0
+      ? `INSERT INTO ${table} (${cols}) VALUES (${placeholders}) ON CONFLICT(${conflict}) DO NOTHING`
+      : `INSERT INTO ${table} (${cols}) VALUES (${placeholders}) ON CONFLICT(${conflict}) DO UPDATE SET ` +
+        updatable.map((k) => `${k} = excluded.${k}`).join(", ");
+  await tx.exec(sql, values);
 }
 
 async function mergeJsonObjectColumn(
@@ -199,18 +267,17 @@ async function mergeJsonObjectColumn(
   const row = await tx.queryRow<Record<string, string | null>>(
     `SELECT ${column} FROM pipeline_state WHERE id = 1`,
   );
-  let current: Record<string, unknown> = {};
-  const raw = row?.[column];
-  if (raw !== null && raw !== undefined && raw.length > 0) {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        current = parsed as Record<string, unknown>;
-      }
-    } catch {
-      current = {};
-    }
-  }
+  // An unparseable blob here is a corrupted state row: the json_valid CHECK
+  // should have refused the write that produced it, so reaching a parse
+  // failure means tampering or a backend skew. `parseStateJson` fails loud
+  // (STATE_CORRUPT rolls this tick's tx back) rather than resetting the
+  // column to `{}` and silently dropping whatever was actually on disk —
+  // the same discipline the authoritative state readers already hold to.
+  const parsed = parseStateJson<unknown>(row?.[column] ?? null, null);
+  const current: Record<string, unknown> =
+    parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
   const merged = { ...current, ...patch };
   await tx.exec(
     `UPDATE pipeline_state SET ${column} = ? WHERE id = 1`,
@@ -226,18 +293,13 @@ async function mergeJsonArrayColumn(
   const row = await tx.queryRow<Record<string, string | null>>(
     `SELECT ${column} FROM pipeline_state WHERE id = 1`,
   );
-  let current: string[] = [];
-  const raw = row?.[column];
-  if (raw !== null && raw !== undefined && raw.length > 0) {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed)) {
-        current = parsed.filter((v): v is string => typeof v === "string");
-      }
-    } catch {
-      current = [];
-    }
-  }
+  // Fail loud on a corrupt blob (STATE_CORRUPT rolls back) rather than
+  // resetting the column to `[]` and silently dropping the file accounting
+  // — see the note on the object-merge helper above.
+  const parsed = parseStateJson<unknown>(row?.[column] ?? null, null);
+  const current: string[] = Array.isArray(parsed)
+    ? parsed.filter((v): v is string => typeof v === "string")
+    : [];
   const merged = [...new Set([...current, ...add])];
   await tx.exec(
     `UPDATE pipeline_state SET ${column} = ? WHERE id = 1`,

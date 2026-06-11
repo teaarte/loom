@@ -19,6 +19,7 @@
 // The naive per-hook implementation (3 txs × N hooks) would dominate
 // tick latency for hook-heavy bundles.
 
+import { ledgerExpiresAt } from "./lib/ledger.js";
 import { withStateTransaction } from "./state/transaction.js";
 import { assertVocabKnown } from "./vocabularies.js";
 import {
@@ -204,7 +205,9 @@ export class KernelHookLedger implements HookLedger {
             ctx.state.driver_state_id,
             ctx.state.task_id,
             ctx.now,
-            ctx.now,
+            // Same 24h dedup window as every other ledger row, so lazy
+            // eviction never drops a hook marker still inside its window.
+            ledgerExpiresAt(ctx.now),
           ],
         );
 

@@ -611,6 +611,15 @@ export default defineBundle({
       "auto-close-final",
       "llm-classification-needed",
     ],
+    // Audit-row types this bundle emits via `ctx.tx.audit(...)`. The kernel
+    // now lands the forensic trail a tick produces in the audit table and
+    // validates each row's `type` against the merged vocabulary, so every
+    // type this bundle emits must be declared here (the same insert-time
+    // discipline the kernel's own audit types get).
+    audit_types: [
+      "sacred-tests-checked",
+      "adjudication-applied",
+    ],
   },
 
   agents: [

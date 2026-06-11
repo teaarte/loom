@@ -108,7 +108,18 @@ function defineInvariant(
 // timestamp / non-empty / enum-membership shape on the JS side so a
 // future loosening of the SQL constraints does not silently widen the
 // accepted set.
-export const invSchemaState: Invariant = defineInvariant(["*"], (state) => {
+// Reads ONLY aggregate `BundleStateView` fields — never a heavy snapshot
+// collection (findings / agent_records / ledger). The declaration used to
+// be `["*"]`, which the snapshot materializer reads as "needs every
+// collection" and so forced a full materialize (the unbounded-ledger scan
+// included) on this invariant's behalf on every write tx. Narrowing it to
+// the fields the body actually touches makes the declared contract honest:
+// the dispatcher materializes a collection only for an invariant that
+// genuinely reads it, and a future skip-on-unchanged optimizer can reason
+// about this invariant's real dependency set.
+export const invSchemaState: Invariant = defineInvariant(
+  ["bundle", "task", "driver_state_id", "started_at", "ended_at"],
+  (state) => {
   if (state.bundle.length === 0) {
     return {
       code: "INV_SCHEMA_STATE",

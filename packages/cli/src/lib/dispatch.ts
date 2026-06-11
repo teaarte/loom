@@ -19,6 +19,7 @@ import {
   parseModelRef,
   resolveBackend,
   resolveBackendCredential,
+  resolveCheckCommands,
   resolveConfig,
 } from "@loomfsm/config";
 // `@loomfsm/driver` (and thus `@loomfsm/kernel` → `node:sqlite`) is imported
@@ -60,9 +61,12 @@ const DEFAULT_HARNESS = OPENCODE_BACKEND;
 const HARNESS_BACKENDS = new Set<string>([AIDER_BACKEND, OPENCODE_BACKEND]);
 
 // Generic, bundle-DECLARED per-agent execution shape — "agentic" means the spawn
-// edits files and needs a tool harness; "single-shot" is one model call. The
-// dispatcher reads it by agent NAME (via an injected hook) and hardcodes none.
-export type AgentExecution = "single-shot" | "agentic";
+// edits files and needs a tool harness; "single-shot" is one model call;
+// "checks" means the spawn is NOT a model call at all (it runs the project's
+// deterministic validation commands), so it routes to the checks executor and
+// resolves no backend. The dispatcher reads it by agent NAME (via an injected
+// hook) and hardcodes none.
+export type AgentExecution = "single-shot" | "agentic" | "checks";
 
 // Which concrete harness a spawn runs under, after backend + execution-shape are
 // resolved. CC carries its own loop; aider/opencode are the non-CC work-agent
@@ -390,19 +394,58 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
     return entries;
   };
 
+  // The deterministic checks executor — built lazily on the first checks spawn
+  // and reused (it provisions the task worktree once). A spawn whose
+  // bundle-declared execution shape is "checks" routes HERE instead of any model
+  // backend, so it needs no credential and runs even with no provider
+  // configured. The command list comes from the project's config + package.json
+  // detection (config owns the resolution; the executor only runs the result).
+  let checksExecutorP: Promise<Executor> | undefined;
+  const checksExecutor = (): Promise<Executor> => {
+    if (checksExecutorP === undefined) {
+      checksExecutorP = import("@loomfsm/driver").then(({ createChecksExecutor }) =>
+        createChecksExecutor({
+          project_dir: args.projectDir,
+          env: args.env,
+          resolveCommands: () => resolveCheckCommands(args.projectDir, resolved.merged.checks),
+          onNotice: args.onNotice,
+        }),
+      );
+    }
+    return checksExecutorP;
+  };
+
+  // Route a spawn to the checks executor when (and only when) the bundle marks
+  // its agent's execution shape as "checks"; null falls through to the normal
+  // backend chain. Read by agent NAME via the injected hook — no agent name is
+  // hardcoded here.
+  const resolveDirectExecutor = async (
+    intent: ProviderShuttleIntent,
+  ): Promise<Executor | null> => {
+    const execution = await Promise.resolve(
+      (args.resolveAgentExecution ?? (() => "single-shot" as const))(intent.agent),
+    );
+    return execution === "checks" ? checksExecutor() : null;
+  };
+
   // Build via the driver's canonical dispatch shell (single source of the
   // dispatch semantics, incl. the idempotent default), imported lazily on the
   // first spawn so this module stays SQLite-free at load. `idempotent: true`
   // matches the shell's default — the resume restart-head behaves exactly as the
   // single-executor model did. The chain resolver advances to a configured
-  // fallback on a rate-limit / permanent provider error.
+  // fallback on a rate-limit / permanent provider error; the direct resolver
+  // claims a checks spawn before any backend is touched.
   let inner: Executor | undefined;
   return {
     idempotent: true,
     async execute(intent, signal) {
       if (inner === undefined) {
         const { createDispatchExecutor } = await import("@loomfsm/driver");
-        inner = createDispatchExecutor({ resolveExecutorChain: resolveChain, onNotice: args.onNotice });
+        inner = createDispatchExecutor({
+          resolveExecutorChain: resolveChain,
+          resolveDirectExecutor,
+          onNotice: args.onNotice,
+        });
       }
       return inner.execute(intent, signal);
     },

@@ -1,24 +1,8 @@
-# @loomfsm/cli
+# @loomfsm/provider-ollama
 
-The `loom` binary: host setup, project authorization, the local control plane, and every way
-to drive a task from a terminal.
-
-## Commands
-
-```
-# run
-loom up | serve | run "<task>" | daemon start|stop|status | bot telegram
-
-# configure once
-loom config get|set · loom secrets set|list · loom models set|list · loom projects add|list|remove
-
-# host setup & lifecycle
-loom setup · loom allowlist add|list · loom init · loom status · loom reset · loom history
-```
-
-`loom setup` registers the MCP server and installs the `/task`, `/done`, `/proceed`
-commands — idempotent, never clobbers a command you've edited. The project allowlist is
-default-deny: each directory is authorized explicitly with `loom allowlist add`.
+Local-model provider for loom: runs agents through a local Ollama server — no API key, no
+data leaving your machine. Bind an agent with `loom models set <agent> ollama:<model>`.
+Installed on demand — the base `@loomfsm/pipeline` stays lean.
 
 ## Part of loom
 

@@ -1,59 +1,33 @@
 # @loomfsm/driver
 
-The transport-neutral orchestration runtime for loom — the headless
-driver-loop, the directive→wire adapter, and the conformant delivery
-composition that every loom transport shares.
+loom's transport-neutral orchestration runtime: the headless `drive()` loop every transport
+wraps, the `Executor` seam, and the backend executors that actually run agents. The directive
+contract is implemented once, here — the CLI, HTTP server, MCP server, and Telegram bot are
+all thin clients of this loop.
 
-`drive(projectDir, { executor, resolveRegistry, … })` runs a task to its end
-by spinning the kernel's directive contract — spawn / ask / complete / error —
-with **zero domain branching**: it never learns what a bundle's stages *mean*.
-The one injected seam is the `Executor` — "how to run a single spawn" — so a
-host tool and a provider-backed backend drive the very same loop. A dropped
-task re-attaches by reading the kernel (the resume re-emit, reusing the
-existing ids), and the file-delta / audit / idempotency bookkeeping is
-implemented here **once** so no transport can silently skip it.
+## What's inside
 
-This is the body a long-running daemon wraps, and the reference for a
-conformant driver.
+- **`drive()`** — advances the state machine to the next genuine decision point: a human gate
+  parks the run; everything else proceeds autonomously, under a hard total-spawn cap.
+- **Executors** — Claude Code CLI (`claude -p`), Aider, opencode, and Docker-isolated
+  variants, all behind one seam; a file-editing agent runs in an **isolated git worktree**,
+  never your live checkout.
+- **Resilience** — typed error classification (transient / rate-limit / permanent), per-agent
+  model fallback chains, idempotent re-delivery on recovery.
 
-## What's in it
+## Part of loom
 
-- **`drive(projectDir, opts)`** — the loop. Returns a `DriveOutcome`:
-  `complete` · `paused` (a human gate — printed, never auto-answered) · `error`
-  (routed to an injected recovery policy, or surfaced). Caps fanout
-  concurrency + wall-time, and retries a failed executor via the resume
-  re-emit without double-spawning.
-- **`Executor` / `createProviderExecutor(provider)`** — the spawn seam. The
-  provider-backed executor runs spawns in-process against an `async` provider;
-  a shuttle-only provider is refused (it has no host to hand spawns to).
-- **`createTransportAdapter` / `shape`** — the pure `KernelDirective → wire`
-  mapping every transport carries.
-- **`createAndStart` / `deliverAndAdvance` / `recoverAndAdvance`** — the shared
-  create / deliver / recover compositions: one transaction over the kernel,
-  the server-computed file delta, a co-committed audit row, the idempotency
-  ledger, and the resume-point persist.
-- **`resumeDirective(state, registry)`** — re-emit the directive a paused task
-  is waiting on, reusing its ids (the restart head).
+[loom](https://loomfsm.dev) drives multi-step LLM agent work — code review, implementation,
+any review-gated task — as a replay-deterministic state machine: safety invariants enforced
+at commit time, human gates where they matter, and a complete, replayable audit trail in a
+local SQLite file.
 
-## Runtime requirement
+**Most users should install [`@loomfsm/pipeline`](https://www.npmjs.com/package/@loomfsm/pipeline)**
+(`npm i -g @loomfsm/pipeline`), which pulls the whole runtime in one step. Install this
+package directly only if you are assembling your own runtime.
 
-`@loomfsm/driver` loads `@loomfsm/kernel`, which imports `node:sqlite` — on
-**Node 22.x** that needs `--experimental-sqlite` (a harmless no-op on Node
-23+). See [`@loomfsm/kernel`](../kernel/README.md) for details.
-
-## CLI
-
-`loom run "<task>"` (from [`@loomfsm/cli`](../cli/README.md)) is the
-non-interactive entry to this runtime: it drives a task to its end with a
-provider-backed executor, pausing and printing a human gate rather than
-answering it.
-
-## Install
-
-```bash
-pnpm add @loomfsm/driver
-```
+[Website](https://loomfsm.dev) · [Quickstart](https://loomfsm.dev/docs/) · [Why loom](https://loomfsm.dev/why/) · [GitHub](https://github.com/teaarte/loom)
 
 ## License
 
-Apache 2.0 — see the repository [LICENSE](../../LICENSE).
+Apache-2.0

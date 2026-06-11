@@ -1,24 +1,18 @@
-# @loomfsm/cli
+# @loomfsm/config
 
-The `loom` binary: host setup, project authorization, the local control plane, and every way
-to drive a task from a terminal.
+loom's configure-once control layer: the global config, the machine-local secret store, the
+per-agent model map, and the catalog of projects. Set keys and model bindings once — from the
+CLI or the dashboard — and every project inherits them.
 
-## Commands
+## What's inside
 
-```
-# run
-loom up | serve | run "<task>" | daemon start|stop|status | bot telegram
-
-# configure once
-loom config get|set · loom secrets set|list · loom models set|list · loom projects add|list|remove
-
-# host setup & lifecycle
-loom setup · loom allowlist add|list · loom init · loom status · loom reset · loom history
-```
-
-`loom setup` registers the MCP server and installs the `/task`, `/done`, `/proceed`
-commands — idempotent, never clobbers a command you've edited. The project allowlist is
-default-deny: each directory is authorized explicitly with `loom allowlist add`.
+- **Config store** — schema-validated (with the offending file named in errors), written
+  atomically, with legacy-location fallback.
+- **Secrets** — stored `chmod 600`, referenced as `secret:<name>`, masked on every read;
+  write-only through the API.
+- **Model map** — bind any bundle agent to `provider:model` or a tier, with per-agent
+  fallback chains.
+- **Project catalog** — the directories loom may drive, default-deny.
 
 ## Part of loom
 

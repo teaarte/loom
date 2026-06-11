@@ -34,5 +34,30 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "homepage": "https://loomfsm.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/teaarte/loom.git",
+    "directory": "packages/bundles/code"
+  },
+  "bugs": {
+    "url": "https://github.com/teaarte/loom/issues"
+  },
+  "keywords": [
+    "llm",
+    "agents",
+    "ai-agents",
+    "orchestration",
+    "human-in-the-loop",
+    "audit-trail",
+    "state-machine",
+    "durable-execution",
+    "code-review",
+    "bundle",
+    "invariants"
+  ],
+  "engines": {
+    "node": ">=22"
   }
 }

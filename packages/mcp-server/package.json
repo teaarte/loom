@@ -50,5 +50,30 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "homepage": "https://loomfsm.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/teaarte/loom.git",
+    "directory": "packages/mcp-server"
+  },
+  "bugs": {
+    "url": "https://github.com/teaarte/loom/issues"
+  },
+  "keywords": [
+    "llm",
+    "agents",
+    "ai-agents",
+    "orchestration",
+    "human-in-the-loop",
+    "audit-trail",
+    "state-machine",
+    "durable-execution",
+    "mcp",
+    "model-context-protocol",
+    "claude"
+  ],
+  "engines": {
+    "node": ">=22"
   }
 }

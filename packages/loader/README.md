@@ -1,24 +1,16 @@
-# @loomfsm/cli
+# @loomfsm/loader
 
-The `loom` binary: host setup, project authorization, the local control plane, and every way
-to drive a task from a terminal.
+loom's build-time assembly layer. The loader discovers bundles, providers, and extensions,
+validates them against the kernel's plugin contracts, and assembles the registry the runtime
+boots from — so the kernel never performs dynamic discovery at tick time.
 
-## Commands
+## What's inside
 
-```
-# run
-loom up | serve | run "<task>" | daemon start|stop|status | bot telegram
-
-# configure once
-loom config get|set · loom secrets set|list · loom models set|list · loom projects add|list|remove
-
-# host setup & lifecycle
-loom setup · loom allowlist add|list · loom init · loom status · loom reset · loom history
-```
-
-`loom setup` registers the MCP server and installs the `/task`, `/done`, `/proceed`
-commands — idempotent, never clobbers a command you've edited. The project allowlist is
-default-deny: each directory is authorized explicitly with `loom allowlist add`.
+- **Bundle loading** — manifest validation with specific failure codes; a static import-scope
+  check refuses bundles that reach past the plugin contract.
+- **Extension reconciliation** — fail-soft: a broken extension records a `failed` row with an
+  audit entry instead of taking the runtime down.
+- **Provider routing** — builds the per-agent dispatch table from the config's model map.
 
 ## Part of loom
 

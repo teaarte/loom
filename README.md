@@ -1,19 +1,24 @@
 <div align="center">
 
-# 🧵 loom
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+  <img src="assets/logo.svg" alt="loom" width="240">
+</picture>
 
-**Durable, auditable orchestration for LLM agents.**
+### Agent runs you can prove — not just trust
 
-loom drives multi-step agent work — code review, implementation, any review-gated task —
-as a replay-deterministic state machine: human gates where they matter, safety invariants
-enforced at commit time, and a complete, replayable audit trail.
+loom drives multi-step LLM agent work — code review, implementation, any review-gated
+task — as a **replay-deterministic state machine**: safety invariants enforced at commit
+time, human gates where they matter, and a complete, replayable audit trail in a local
+SQLite file you own.
 
 [![npm](https://img.shields.io/npm/v/@loomfsm/pipeline.svg?logo=npm&label=%40loomfsm%2Fpipeline&color=cb3837)](https://www.npmjs.com/package/@loomfsm/pipeline)
 [![license](https://img.shields.io/badge/license-Apache--2.0-3da639.svg)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A5%2022-339933.svg?logo=node.js&logoColor=white)](.nvmrc)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg?logo=typescript&logoColor=white)](#)
+[![website](https://img.shields.io/badge/website-loomfsm.dev-ea580c.svg)](https://loomfsm.dev)
 
-[Quickstart](#quickstart) · [Running loom](#running-loom) · [Configure once](#configure-once) · [Why loom](#why-loom) · [Architecture](ARCHITECTURE.md) · [Whitepaper](WHITEPAPER.md)
+[**loomfsm.dev**](https://loomfsm.dev) · [Quickstart](https://loomfsm.dev/docs/) · [Why loom](https://loomfsm.dev/why/) · [Blog](https://loomfsm.dev/blog/) · [Architecture](ARCHITECTURE.md) · [Whitepaper](WHITEPAPER.md)
 
 </div>
 
@@ -33,9 +38,10 @@ flowchart LR
     C([classify]) --> P([plan]) --> I([implement]) --> R([review]) --> V([validate]) --> F([finalize])
 ```
 
-It's for **high-stakes, multi-step, review-gated work where being wrong is expensive** — not
-throwaway prompts. Think *"Temporal for LLM agents"*, with human-in-the-loop, structured
-review, and provable safety as first-class primitives.
+Durable execution — checkpointing, retries, resume — became table stakes for agent
+infrastructure. loom is built for the layer above: **structural safety and a provable
+process**. It's for high-stakes, multi-step, review-gated work where being wrong is
+expensive — not throwaway prompts.
 
 It runs **five ways**, all driving the *identical* state machine, gates, and invariants:
 
@@ -65,7 +71,7 @@ submit your first task.
 **Inside your agent host (Claude Code):**
 
 ```bash
-loom setup            # register the MCP server + the /task, /done, /resume commands
+loom setup            # register the MCP server + the /task, /done, /proceed commands
 loom allowlist add    # authorize the current project (once per project; default-deny)
 ```
 
@@ -101,9 +107,9 @@ From the dashboard you can:
 - **inspect the agent chain** — a horizontal timeline of runs, each with its model, tokens, and duration; click one to read its **prompt + output** and the findings / verdicts it produced — for the live task and for any **finished task** in history;
 - **configure once** — tabbed settings for global config, secrets (write-only, masked), the per-agent model map, and **provider keys managed per backend**, through forms generated from the config schema.
 
-The server binds loopback by default. Pass `--token` (or set `LOOM_SERVER_TOKEN`) to require
-`Authorization: Bearer …` on every API call. This is a localhost operator console, not a
-multi-tenant service.
+The server binds loopback by default and refuses to bind to a non-loopback host without a
+token. Pass `--token` (or set `LOOM_SERVER_TOKEN`) to require `Authorization: Bearer …` on
+every API call. This is a localhost operator console, not a multi-tenant service.
 
 `loom serve` is the same control plane without a browser — for a remote box or an always-on
 supervisor (`loom serve --project ./svc --token "$TOKEN"`; `loom serve status | stop`).
@@ -133,7 +139,7 @@ inline. No API key, no network.
 
 ```
 /task add rate limiting to the login endpoint   # start
-/resume                                          # re-attach to an interrupted task
+/proceed                                         # re-attach to an interrupted task
 /done                                            # show the result + clear the slot
 ```
 
@@ -210,7 +216,7 @@ loom models set <agent> <provider:model|tier> | list            bind a bundle's 
 loom projects add [path] [--label <l>] | list | remove <id>     the catalog of projects you've worked on
 
 # host setup & project lifecycle
-loom setup [--user|--project] [--dry-run] [--force]             register the MCP server + /task,/done,/resume
+loom setup [--user|--project] [--dry-run] [--force]             register the MCP server + /task,/done,/proceed
 loom allowlist add [path] [--dry-run] | list                    authorize a project directory (default-deny)
 loom init [--dry-run]                                           ensure .loom/ + authorize this project
 loom status  [path]                                             read-only snapshot of the task (flags a stall)
@@ -246,16 +252,18 @@ loom models list                                                 # each agent's 
 
 ## Why loom
 
-**🔁 Replay-deterministic and fully auditable.** State lives in atomic SQLite transactions
-with one timestamp token threaded through every step, so a run is reproducible bit-for-bit.
-Every spawn, finding, verdict, and gate is recorded — open the database and see exactly what
-happened, or replay a recorded run against a *changed* invariant to ask "what if".
-
 **🛡️ Safety enforced at commit time, not promised by a prompt.** Invariants run inside the
-transaction and roll it back on violation. The `code` bundle ships rules like *"acceptance
-can't pass while a blocking finding is open"* and *"if an agent touched the tests, the final
-gate must be human-approved"* — so an agent can't quietly rewrite the tests it's judged by and
-approve itself.
+database transaction and roll it back on violation — the unsafe state never exists. The
+`code` bundle ships rules like *"acceptance can't pass while a blocking finding is open"*
+and *"if an agent touched the tests, the final gate must be human-approved"* — so an agent
+can't quietly rewrite the tests it's judged by and approve itself. Guardrails are prompts;
+[invariants are guarantees](https://loomfsm.dev/blog/agent-guardrails-vs-safety-invariants/).
+
+**🔁 Replay-deterministic and fully auditable.** State lives in atomic SQLite transactions
+with one timestamp token threaded through every step. Every spawn, finding, verdict, and
+gate is recorded — open the database and see exactly what happened, or
+[replay a recorded run](https://loomfsm.dev/blog/replay-deterministic-llm-agents/) against a
+*changed* invariant to ask "would the new rule have caught last week's incident?"
 
 **🎚️ Human-in-the-loop, on a dial.** A policy decides each gate: `human` (approve every step),
 `on-blockers` (ask only on a real blocker — the default), or `auto` (full autonomy with a
@@ -284,7 +292,7 @@ wire), and any combination is valid. A shared `@loomfsm/driver` runtime holds th
 never changes for a new domain.
 
 **📐 Full architecture, with diagrams — [ARCHITECTURE.md](ARCHITECTURE.md).** Design rationale —
-[WHITEPAPER.md](WHITEPAPER.md).
+[WHITEPAPER.md](WHITEPAPER.md). The short version — [loomfsm.dev/why](https://loomfsm.dev/why/).
 
 ## Packages
 
@@ -302,7 +310,7 @@ packages/
   daemon/      long-lived supervisor over drive() — park/wake, retry, recovery, merge-back
   server/      HTTP control plane — submit / read-model / answer / SSE, multi-project; Telegram bot intake
   dashboard/   React web control plane (SPA), served as prebuilt static assets by the server
-  mcp-server/  MCP transport (stdio); the /task, /done, /resume commands
+  mcp-server/  MCP transport (stdio); the /task, /done, /proceed commands
   cli/         the `loom` binary
   pipeline/    @loomfsm/pipeline — the one-step meta-package
   providers/   claude-code-shuttle (default) · anthropic-sdk · openrouter · ollama
@@ -319,30 +327,30 @@ packages/
 ## Status
 
 **`v0.3.x` (current)** — configure once, any model, drive it from a browser or your phone, and
-run without Claude:
+run without Claude. Full notes: [loomfsm.dev/changelog](https://loomfsm.dev/changelog/).
 
-- **0.3.0** — the configure-once control layer (`loom config / secrets / models`), per-spawn
-  multi-backend resolution (`auto`, else OpenRouter / Ollama / Anthropic), non-Claude
-  file-editing harnesses (Aider / opencode), and the **web dashboard** with `loom up`.
-- **0.3.1** — operator UX: a fast-task path, per-task Docker, live model dropdowns,
-  pause / resume / cancel, total elapsed, and a human-readable log.
-- **0.3.2** — observability: the per-task **agent-chain view** (model, tokens, derived
-  duration, findings / verdicts, the documents each run wrote) and an **archived-task browser**
-  that reopens any finished task in the same view.
-- **0.3.3** — pipeline hardening: a finished task finalizes and frees its slot cleanly, a
-  permanent provider error (a bad model id, a missing credential) parks instead of retry-looping,
-  and each task starts from a clean sandbox.
-- **0.3.4** — models, observability, and remote control: per-agent **model fallback chains**,
-  real cost from every backend, a per-spawn **transcript** you can read at the gate, **push /
-  squash-merge** a finished task on demand, the **Telegram remote-control bot**, and a rebuilt
-  dashboard (tabbed settings, an in-app folder picker, provider-key management, a horizontal
-  agent chain). loom's per-project state moved to `<project>/.loom/` — existing `.claude/` state
-  is migrated automatically.
+- **0.3.6** — dashboard polish (tabbed archive browser, live log under the agent chain,
+  Docker-on default) and a **hard total-spawn cap** per drive to bound runaway spend.
+- **0.3.5** — a reviewer blocker now **parks** the task instead of crashing it, guided
+  occupied-slot resolution (`loom run --replace`, `/proceed`), per-task `--complexity`
+  pinning, and a complexity-tiered planner.
+- **0.3.4** — the **Telegram bot**, per-agent **model fallback chains**, real cost from every
+  backend, per-spawn **transcripts** readable at the gate, **push / squash-merge** on demand,
+  a rebuilt dashboard, and per-project state moved to `<project>/.loom/` (auto-migrated).
+- **0.3.0 – 0.3.3** — the configure-once control layer, per-spawn multi-backend resolution
+  (OpenRouter / Ollama / Anthropic), non-Claude file-editing harnesses (Aider / opencode),
+  the **web dashboard** (`loom up`), the agent-chain view, and pipeline hardening.
 
 Earlier: the HTTP control plane, container isolation, and unattended hardening in `0.2.1`;
 headless `loom run` + the `loom daemon` in `0.2.0`; the interactive kernel + `code` bundle +
 MCP/CLI in `0.1.x`. Every layer is additive over the same `drive()` loop, with zero kernel
 change.
+
+## Using loom in your organization
+
+The author offers integration consulting — a pilot review-gated pipeline on one of your
+repositories, custom bundles for your domain, and on-prem audit-ready deployment.
+**[loomfsm.dev/#contact](https://loomfsm.dev/#contact)** · teaarte@gmail.com
 
 ## Contributing
 

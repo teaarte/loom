@@ -1,24 +1,15 @@
-# @loomfsm/cli
+# @loomfsm/mcp-server
 
-The `loom` binary: host setup, project authorization, the local control plane, and every way
-to drive a task from a terminal.
+loom's MCP transport: exposes the pipeline tools over stdio so an MCP host (such as Claude
+Code) can run loom with **zero additional infrastructure** — the host executes each agent
+step itself, no API key, no network.
 
-## Commands
+## What's inside
 
-```
-# run
-loom up | serve | run "<task>" | daemon start|stop|status | bot telegram
-
-# configure once
-loom config get|set · loom secrets set|list · loom models set|list · loom projects add|list|remove
-
-# host setup & lifecycle
-loom setup · loom allowlist add|list · loom init · loom status · loom reset · loom history
-```
-
-`loom setup` registers the MCP server and installs the `/task`, `/done`, `/proceed`
-commands — idempotent, never clobbers a command you've edited. The project allowlist is
-default-deny: each directory is authorized explicitly with `loom allowlist add`.
+- The MCP server registration plus the `/task`, `/done`, and `/proceed` slash commands that
+  `loom setup` installs into your host.
+- The pipeline tools: run / continue / state / recover / resume / archive and friends, all
+  delegating to the same driver loop every other transport uses.
 
 ## Part of loom
 

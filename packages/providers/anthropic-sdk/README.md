@@ -1,24 +1,9 @@
-# @loomfsm/cli
+# @loomfsm/provider-anthropic-sdk
 
-The `loom` binary: host setup, project authorization, the local control plane, and every way
-to drive a task from a terminal.
-
-## Commands
-
-```
-# run
-loom up | serve | run "<task>" | daemon start|stop|status | bot telegram
-
-# configure once
-loom config get|set · loom secrets set|list · loom models set|list · loom projects add|list|remove
-
-# host setup & lifecycle
-loom setup · loom allowlist add|list · loom init · loom status · loom reset · loom history
-```
-
-`loom setup` registers the MCP server and installs the `/task`, `/done`, `/proceed`
-commands — idempotent, never clobbers a command you've edited. The project allowlist is
-default-deny: each directory is authorized explicitly with `loom allowlist add`.
+Direct Anthropic API provider for loom: runs decision agents through the Anthropic SDK with
+prompt caching and idempotent spawn support. Configure it once
+(`loom secrets set ANTHROPIC_API_KEY …`, `loom models set <agent> anthropic:<model>`), and
+every project inherits it. Installed on demand — the base `@loomfsm/pipeline` stays lean.
 
 ## Part of loom
 

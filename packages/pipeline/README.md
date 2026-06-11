@@ -1,55 +1,64 @@
+<div align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/teaarte/loom/main/assets/logo-dark.svg">
+  <img src="https://raw.githubusercontent.com/teaarte/loom/main/assets/logo.svg" alt="loom" width="200">
+</picture>
+
+**Agent runs you can prove — not just trust.**
+</div>
+
 # @loomfsm/pipeline
 
-One-step install for the loom pipeline. Installing this package puts the
-`loom` command on your PATH and pulls everything the pipeline needs to run:
-the command-line installer, the MCP server, the default code bundle, and the
-zero-config provider.
+One-step install for [loom](https://loomfsm.dev). This meta-package puts the `loom` command
+on your PATH and pulls everything the pipeline needs: the kernel, driver, daemon, server,
+dashboard, MCP server, CLI, the `code` bundle, and the zero-config provider.
 
 ## Install
 
-```
+```bash
 npm i -g @loomfsm/pipeline
 ```
 
-## Set up your agent host
+## Run it
 
-```
-loom setup           # register the MCP server + install the /task and /done commands
-loom allowlist add   # authorize the current project for tasks (run once per project)
-```
+**Web dashboard** — the fastest path:
 
-`loom setup` writes the MCP server registration and drops the `/task` and
-`/done` slash commands into your host's command directory. It is idempotent —
-re-running it changes nothing and never clobbers a command you have edited
-(use `--force` to overwrite). Pass `--project` to scope the install to the
-current directory instead of your user profile, or `--dry-run` to preview the
-changes.
-
-The project allowlist is default-deny by design: the server never enrolls a
-project on its own, so each directory you want to use must be authorized once
-with `loom allowlist add`.
-
-## Run a task
-
-In an authorized project, from your agent host:
-
-```
-/task fix the typo in the module header comment
+```bash
+loom up      # start the local control plane + open the dashboard (127.0.0.1:4317)
 ```
 
-The host runs each spawned agent with the prompt the server provides, surfaces
-each approval gate for your decision, and drives the work to completion. Then
-`/done` shows the summary.
+**Inside your agent host (Claude Code)** — no API key, no network:
 
-## Commands
+```bash
+loom setup            # register the MCP server + the /task, /done, /proceed commands
+loom allowlist add    # authorize the current project (once per project; default-deny)
+```
 
+then, in that project: `/task add rate limiting to the login endpoint`.
+
+**Headless / autonomous:**
+
+```bash
+loom run "fix the flaky retry test"          # one task to the end, isolated git worktree
+loom daemon start --watch                    # park on gates, wake on answers, recover on restart
+loom bot telegram                            # drive the fleet from your phone
 ```
-loom setup [--user|--project] [--dry-run] [--force]
-loom allowlist add [path] [--dry-run]
-loom allowlist list
-loom init [--dry-run]
-loom --help | --version
-```
+
+State lives at `<project>/.loom/state.db` — a plain SQLite file you own. Every mode drives
+the identical state machine, gates, and invariants.
+
+## Part of loom
+
+[loom](https://loomfsm.dev) drives multi-step LLM agent work — code review, implementation,
+any review-gated task — as a replay-deterministic state machine: safety invariants enforced
+at commit time, human gates where they matter, and a complete, replayable audit trail in a
+local SQLite file.
+
+**Most users should install [`@loomfsm/pipeline`](https://www.npmjs.com/package/@loomfsm/pipeline)**
+(`npm i -g @loomfsm/pipeline`), which pulls the whole runtime in one step. Install this
+package directly only if you are assembling your own runtime.
+
+[Website](https://loomfsm.dev) · [Quickstart](https://loomfsm.dev/docs/) · [Why loom](https://loomfsm.dev/why/) · [GitHub](https://github.com/teaarte/loom)
 
 ## License
 

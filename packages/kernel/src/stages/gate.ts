@@ -17,7 +17,11 @@
 import { getKernelTx } from "../fsm.js";
 import { resolveGatePolicy } from "../gate-policy.js";
 import { makeGateEventId } from "../ids.js";
-import { supersedeFindingsOnWalkBack } from "../lib/supersede-findings.js";
+import {
+  clearOpenBlockers,
+  snapshotOpenBlockers,
+  supersedeFindingsOnWalkBack,
+} from "../lib/supersede-findings.js";
 import { buildPolicyContext } from "../policies/index.js";
 import { assertVocabKnown } from "../vocabularies.js";
 import type { StageContext } from "../types/context.js";
@@ -113,6 +117,12 @@ export async function interpretGate(
     const flow = ctx.registry.flows.get(state.driver.flow_name);
     const target = flow ? flow.indexOf(result.step) : -1;
     if (flow && target >= 0 && target <= state.driver.step_index) {
+      // Hand the rejecting round's open blockers to the re-entered flow BEFORE
+      // they are retired — captured into the scratch the supersede write below
+      // then carries forward, so the snapshot is not dropped. The next spawn
+      // renders them under "### Open blockers" so the fixer knows what to
+      // address; gating still reads the live findings table, not this snapshot.
+      state.driver.scratch = await snapshotOpenBlockers(getKernelTx(ctx), state.driver.scratch);
       // Mirror the bumped per-phase counters onto the in-memory snapshot
       // so the re-run pass stamps bundle-pushed findings under the new
       // round (delivery-path stamping re-reads scratch from disk anyway).
@@ -124,6 +134,10 @@ export async function interpretGate(
         scratch: state.driver.scratch,
       });
     }
+  } else if (result.type === "advance") {
+    // A gate approval settles the blockers the last rejection handed off —
+    // drop the snapshot so a downstream spawn does not list resolved blockers.
+    state.driver.scratch = await clearOpenBlockers(getKernelTx(ctx), state.driver.scratch);
   }
   return result;
 }

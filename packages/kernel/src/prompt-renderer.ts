@@ -27,6 +27,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { KernelError } from "./state/db.js";
+import { OPEN_BLOCKERS_KEY, type OpenBlocker } from "./lib/supersede-findings.js";
 import type { Bundle, SpawnContextAsset } from "./types/bundle.js";
 import type {
   ContextBudget,
@@ -339,6 +340,17 @@ export function buildSpawnContext(
   lines.push("", "### Project", state.project_dir);
   lines.push("", "### Decisions so far", renderDecisions(state.decisions));
 
+  // Open blockers a prior gate rejection left for this run to resolve. The
+  // gate snapshots them into the driver scratch before retiring the findings
+  // (so a re-entered fixer learns WHAT to fix instead of re-reading a
+  // byte-identical prompt); the section is absent on a clean first pass and
+  // cleared once a gate approves. Domain-blind: any bundle whose gate rejects
+  // gets the hand-off, an empty snapshot renders nothing.
+  const blockers = readOpenBlockers(state);
+  if (blockers.length > 0) {
+    lines.push("", "### Open blockers", renderOpenBlockers(blockers));
+  }
+
   const active = activeAgents(state, registry);
   if (active.length > 0) {
     lines.push("", "### Active agents", active.join(", "));
@@ -399,6 +411,37 @@ function renderDecisionValue(value: unknown): string {
     return value;
   }
   return JSON.stringify(value) ?? "null";
+}
+
+// Read the open-blocker snapshot the gate left on the driver scratch. Tolerant
+// of a missing driver/scratch (the partial states the pure-render tests build)
+// and of a malformed entry — a bad row is skipped rather than aborting the
+// render, since this is delivery context, not a gating read.
+function readOpenBlockers(state: PipelineState): OpenBlocker[] {
+  const raw = state.driver?.scratch?.[OPEN_BLOCKERS_KEY];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (b): b is OpenBlocker => b !== null && typeof b === "object" && !Array.isArray(b),
+  );
+}
+
+// Render each blocker as one line: `- [category] file:line: summary — suggested
+// fix: …`. Stable for a given snapshot (the gate captured the rows in id order).
+function renderOpenBlockers(blockers: OpenBlocker[]): string {
+  return blockers
+    .map((b) => {
+      const loc =
+        b.file != null && b.file.length > 0
+          ? `${b.file}${typeof b.line === "number" ? `:${b.line}` : ""}`
+          : "(no file)";
+      const fix =
+        typeof b.suggested_fix === "string" && b.suggested_fix.length > 0
+          ? ` — suggested fix: ${b.suggested_fix}`
+          : "";
+      const category = typeof b.category === "string" && b.category.length > 0 ? b.category : "uncategorized";
+      return `- [${category}] ${loc}: ${b.summary ?? ""}${fix}`;
+    })
+    .join("\n");
 }
 
 function renderBody(body: string, state: PipelineState): string {

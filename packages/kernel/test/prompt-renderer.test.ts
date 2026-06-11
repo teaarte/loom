@@ -73,8 +73,18 @@ function stateStub(
     driver_state_id?: string;
     decisions?: Record<string, unknown>;
     flow_name?: string;
+    open_blockers?: unknown;
   } = {},
 ): PipelineState {
+  // Build the driver row only when a test exercises it (a flow for the
+  // active-agents section, or an open-blocker snapshot for the rework
+  // hand-off); omitted otherwise so the pure-render tests keep their shape.
+  const scratch: Record<string, unknown> = {};
+  if (o.open_blockers !== undefined) scratch["open_blockers"] = o.open_blockers;
+  const driver =
+    o.flow_name != null || o.open_blockers !== undefined
+      ? { flow_name: o.flow_name, scratch }
+      : undefined;
   return {
     task: o.task ?? "Add a health endpoint",
     project_dir: o.project_dir ?? "/work/proj",
@@ -84,9 +94,7 @@ function stateStub(
     task_id: "task_id" in o ? o.task_id : "task-1",
     driver_state_id: o.driver_state_id ?? "ds-1",
     decisions: o.decisions ?? {},
-    // `driver.flow_name` drives the active-agents section; omitted (no
-    // flow) → the section is absent, the shape the pure-render tests use.
-    driver: o.flow_name != null ? { flow_name: o.flow_name } : undefined,
+    driver,
   } as unknown as PipelineState;
 }
 
@@ -383,6 +391,52 @@ describe("buildPrompt — spawn context block", () => {
     const out = buildPrompt(stateStub(), agent("planner"), registryWith(new Map()));
     assert.ok(out.startsWith("agent=planner"));
     assert.ok(!out.includes("## Spawn context"));
+  });
+
+  it("renders the Open blockers section from the driver-scratch snapshot", () => {
+    const out = rendered(
+      stateStub({
+        open_blockers: [
+          {
+            file: "src/orders.ts",
+            line: 42,
+            category: "correctness",
+            summary: "P2002 not caught — duplicate order 500s",
+            suggested_fix: "wrap create() in try/catch on P2002",
+            agent: "logic-reviewer",
+          },
+          {
+            file: null,
+            line: null,
+            category: "security",
+            summary: "no authz check on the new route",
+            suggested_fix: null,
+            agent: "security",
+          },
+        ],
+      }),
+    );
+    assert.ok(out.includes("### Open blockers"), "section present");
+    assert.ok(
+      out.includes("- [correctness] src/orders.ts:42: P2002 not caught — duplicate order 500s — suggested fix: wrap create() in try/catch on P2002"),
+    );
+    // A blocker with no file/fix renders the location placeholder and no fix tail.
+    assert.ok(out.includes("- [security] (no file): no authz check on the new route"));
+    assert.ok(!out.includes("(no file): no authz check on the new route — suggested fix:"));
+  });
+
+  it("omits the Open blockers section when the snapshot is empty or absent", () => {
+    assert.ok(!rendered(stateStub({ open_blockers: [] })).includes("### Open blockers"));
+    assert.ok(!rendered(stateStub()).includes("### Open blockers"));
+  });
+
+  it("is byte-identical on re-render with an open-blocker snapshot (determinism)", () => {
+    const state = stateStub({
+      open_blockers: [
+        { file: "a.ts", line: 1, category: "x", summary: "s", suggested_fix: null, agent: "logic-reviewer" },
+      ],
+    });
+    assert.equal(rendered(state), rendered(state));
   });
 });
 

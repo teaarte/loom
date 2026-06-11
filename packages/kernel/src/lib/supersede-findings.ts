@@ -123,3 +123,90 @@ function stagePhase(stage: Stage): string {
   if (stage.kind === "step") return stage.phase ?? "";
   return stage.phase;
 }
+
+// ============================================================================
+// Open-blocker hand-off — deliver a gate rejection's blockers to the rework
+// ============================================================================
+//
+// A walk-back retires the rejecting round's findings so a stale blocker cannot
+// haunt the next round (see the supersede resolver above). But the agent the
+// flow re-enters on — the one asked to FIX those blockers — must still learn
+// what they were, or it re-runs against a byte-identical prompt and the rework
+// loop converges only by luck. So at the gate, BEFORE the supersede retires
+// them, the live open blockers are snapshotted into the driver scratch; the
+// prompt renderer reads that snapshot and lists it under "### Open blockers" in
+// the next spawn context. The snapshot is plain text (file / line / category /
+// summary / suggested fix) — it is delivery context, never re-counted against a
+// gate (gating still reads the live findings table). It is overwritten on the
+// next rejection and cleared when a gate approves, so an agent only ever sees
+// the blockers it is currently being asked to resolve.
+
+// `driver_state.scratch` key holding the most recent gate rejection's open
+// blocking findings, captured before they are superseded.
+export const OPEN_BLOCKERS_KEY = "open_blockers";
+
+// The compact projection a fixer needs — no provenance columns, no ids.
+export interface OpenBlocker {
+  file: string | null;
+  line: number | null;
+  category: string;
+  summary: string;
+  suggested_fix: string | null;
+  agent: string;
+}
+
+interface OpenBlockerRow {
+  file: string | null;
+  line_start: number | null;
+  category: unknown;
+  summary: unknown;
+  suggested_fix: string | null;
+  agent: unknown;
+}
+
+// Capture every LIVE open blocking finding (open + blocking + non-superseded)
+// into the driver scratch so the re-entered flow's first spawn renders them.
+// Co-committed in the gate's walk-back tx, BEFORE `supersedeFindingsOnWalkBack`
+// retires the same rows — order matters: read them while they are still live.
+// Returns the merged scratch so the caller threads it into the supersede write
+// that follows (which rewrites the whole scratch blob and would otherwise drop
+// this key). Carries no timestamp — nothing here reads the host clock.
+export async function snapshotOpenBlockers(
+  tx: Transaction,
+  scratch: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const rows = await tx.queryAll<OpenBlockerRow>(
+    "SELECT file, line_start, category, summary, suggested_fix, agent " +
+      "FROM findings WHERE severity = 'blocking' AND status = 'open' " +
+      "AND superseded_by_iteration IS NULL ORDER BY id ASC",
+  );
+  const blockers: OpenBlocker[] = rows.map((r) => ({
+    file: r.file === null ? null : String(r.file),
+    line: r.line_start === null ? null : Number(r.line_start),
+    category: String(r.category),
+    summary: String(r.summary),
+    suggested_fix: r.suggested_fix === null ? null : String(r.suggested_fix),
+    agent: String(r.agent),
+  }));
+  const merged = { ...scratch, [OPEN_BLOCKERS_KEY]: blockers };
+  await tx.exec("UPDATE driver_state SET scratch = ? WHERE id = 1", [
+    JSON.stringify(merged),
+  ]);
+  return merged;
+}
+
+// Drop the open-blocker snapshot when a gate approves — the blockers the agent
+// was asked to fix are settled, so the next spawn must not still list them.
+// A no-op (no write) when the key is absent. Returns the merged scratch.
+export async function clearOpenBlockers(
+  tx: Transaction,
+  scratch: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!(OPEN_BLOCKERS_KEY in scratch)) return scratch;
+  const merged = { ...scratch };
+  delete merged[OPEN_BLOCKERS_KEY];
+  await tx.exec("UPDATE driver_state SET scratch = ? WHERE id = 1", [
+    JSON.stringify(merged),
+  ]);
+  return merged;
+}

@@ -3,6 +3,7 @@
 // ADVISORY: a stale/dead entry is reclaimed, never a block.
 
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,7 @@ import {
   clearStatus,
   DaemonError,
   isAlive,
+  parseProcStartToken,
   readStatus,
   signalStop,
   writeStatus,
@@ -120,5 +122,80 @@ describe("process-control — stop signalling", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("process-control — pid-reuse-safe stop (start-token guard)", () => {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  it("does NOT signal a reused pid (start-token mismatch) and clears the stale file", async () => {
+    const dir = freshProjectDir();
+    // A genuinely-alive process whose pid stands in for a reused one: the file
+    // recorded an OLD owner's token, but the pid now belongs to THIS process
+    // (a different token) — signalling it would kill an unrelated process.
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]);
+    try {
+      await sleep(50);
+      assert.ok(child.pid);
+      writeStatus(dir, {
+        pid: child.pid,
+        project_dir: dir,
+        started_at: "2026-06-02T00:00:00.000Z",
+        updated_at: "2026-06-02T00:00:00.000Z",
+        phase: "driving",
+        start_token: "old-owner-token",
+      });
+      // The CURRENT token for that pid differs from the recorded one → reused.
+      const readStartToken = (pid: number): string | null =>
+        pid === child.pid ? "new-different-token" : null;
+      assert.equal(signalStop(dir, { readStartToken }), "not-running");
+      // The stale file is cleared, and the live stranger was NOT signalled.
+      assert.equal(readStatus(dir), null);
+      assert.equal(isAlive(child.pid), true);
+    } finally {
+      child.kill("SIGKILL");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("signals a live owner whose start token still matches", async () => {
+    const dir = freshProjectDir();
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]);
+    try {
+      await sleep(50);
+      assert.ok(child.pid);
+      writeStatus(dir, {
+        pid: child.pid,
+        project_dir: dir,
+        started_at: "2026-06-02T00:00:00.000Z",
+        updated_at: "2026-06-02T00:00:00.000Z",
+        phase: "driving",
+        start_token: "match-token",
+      });
+      const readStartToken = (pid: number): string | null =>
+        pid === child.pid ? "match-token" : null;
+      // Token matches → the owner is the real one → it is signalled.
+      assert.equal(signalStop(dir, { readStartToken }), "signalled");
+    } finally {
+      child.kill("SIGKILL");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("parseProcStartToken — Linux /proc/<pid>/stat field 22", () => {
+  it("extracts the start-time token, even when comm contains spaces / parens", () => {
+    // The line is: pid (comm) state ppid ... — `comm` may itself contain spaces
+    // AND parens, so the parser splits AFTER the last ')'. The post-')' tokens
+    // are state(field3) ... starttime(field22), so starttime sits at index 19.
+    const after = Array.from({ length: 24 }, (_, i) => `t${i}`);
+    after[19] = "987654"; // field 22 = starttime
+    const stat = `4242 (weird (name) proc) ${after.join(" ")}`;
+    assert.equal(parseProcStartToken(stat), "987654");
+  });
+
+  it("returns null on an unparseable line", () => {
+    assert.equal(parseProcStartToken("garbage with no paren"), null);
+    assert.equal(parseProcStartToken(""), null);
   });
 });

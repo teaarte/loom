@@ -11,7 +11,13 @@ import { runTask, type RunOverrides } from "../src/commands/run.js";
 import type { CliEnv } from "../src/lib/env.js";
 
 import type { DriveOutcome, Executor } from "@loomfsm/driver";
+import type { DaemonHandle } from "@loomfsm/daemon";
+import { DaemonError } from "@loomfsm/daemon";
 import type { Registry } from "@loomfsm/kernel";
+
+// A no-op advisory lock so the unit tests never touch a real status file. The
+// lock-contention path has its own test below that injects a throwing acquire.
+const noLock = (): DaemonHandle => ({ update() {}, release() {} });
 
 function makeEnv(): { env: CliEnv; out: string[]; err: string[] } {
   const out: string[] = [];
@@ -34,6 +40,7 @@ function overrides(outcome: DriveOutcome): RunOverrides {
     resolveRegistry: () => ({}) as unknown as Registry,
     buildExecutor: () => stubExecutor,
     driveImpl: async () => outcome,
+    acquireRunLock: noLock,
   };
 }
 
@@ -117,6 +124,7 @@ describe("loom run", () => {
         ({ bundle: { name: "code" }, agents: new Map([["a", {}]]) }) as unknown as Registry,
       claudeAvailable: () => false,
       driveImpl: async () => ({ kind: "complete", task_id: null, verdict: "accepted", summary: "" }),
+      acquireRunLock: noLock,
     });
     assert.equal(code, 1);
     assert.ok(err.some((l) => /Claude Code CLI/.test(l)));
@@ -150,6 +158,7 @@ describe("loom run", () => {
         seenTask = opts.task;
         return { kind: "complete", task_id: "t", verdict: "accepted", summary: "" };
       },
+      acquireRunLock: noLock,
     });
     assert.equal(code, 0);
     assert.equal(seenTask, "ship it");
@@ -163,6 +172,7 @@ describe("loom run", () => {
       resolveRegistry: () => ({}) as unknown as Registry,
       dockerAvailable: () => false,
       driveImpl: async () => ({ kind: "complete", task_id: null, verdict: "accepted", summary: "" }),
+      acquireRunLock: noLock,
     });
     assert.equal(code, 1);
     assert.ok(err.some((l) => /--docker requires/.test(l)));
@@ -180,6 +190,7 @@ describe("loom run", () => {
         seenDecisions = opts.initial_decisions;
         return { kind: "complete", task_id: "t", verdict: "accepted", summary: "" };
       },
+      acquireRunLock: noLock,
     });
     assert.equal(code, 0);
     assert.equal(seenTask, "do the thing");
@@ -196,6 +207,7 @@ describe("loom run", () => {
         seenDecisions = opts.initial_decisions;
         return { kind: "complete", task_id: "t", verdict: "accepted", summary: "" };
       },
+      acquireRunLock: noLock,
     });
     assert.deepEqual(seenDecisions, { complexity: "medium", complexity_pinned: true });
   });
@@ -221,7 +233,48 @@ describe("loom run", () => {
         seenDecisions = opts.initial_decisions;
         return { kind: "complete", task_id: "t", verdict: "accepted", summary: "" };
       },
+      acquireRunLock: noLock,
     });
     assert.equal(seenDecisions, undefined);
+  });
+
+  it("REFUSES with a clear message when the project lock is already held (live daemon or another run)", async () => {
+    const { env, err } = makeEnv();
+    let drove = false;
+    const code = await runTask(["some work"], env, {
+      resolveRegistry: () => ({}) as unknown as Registry,
+      buildExecutor: () => stubExecutor,
+      driveImpl: async () => {
+        drove = true;
+        return { kind: "complete", task_id: "t", verdict: "accepted", summary: "" };
+      },
+      // The lock is held by a live owner → acquire throws DAEMON_ALREADY_RUNNING.
+      acquireRunLock: () => {
+        throw new DaemonError("DAEMON_ALREADY_RUNNING", "a loom daemon (pid 4242) already supervises /x");
+      },
+    });
+    assert.equal(code, 1);
+    assert.equal(drove, false, "a held lock must stop the run BEFORE any drive begins");
+    assert.ok(err.some((l) => /already supervises/.test(l)));
+    assert.ok(err.some((l) => /loom daemon stop|wait/.test(l)));
+  });
+
+  it("releases the lock on every exit (complete, paused, error)", async () => {
+    let released = 0;
+    const lock = (): DaemonHandle => ({ update() {}, release() { released += 1; } });
+    const outcomes: DriveOutcome[] = [
+      { kind: "complete", task_id: "t", verdict: "accepted", summary: "" },
+      { kind: "error", driver_state_id: "d", code: "X", message: "m", recovery_options: [] },
+    ];
+    for (const outcome of outcomes) {
+      const { env } = makeEnv();
+      await runTask(["work"], env, {
+        resolveRegistry: () => ({}) as unknown as Registry,
+        buildExecutor: () => stubExecutor,
+        driveImpl: async () => outcome,
+        acquireRunLock: lock,
+      });
+    }
+    assert.equal(released, 2, "the lock is released in a finally regardless of outcome");
   });
 });

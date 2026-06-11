@@ -36,6 +36,9 @@ export interface ServerStatus {
   updated_at: string;
   phase: ServerPhase;
   project_count: number;
+  // Process-identity token (Linux start-time) stamped at acquire so `stop` can
+  // tell a live owner from a process that reused the pid. Absent off Linux.
+  start_token?: string;
 }
 
 export class ServerControlError extends Error {
@@ -65,8 +68,14 @@ export function registeredProjectsPath(stateDir: string): string {
 // The advisory server-status file shares its mechanics (tolerant read, atomic
 // temp+rename write, best-effort clear, liveness-guarded acquire, SIGTERM stop)
 // with the local daemon; only the status shape and the conflict error differ.
-function statusFile(stateDir: string): StatusFile<ServerStatus> {
-  return createStatusFile<ServerStatus>(serverStatusPath(stateDir));
+function statusFile(
+  stateDir: string,
+  readStartToken?: (pid: number) => string | null,
+): StatusFile<ServerStatus> {
+  return createStatusFile<ServerStatus>(
+    serverStatusPath(stateDir),
+    readStartToken !== undefined ? { readStartToken } : {},
+  );
 }
 
 export function readServerStatus(stateDir: string): ServerStatus | null {
@@ -113,11 +122,16 @@ export interface ServerHandle {
 export interface AcquireServerOptions {
   pid?: number;
   clock?: Clock;
+  // Injectable process-identity token reader (default = Linux `/proc` start
+  // time). A test passes a fake so the pid-reuse stop guard is deterministic on
+  // any OS; production leaves it unset.
+  readStartToken?: (pid: number) => string | null;
 }
 
 // Claim the control plane. Refuses (SERVER_ALREADY_RUNNING) when a LIVE server
 // already owns this state dir; a stale file from a crashed server (pid no
-// longer alive) is reclaimed.
+// longer alive) is reclaimed. The claim is atomic (O_EXCL): two concurrent
+// starts can never both win.
 export function acquireServerLock(
   stateDir: string,
   host: string,
@@ -126,14 +140,7 @@ export function acquireServerLock(
 ): ServerHandle {
   const pid = opts.pid ?? process.pid;
   const clock = opts.clock ?? systemClock;
-  const sf = statusFile(stateDir);
-
-  sf.guardAcquire(pid, (existing) => {
-    throw new ServerControlError(
-      "SERVER_ALREADY_RUNNING",
-      `a loom control plane (pid ${existing.pid}) is already serving on ${existing.host}:${existing.port}`,
-    );
-  });
+  const sf = statusFile(stateDir, opts.readStartToken);
 
   const startedAt = isoFrom(clock);
   const base = (phase: ServerPhase, projectCount: number): ServerStatus => ({
@@ -145,7 +152,12 @@ export function acquireServerLock(
     phase,
     project_count: projectCount,
   });
-  sf.write(base("starting", 0));
+  sf.acquire(base("starting", 0), (existing) => {
+    throw new ServerControlError(
+      "SERVER_ALREADY_RUNNING",
+      `a loom control plane (pid ${existing.pid}) is already serving on ${existing.host}:${existing.port}`,
+    );
+  });
 
   return {
     update(phase, projectCount) {
@@ -160,7 +172,11 @@ export function acquireServerLock(
 export type StopResult = "signalled" | "not-running";
 
 // Signal a running control plane to stop (SIGTERM → graceful shutdown). A
-// stale/absent status file or a dead pid reports "not-running".
-export function signalServerStop(stateDir: string): StopResult {
-  return statusFile(stateDir).signalStop();
+// stale/absent status file, a dead pid, or a pid reused by an unrelated process
+// (start-token mismatch) reports "not-running".
+export function signalServerStop(
+  stateDir: string,
+  opts: { readStartToken?: (pid: number) => string | null } = {},
+): StopResult {
+  return statusFile(stateDir, opts.readStartToken).signalStop();
 }

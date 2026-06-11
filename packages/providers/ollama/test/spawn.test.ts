@@ -74,6 +74,34 @@ describe("createOllamaProvider", () => {
     assert.equal(args.options?.num_predict, 4096);
   });
 
+  it("throws EXECUTOR_OUTPUT_TRUNCATED (a coded, sqlite-free error) when done_reason is 'length'", async () => {
+    const fake = makeFakeClient({
+      message: { role: "assistant", content: "a cut-off answer" },
+      prompt_eval_count: 10,
+      eval_count: 4096,
+      done: true,
+      done_reason: "length",
+    });
+    const provider = createOllamaProvider({ client: fake.client });
+    await assert.rejects(
+      provider.spawn(baseRequest()),
+      (err: unknown) => (err as { code?: string }).code === "EXECUTOR_OUTPUT_TRUNCATED",
+    );
+  });
+
+  it("does not throw when done_reason is the normal 'stop'", async () => {
+    const fake = makeFakeClient({
+      message: { role: "assistant", content: "done" },
+      prompt_eval_count: 10,
+      eval_count: 5,
+      done: true,
+      done_reason: "stop",
+    });
+    const provider = createOllamaProvider({ client: fake.client });
+    const result = await provider.spawn(baseRequest());
+    assert.equal(result.type, "result");
+  });
+
   it("honors req.extras.max_tokens by threading it into options.num_predict", async () => {
     const fake = makeFakeClient(defaultResponse);
     const provider = createOllamaProvider({ client: fake.client });

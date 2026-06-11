@@ -102,4 +102,10 @@ export {
 
 export { systemClock, isoFrom, type Clock } from "./clock.js";
 
-export { createStatusFile, type StatusFile } from "./status-file.js";
+export {
+  createStatusFile,
+  processStartToken,
+  parseProcStartToken,
+  type StatusFile,
+  type StatusFileOptions,
+} from "./status-file.js";

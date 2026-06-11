@@ -100,6 +100,17 @@ export interface TraceSummary {
   completion_summary: string | null;
 }
 
+// Store-native token totals — summed across every recorded agent run. The
+// kernel persists neutral in/out/cached per spawn (NOT dollars, NOT cache-write,
+// which are driver-side observability), so the read-model can roll up exactly
+// those three. The authoritative cost + cache-write total rides on the drive
+// outcome / the per-spawn transcript usage, not the store.
+export interface TraceTokenTotals {
+  tokens_in: number;
+  tokens_out: number;
+  tokens_cached: number;
+}
+
 export interface TraceView {
   // Null when the store carries no canonical task row (a never-run / archived-out
   // slot) — the reader degrades to "nothing recorded" rather than throwing.
@@ -108,9 +119,19 @@ export interface TraceView {
   findings: TraceFinding[];
   verdicts: TraceVerdict[];
   gates: TraceGate[];
+  // Token totals summed across `agents` (store-native; cost/cache-write are not
+  // stored — see `TraceTokenTotals`). Zeroed when nothing ran.
+  token_totals: TraceTokenTotals;
 }
 
-const EMPTY_TRACE: TraceView = { summary: null, agents: [], findings: [], verdicts: [], gates: [] };
+const EMPTY_TRACE: TraceView = {
+  summary: null,
+  agents: [],
+  findings: [],
+  verdicts: [],
+  gates: [],
+  token_totals: { tokens_in: 0, tokens_out: 0, tokens_cached: 0 },
+};
 
 function stateDbPath(projectDir: string): string {
   return join(projectFootprintDir(projectDir), "state.db");
@@ -299,5 +320,15 @@ async function readTraceFromTx(tx: Transaction): Promise<TraceView> {
     decided_at: str(r.decided_at),
   }));
 
-  return { summary, agents, findings, verdicts, gates };
+  // Roll up the store-native per-spawn token counts into a task total so a
+  // read-model surface (the dashboard) shows whole-task tokens without summing
+  // every row itself.
+  const token_totals: TraceTokenTotals = { tokens_in: 0, tokens_out: 0, tokens_cached: 0 };
+  for (const a of agents) {
+    token_totals.tokens_in += a.tokens_in ?? 0;
+    token_totals.tokens_out += a.tokens_out ?? 0;
+    token_totals.tokens_cached += a.tokens_cached ?? 0;
+  }
+
+  return { summary, agents, findings, verdicts, gates, token_totals };
 }

@@ -48,6 +48,7 @@ export type {
   TraceFinding,
   TraceVerdict,
   TraceGate,
+  TraceTokenTotals,
 } from "./trace.js";
 
 export { drive } from "./drive.js";
@@ -55,6 +56,7 @@ export type {
   DriveError,
   DriveOptions,
   DriveOutcome,
+  DriveUsageTotal,
   Executor,
   ExecutorResult,
   SpawnUsage,

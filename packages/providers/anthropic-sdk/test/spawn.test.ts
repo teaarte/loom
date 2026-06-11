@@ -186,6 +186,63 @@ describe("createAnthropicSdkProvider", () => {
     }
   });
 
+  it("surfaces cache_creation_input_tokens out-of-band as cache_write (cost roll-up counts it)", async () => {
+    const fake = makeFakeClient({
+      content: [{ type: "text", text: "hi" }],
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_read_input_tokens: 3,
+        cache_creation_input_tokens: 40,
+      },
+    });
+    const provider = createAnthropicSdkProvider({ client: fake.client });
+    const result = await provider.spawn(baseRequest());
+    assert.equal(result.type, "result");
+    if (result.type !== "result") return;
+    // cache-READ stays on the kernel `tokens` shape; cache-WRITE rides
+    // out-of-band (the kernel models only cache-read), like OpenRouter's cost.
+    assert.deepEqual(result.tokens, { in: 10, out: 5, cached: 3 });
+    assert.equal((result as { cache_write?: number }).cache_write, 40);
+  });
+
+  it("omits cache_write out-of-band when cache_creation_input_tokens is zero / absent", async () => {
+    const fake = makeFakeClient(defaultResponse); // no cache_creation_input_tokens
+    const provider = createAnthropicSdkProvider({ client: fake.client });
+    const result = await provider.spawn(baseRequest());
+    assert.equal(result.type, "result");
+    if (result.type !== "result") return;
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(result, "cache_write"),
+      false,
+      "cache_write must be absent (never a fabricated zero) when no prefix was written",
+    );
+  });
+
+  it("throws EXECUTOR_OUTPUT_TRUNCATED (a coded, sqlite-free error) when stop_reason is max_tokens", async () => {
+    const fake = makeFakeClient({
+      content: [{ type: "text", text: "a partial, cut-off answer" }],
+      stop_reason: "max_tokens",
+      usage: { input_tokens: 10, output_tokens: 4096 },
+    });
+    const provider = createAnthropicSdkProvider({ client: fake.client });
+    await assert.rejects(
+      provider.spawn(baseRequest()),
+      (err: unknown) => (err as { code?: string }).code === "EXECUTOR_OUTPUT_TRUNCATED",
+    );
+  });
+
+  it("does not throw when stop_reason is the normal end_turn", async () => {
+    const fake = makeFakeClient({
+      content: [{ type: "text", text: "complete" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+    const provider = createAnthropicSdkProvider({ client: fake.client });
+    const result = await provider.spawn(baseRequest());
+    assert.equal(result.type, "result");
+  });
+
   it("omits tokens.cached when cache_read_input_tokens is missing from the response", async () => {
     const fake = makeFakeClient({
       content: [{ type: "text", text: "hi" }],

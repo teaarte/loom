@@ -133,6 +133,18 @@ export interface SandboxedExecutorOptions {
   sandbox_seed?: readonly SandboxSeed[];
 }
 
+// Merge two optional abort signals into one that fires when EITHER does. Used
+// to fold the executor's construction-time signal together with the per-spawn
+// signal the loop passes, so a child is torn down on whichever fires first.
+function combineSignals(
+  a: AbortSignal | undefined,
+  b: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return AbortSignal.any([a, b]);
+}
+
 export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executor {
   // Provision once per executor instance (one drive == one task), then reuse
   // for every spawn of that task. The deterministic worktree path makes a
@@ -170,9 +182,13 @@ export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executo
     // This is what lets a daemon / control-plane attach to a pending spawn
     // (the create→drive gap) and recover one after a crash.
     idempotent: opts.idempotent ?? true,
-    async execute(intent: ProviderShuttleIntent): Promise<ExecutorResult> {
+    async execute(intent: ProviderShuttleIntent, signal?: AbortSignal): Promise<ExecutorResult> {
       const wt = provision();
-      const ran = await opts.runSpawn(intent, wt.dir, opts.signal);
+      // Abort the backend run if EITHER signal fires: the construction-time one
+      // (a host's graceful-shutdown / per-drive deadline) or the per-spawn one
+      // the loop passes (a wall-time budget breach / cancel). Both reach the
+      // child via `runSpawn` → `spawnCapture`.
+      const ran = await opts.runSpawn(intent, wt.dir, combineSignals(opts.signal, signal));
       const agent_output = typeof ran === "string" ? ran : ran.output;
       const usage = typeof ran === "string" ? undefined : ran.usage;
 

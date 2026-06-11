@@ -55,6 +55,18 @@ function readResultCost(result: unknown): number | undefined {
   return typeof c === "number" && Number.isFinite(c) ? c : undefined;
 }
 
+// Cache-CREATION (write) tokens ride out-of-band exactly like `cost_usd`: the
+// kernel `ProviderResult.tokens` shape is `{in,out,cached?}` (cache-READ only),
+// so a provider that bills for writing a prefix into the cache (Anthropic's
+// `cache_creation_input_tokens`) attaches the figure alongside, read here
+// defensively and folded into the driver-side `SpawnUsage`. Absent / non-finite
+// → omitted (a provider without a cache-write line contributes nothing).
+function readResultCacheWrite(result: unknown): number | undefined {
+  if (typeof result !== "object" || result === null) return undefined;
+  const c = (result as { cache_write?: unknown }).cache_write;
+  return typeof c === "number" && Number.isFinite(c) && c > 0 ? c : undefined;
+}
+
 export function createProviderExecutor(
   provider: LLMProvider,
   opts: ProviderExecutorOptions = {},
@@ -64,16 +76,21 @@ export function createProviderExecutor(
     output: string,
     tokens?: { in: number; out: number; cached?: number },
     cost?: number,
+    cacheWrite?: number,
   ): ExecutorResult => {
     const result: ExecutorResult = { agent_output: output };
     if (tokens !== undefined || cost !== undefined) {
+      // Fold the out-of-band cache-write tokens into the token breakdown so the
+      // observability sink + drive roll-up count cache-creation spend.
+      const fullTokens =
+        tokens !== undefined && cacheWrite !== undefined ? { ...tokens, cache_write: cacheWrite } : tokens;
       // Stamp the spawn identity so the observability sink shows which agent +
-      // model the usage was for (M2), alongside tokens (kernel-native) and the
-      // out-of-band backend cost (M5).
+      // model the usage was for, alongside tokens (kernel-native) and the
+      // out-of-band backend cost.
       const usage: SpawnUsage = {
         agent: spawn.agent,
         model: spawn.model,
-        ...(tokens !== undefined ? { tokens } : {}),
+        ...(fullTokens !== undefined ? { tokens: fullTokens } : {}),
         ...(cost !== undefined ? { cost_usd: cost } : {}),
       };
       result.usage = usage;
@@ -83,7 +100,19 @@ export function createProviderExecutor(
   };
 
   return {
-    async execute(spawn: ProviderShuttleIntent): Promise<ExecutorResult> {
+    async execute(spawn: ProviderShuttleIntent, signal?: AbortSignal): Promise<ExecutorResult> {
+      // The kernel `ProviderSpawnRequest` carries no AbortSignal, so an
+      // in-flight raw call cannot be torn down — but it is single-shot and
+      // bounded by max_tokens, so the real exposure is starting NEW calls after
+      // a budget breach / cancel. Refuse to start one once aborted: a fanout
+      // that tripped its budget never fires the workers that had not begun yet.
+      if (signal?.aborted === true) {
+        throw new KernelError({
+          code: "EXECUTOR_ABORTED",
+          message: `spawn for '${spawn.agent}' aborted before dispatch`,
+          detail: { agent: spawn.agent },
+        });
+      }
       const request: ProviderSpawnRequest = {
         agent: spawn.agent,
         agent_run_id: spawn.agent_run_id,
@@ -110,14 +139,25 @@ export function createProviderExecutor(
             detail: { provider: provider.name },
           });
         }
+        // A provider flagged a max_tokens truncation with this lean, sqlite-free
+        // error code (it cannot mint a KernelError without pulling node:sqlite).
+        // Re-throw it as the surfaceable EXECUTOR_OUTPUT_TRUNCATED so the loop
+        // treats a cut-off output as a hard failure, not retryable noise.
+        if ((err as { code?: unknown }).code === "EXECUTOR_OUTPUT_TRUNCATED") {
+          throw new KernelError({
+            code: "EXECUTOR_OUTPUT_TRUNCATED",
+            message: err instanceof Error ? err.message : `provider '${provider.name}' output was truncated`,
+            detail: { provider: provider.name },
+          });
+        }
         throw err;
       }
       switch (result.type) {
         case "result":
-          return finish(spawn, result.output, result.tokens, readResultCost(result));
+          return finish(spawn, result.output, result.tokens, readResultCost(result), readResultCacheWrite(result));
         case "stream": {
           const final = await result.finalize();
-          return finish(spawn, final.output, final.tokens, readResultCost(final));
+          return finish(spawn, final.output, final.tokens, readResultCost(final), readResultCacheWrite(final));
         }
         case "shuttle":
           throw new KernelError({

@@ -247,11 +247,16 @@ export function parseClaudeUsage(stdout: string): SpawnUsage | undefined {
     const inTok = finiteNumber(uo["input_tokens"]);
     const outTok = finiteNumber(uo["output_tokens"]);
     const cached = finiteNumber(uo["cache_read_input_tokens"]);
-    if (inTok !== undefined || outTok !== undefined || cached !== undefined) {
+    // Cache-CREATION (write) tokens — distinct from the cache-READ `cached`
+    // above and billed at a premium, so a cost roll-up that drops them
+    // under-counts the first spawn of a cached prefix.
+    const cacheWrite = finiteNumber(uo["cache_creation_input_tokens"]);
+    if (inTok !== undefined || outTok !== undefined || cached !== undefined || cacheWrite !== undefined) {
       usage.tokens = {
         in: inTok ?? 0,
         out: outTok ?? 0,
         ...(cached !== undefined ? { cached } : {}),
+        ...(cacheWrite !== undefined ? { cache_write: cacheWrite } : {}),
       };
     }
   }

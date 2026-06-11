@@ -84,6 +84,39 @@ describe("createProviderExecutor — plain single-shot backend", () => {
     assert.equal(sunk?.cost_usd, 0.0042);
   });
 
+  it("folds an out-of-band cache_write into the token breakdown (cost roll-up counts it)", async () => {
+    let sunk: SpawnUsage | undefined;
+    // A provider that attaches cache-CREATION tokens out-of-band (the kernel
+    // `tokens` shape carries only cache-read), like the anthropic-sdk provider.
+    const provider = asyncProvider("cache-writer", async () => {
+      const r: ProviderResult = { type: "result", output: "ok", tokens: { in: 100, out: 50, cached: 10 } };
+      (r as { cache_write?: number }).cache_write = 40;
+      return r;
+    });
+    const result = await createProviderExecutor(provider, { onUsage: (u) => (sunk = u) }).execute(req());
+    assert.deepEqual(result.usage?.tokens, { in: 100, out: 50, cached: 10, cache_write: 40 });
+    assert.equal(sunk?.tokens?.cache_write, 40);
+  });
+
+  it("maps a provider's coded truncation error to the surfaceable EXECUTOR_OUTPUT_TRUNCATED", async () => {
+    // The provider cannot mint a KernelError (it would pull node:sqlite), so it
+    // throws a lean Error carrying this code; the executor re-throws it as the
+    // kernel-typed, surfaceable error the loop treats as a hard failure.
+    const provider = asyncProvider("truncating", async () => {
+      const err = new Error("output was truncated at max_tokens (4096)");
+      (err as { code?: string }).code = "EXECUTOR_OUTPUT_TRUNCATED";
+      throw err;
+    });
+    await assert.rejects(
+      () => createProviderExecutor(provider).execute(req()),
+      (err: unknown) => {
+        assert.ok(err instanceof KernelError);
+        assert.equal(err.code, "EXECUTOR_OUTPUT_TRUNCATED");
+        return true;
+      },
+    );
+  });
+
   it("omits usage when the provider reports no tokens", async () => {
     const provider = asyncProvider("p", async () => ({ type: "result", output: "REJECT" }));
     const result = await createProviderExecutor(provider).execute(req());

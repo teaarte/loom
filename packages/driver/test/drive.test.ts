@@ -675,6 +675,160 @@ describe("drive — spawn budget enforcement (generic, bundle-blind)", () => {
       cleanup(dir);
     }
   });
+
+  it("ABORTS the in-flight spawns when the budget fires (no leaked, billing children)", async () => {
+    const dir = await freshProject();
+    try {
+      // Each spawn hangs until ITS abort signal fires — i.e. it only ends when
+      // the budget cut tears it down. Before the abort wiring, the budget
+      // rejected the promise but left these running (and burning tokens).
+      let aborted = 0;
+      const executor: Executor = {
+        execute: (_intent, signal) =>
+          new Promise<ExecutorResult>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => {
+              aborted += 1;
+              reject(new Error("aborted"));
+            });
+          }),
+      };
+      const outcome = await drive(dir, {
+        executor,
+        resolveRegistry: () => fanoutRegistry({ agents: 2, spawn_budget_ms: 30 }),
+        task: "slow fan out",
+        client_idempotency_uuid: "cidem-budget-abort",
+      });
+      assert.equal(outcome.kind, "error");
+      if (outcome.kind === "error") assert.equal(outcome.code, "SPAWN_BUDGET_EXCEEDED");
+      // BOTH in-flight spawns received the abort — the budget no longer leaks
+      // children that keep running past the cut.
+      assert.equal(aborted, 2);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  it("ABORTS the in-flight spawns and returns DRIVE_ABORTED on an external cancel", async () => {
+    const dir = await freshProject();
+    try {
+      const controller = new AbortController();
+      let aborted = 0;
+      const executor: Executor = {
+        execute: (_intent, signal) =>
+          new Promise<ExecutorResult>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => {
+              aborted += 1;
+              reject(new Error("aborted"));
+            });
+          }),
+      };
+      const drivePromise = drive(dir, {
+        executor,
+        resolveRegistry: () => fanoutRegistry({ agents: 2 }),
+        task: "cancellable fan out",
+        client_idempotency_uuid: "cidem-ext-abort",
+        signal: controller.signal,
+      });
+      await delay(20); // let the batch start its spawns
+      controller.abort();
+      const outcome = await drivePromise;
+      assert.equal(outcome.kind, "error");
+      if (outcome.kind === "error") assert.equal(outcome.code, "DRIVE_ABORTED");
+      assert.equal(aborted, 2, "the external cancel tore down every in-flight spawn");
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe("drive — usage roll-up (drive-level cost + tokens incl. cache-write)", () => {
+  it("sums cost_usd and the full token breakdown across every spawn", async () => {
+    const dir = await freshProject();
+    try {
+      // Two sequential spawns, each reporting the same usage envelope.
+      const executor: Executor = {
+        execute: async (s) => ({
+          agent_output: `done ${s.agent}`,
+          usage: { cost_usd: 0.01, tokens: { in: 100, out: 50, cached: 10, cache_write: 20 } },
+        }),
+      };
+      const outcome = await drive(dir, {
+        executor,
+        resolveRegistry: () => spawnRegistry(),
+        task: "accounted work",
+        client_idempotency_uuid: "cidem-usage",
+      });
+      assert.equal(outcome.kind, "complete");
+      assert.ok(outcome.usage_total, "the outcome carries a drive-level usage roll-up");
+      if (outcome.usage_total) {
+        assert.equal(outcome.usage_total.spawns, 2);
+        // cost_usd summed (0.01 * 2), tokens summed incl. cache-write (the line
+        // item the old roll-up dropped).
+        assert.ok(Math.abs(outcome.usage_total.cost_usd! - 0.02) < 1e-9);
+        assert.deepEqual(outcome.usage_total.tokens, { in: 200, out: 100, cached: 20, cache_write: 40 });
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  it("omits cost_usd from the roll-up when no backend reported a dollar figure", async () => {
+    const dir = await freshProject();
+    try {
+      const executor: Executor = {
+        execute: async (s) => ({ agent_output: `done ${s.agent}`, usage: { tokens: { in: 5, out: 3 } } }),
+      };
+      const outcome = await drive(dir, {
+        executor,
+        resolveRegistry: () => spawnRegistry(),
+        task: "free work",
+        client_idempotency_uuid: "cidem-nocost",
+      });
+      assert.equal(outcome.kind, "complete");
+      if (outcome.kind === "complete" && outcome.usage_total) {
+        assert.equal(
+          Object.prototype.hasOwnProperty.call(outcome.usage_total, "cost_usd"),
+          false,
+          "no fabricated $0 — cost_usd is absent when nothing reported one",
+        );
+        assert.deepEqual(outcome.usage_total.tokens, { in: 10, out: 6, cached: 0, cache_write: 0 });
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe("drive — spawn cap counts each spawn once (retry does not double-count)", () => {
+  it("a retried spawn re-uses its id, so the cap counts distinct spawns only", async () => {
+    const dir = await freshProject();
+    try {
+      let attempts = 0;
+      const executor: Executor = {
+        execute: async (s) => {
+          attempts += 1;
+          // Fail impl-1's FIRST attempt so the loop re-shuttles the SAME
+          // agent_run_id. With the old running-sum cap this retry counted a
+          // second time and a cap of 2 tripped on impl-2.
+          if (s.agent === "impl-1" && attempts === 1) throw new Error("dropped turn");
+          return { agent_output: "ok" };
+        },
+      };
+      // spawnRegistry has exactly two DISTINCT spawns (impl-1, impl-2). A cap of
+      // 2 must NOT trip even though impl-1 is executed twice.
+      const outcome = await drive(dir, {
+        executor,
+        resolveRegistry: () => spawnRegistry(),
+        task: "flaky but bounded",
+        client_idempotency_uuid: "cidem-count-once",
+        max_total_spawns: 2,
+      });
+      assert.equal(outcome.kind, "complete");
+      assert.equal((await readState(dir)).status, "completed");
+    } finally {
+      cleanup(dir);
+    }
+  });
 });
 
 describe("drive — conformance: file accounting is fed, not dropped", () => {

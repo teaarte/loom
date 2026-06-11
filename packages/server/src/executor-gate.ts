@@ -22,8 +22,8 @@ import type { Semaphore } from "./semaphore.js";
 export function gatedExecutor(inner: Executor, gate: Semaphore): Executor {
   return {
     ...(inner.idempotent !== undefined ? { idempotent: inner.idempotent } : {}),
-    execute(spawn: ProviderShuttleIntent): Promise<ExecutorResult> {
-      return gate.run(() => inner.execute(spawn));
+    execute(spawn: ProviderShuttleIntent, signal?: AbortSignal): Promise<ExecutorResult> {
+      return gate.run(() => inner.execute(spawn, signal));
     },
   };
 }

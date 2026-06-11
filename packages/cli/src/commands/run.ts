@@ -28,10 +28,17 @@
 import { homedir } from "node:os";
 
 import type { DriveOptions, DriveOutcome, Executor } from "@loomfsm/driver";
+import type { DaemonHandle } from "@loomfsm/daemon";
 import type { Registry } from "@loomfsm/kernel";
 
 import { effectiveEnv } from "../lib/config.js";
-import { containerModeFrom, formatUsage, resolveContainerPlan } from "../lib/container.js";
+import {
+  containerModeFrom,
+  formatDriveTotal,
+  formatUsage,
+  resolveContainerPlan,
+  type ContainerMode,
+} from "../lib/container.js";
 import { buildDispatchExecutor, preflightDispatch } from "../lib/dispatch.js";
 import { claudeAvailable, dockerAvailableDefault } from "../lib/probes.js";
 import { resolveSpawnCap, resolveSpawnTimeouts } from "../lib/resilience.js";
@@ -54,6 +61,13 @@ export interface RunOverrides {
   claudeAvailable?: (bin: string) => boolean;
   // Probe for the Docker CLI; default spawns `docker version`.
   dockerAvailable?: () => boolean;
+  // Acquire the per-project advisory lock; default = `@loomfsm/daemon`'s
+  // `acquireLock`. A test injects a stub to exercise the refuse-on-conflict path
+  // without touching a real status file.
+  acquireRunLock?: (projectDir: string) => DaemonHandle;
+  // Graceful-cancel signal. The real binary wires SIGINT/SIGTERM to an
+  // AbortController; a test injects one to assert teardown without OS signals.
+  signal?: AbortSignal;
 }
 
 export async function runTask(
@@ -127,6 +141,84 @@ export async function runTask(
   // environment still wins) so spawn-timeout knobs configured once apply here.
   const cfgEnv = effectiveEnv(target, env, process.env);
 
+  // Take the per-project advisory lock BEFORE any drive work. It is the SAME
+  // lock the daemon holds, so a second `loom run`, or a run while a daemon
+  // supervises this project, REFUSES here instead of re-executing the same
+  // pending spawns in the same worktree (double billing + file races). A
+  // stale (dead-pid) lock is reclaimed automatically. There is no force/steal
+  // escape hatch: the operator stops the holder, or waits.
+  const daemonMod = await import("@loomfsm/daemon");
+  const acquire = overrides.acquireRunLock ?? daemonMod.acquireLock;
+  let lock: DaemonHandle;
+  try {
+    lock = acquire(target);
+  } catch (err) {
+    if (err instanceof daemonMod.DaemonError && err.code === "DAEMON_ALREADY_RUNNING") {
+      env.err(`loom run: ${err.message}`);
+      env.err("loom run: stop it (loom daemon stop) or wait for it to finish, then retry");
+      return 1;
+    }
+    env.err(`loom run: could not acquire the project lock: ${(err as Error).message}`);
+    return 1;
+  }
+  lock.update("driving");
+
+  // Graceful cancel: a test injects a signal; the real binary wires the OS
+  // signals to an AbortController so Ctrl-C (or `loom daemon stop`, which signals
+  // the lock holder) aborts the drive AND its in-flight spawns instead of
+  // orphaning children that keep billing.
+  const controller = new AbortController();
+  const usingInjectedSignal = overrides.signal !== undefined;
+  const signal = overrides.signal ?? controller.signal;
+  const onSignal = (): void => controller.abort();
+  if (!usingInjectedSignal) {
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+  }
+
+  try {
+    return await drive_(target, env, overrides, cfgEnv, registry, resolveRegistry, {
+      task,
+      ...(policy_preset !== undefined ? { policy_preset } : {}),
+      replaceFlag,
+      ...(complexity !== undefined ? { complexity } : {}),
+      modeResult,
+      signal,
+    });
+  } finally {
+    lock.release();
+    if (!usingInjectedSignal) {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+    }
+  }
+}
+
+// The executor-build + drive body, extracted so the lock + signal lifecycle
+// above wraps it in a single try/finally. Everything here was inline in
+// `runTask`; the only addition is that `signal` now reaches the executor and the
+// drive so a cancel tears spawns down.
+interface DriveParams {
+  task: string;
+  policy_preset?: string;
+  replaceFlag: boolean;
+  complexity?: ComplexityLevel;
+  modeResult: { mode: ContainerMode };
+  signal: AbortSignal;
+}
+
+async function drive_(
+  target: string,
+  env: CliEnv,
+  overrides: RunOverrides,
+  cfgEnv: NodeJS.ProcessEnv,
+  registry: Registry,
+  resolveRegistry: (projectDir: string) => Promise<Registry> | Registry,
+  params: DriveParams,
+): Promise<number> {
+  const { task, policy_preset, replaceFlag, complexity, signal } = params;
+  const modeResult = params.modeResult;
+
   let executor: Executor;
   try {
     if (overrides.buildExecutor) {
@@ -183,6 +275,9 @@ export async function runTask(
         ...(refsDir !== undefined ? { sandbox_seed: () => [{ src: refsDir, rel: ".loom/work/refs" }] } : {}),
         onNotice: (message) => env.err(`loom run: ${message}`),
         onUsage: (usage) => env.err(`loom run: ${formatUsage(usage)}`),
+        // The cancel signal reaches each backend so a Ctrl-C / stop tears down
+        // an in-flight `claude -p` (or container/aider) child instead of leaking it.
+        signal,
       });
     }
   } catch (err) {
@@ -210,7 +305,16 @@ export async function runTask(
     ...(complexity !== undefined
       ? { initial_decisions: { complexity, complexity_pinned: true } }
       : {}),
+    // Abort the drive (and its in-flight spawns) on a cancel — also what makes
+    // `loom daemon stop` on a run, which signals the shared lock holder, clean.
+    signal,
   });
+
+  // Surface the whole-drive spend (cost + tokens incl. cache-write) once at the
+  // end, alongside the per-spawn lines the executor's onUsage already printed.
+  if (outcome.usage_total !== undefined) {
+    env.err(`loom run: ${formatDriveTotal(outcome.usage_total)}`);
+  }
 
   return report(outcome, env);
 }

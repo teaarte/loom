@@ -21,6 +21,7 @@ import {
   drive,
   readState,
   type DriveOutcome,
+  type DriveUsageTotal,
   type Executor,
   type SpawnUsage,
 } from "@loomfsm/driver";
@@ -142,6 +143,9 @@ export type SupervisionResult =
       summary: string;
       merge_back: MergeBackResult;
       attempts: number;
+      // Whole-drive usage roll-up of the completing attempt (cost + tokens incl.
+      // cache-write), when the backend reported any usage.
+      usage_total?: DriveUsageTotal;
     }
   | { kind: "error"; code: string; message: string; attempts: number }
   | { kind: "aborted"; reason: string }
@@ -203,6 +207,19 @@ export async function superviseToTerminal(
 
     if (outcome.kind === "complete") {
       logger.info("complete", { task_id: outcome.task_id, verdict: outcome.verdict });
+      // Whole-drive spend roll-up (cost + tokens incl. cache-write), alongside
+      // the per-spawn `spawn-usage` lines already logged during the drive.
+      if (outcome.usage_total !== undefined) {
+        const ut = outcome.usage_total;
+        logger.info("drive-usage-total", {
+          spawns: ut.spawns,
+          ...(ut.cost_usd !== undefined ? { cost_usd: ut.cost_usd } : {}),
+          tokens_in: ut.tokens.in,
+          tokens_out: ut.tokens.out,
+          tokens_cached: ut.tokens.cached,
+          tokens_cache_write: ut.tokens.cache_write,
+        });
+      }
       const mb = await mergeBack(projectDir, outcome);
       logger.info("merge-back", {
         merged: mb.merged,
@@ -225,6 +242,7 @@ export async function superviseToTerminal(
         summary: outcome.summary,
         merge_back: mb,
         attempts: transientAttempts,
+        ...(outcome.usage_total !== undefined ? { usage_total: outcome.usage_total } : {}),
       };
     }
 

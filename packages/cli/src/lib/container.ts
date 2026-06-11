@@ -128,16 +128,39 @@ export function resolveContainerPlan(args: ResolvePlanArgs): ContainerPlan {
 // Per-spawn usage → a one-line audit string. Shared so the cost figure reads
 // identically across `run` / `daemon` / `serve` log sinks.
 export function formatUsage(usage: {
-  tokens?: { in: number; out: number; cached?: number };
+  tokens?: { in: number; out: number; cached?: number; cache_write?: number };
   cost_usd?: number;
   num_turns?: number;
 }): string {
   const parts: string[] = [];
   if (usage.cost_usd !== undefined) parts.push(`cost $${usage.cost_usd.toFixed(4)}`);
   if (usage.tokens !== undefined) {
-    const { in: i, out, cached } = usage.tokens;
-    parts.push(`tokens ${i}in/${out}out${cached !== undefined ? `/${cached}cached` : ""}`);
+    const { in: i, out, cached, cache_write } = usage.tokens;
+    parts.push(
+      `tokens ${i}in/${out}out` +
+        (cached !== undefined ? `/${cached}cached` : "") +
+        (cache_write !== undefined ? `/${cache_write}cache-write` : ""),
+    );
   }
   if (usage.num_turns !== undefined) parts.push(`${usage.num_turns} turns`);
   return parts.length > 0 ? `spawn usage — ${parts.join(", ")}` : "spawn usage — (none reported)";
+}
+
+// Drive-level usage roll-up → a one-line summary. The whole-task counterpart of
+// `formatUsage`, printed once at the end of a drive so the operator sees total
+// spend (cost + tokens incl. cache-write) rather than only the per-spawn lines.
+export function formatDriveTotal(total: {
+  spawns: number;
+  cost_usd?: number;
+  tokens: { in: number; out: number; cached: number; cache_write: number };
+}): string {
+  const parts: string[] = [];
+  if (total.cost_usd !== undefined) parts.push(`cost $${total.cost_usd.toFixed(4)}`);
+  const { in: i, out, cached, cache_write } = total.tokens;
+  parts.push(
+    `tokens ${i}in/${out}out` +
+      (cached > 0 ? `/${cached}cached` : "") +
+      (cache_write > 0 ? `/${cache_write}cache-write` : ""),
+  );
+  return `drive total over ${total.spawns} spawn${total.spawns === 1 ? "" : "s"} — ${parts.join(", ")}`;
 }

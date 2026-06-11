@@ -69,10 +69,27 @@ import { writeSpawnTranscript } from "./transcript.js";
 export interface SpawnUsage {
   agent?: string;
   model?: string;
-  tokens?: { in: number; out: number; cached?: number };
+  // `cached` = cache-READ tokens (a cache hit, billed cheap); `cache_write` =
+  // cache-CREATION tokens (writing the prefix into the cache, billed at a
+  // premium). They are distinct line items on a backend's bill, so a cost
+  // roll-up that ignores cache_write under-counts spend on the first spawn of a
+  // cached prefix. Driver-side only — the kernel models neutral in/out/cached.
+  tokens?: { in: number; out: number; cached?: number; cache_write?: number };
   cost_usd?: number;
   num_turns?: number;
   duration_ms?: number;
+}
+
+// Drive-level usage roll-up — the SUM of every spawn's reported usage over one
+// `drive()`. Surfaced on the outcome so a transport shows the WHOLE-task cost +
+// token breakdown (incl. cache-write), not just the per-spawn lines. `cost_usd`
+// is omitted when no backend reported a dollar figure (never a fabricated $0);
+// the token fields are always present (zero when nothing was reported).
+export interface DriveUsageTotal {
+  // Number of spawns that reported any usage this drive.
+  spawns: number;
+  cost_usd?: number;
+  tokens: { in: number; out: number; cached: number; cache_write: number };
 }
 
 // What an executor returns. `agent_output` is the spawn's text; the file
@@ -93,8 +110,15 @@ export interface ExecutorResult {
 // kernel's own shuttle intent, carrying the REUSED agent_run_id; the
 // executor must echo no fresh id. The loop bounds concurrency, so the
 // executor stays single-spawn.
+//
+// `signal` aborts an in-flight spawn: the loop passes a per-batch signal that
+// fires on a wall-time budget breach or an external drive cancel, so a
+// sandboxed CLI backend tears down its child instead of running it to
+// completion (and burning tokens) past the cut. Honouring it is the contract
+// that makes the spawn-budget actually bound spend; an executor that ignores
+// it simply runs to completion as before.
 export interface Executor {
-  execute(spawn: ProviderShuttleIntent): Promise<ExecutorResult>;
+  execute(spawn: ProviderShuttleIntent, signal?: AbortSignal): Promise<ExecutorResult>;
   // True when re-running a spawn (same agent_run_id) is SAFE — e.g. a
   // sandboxed worktree executor whose re-run just redoes the work in an
   // isolated tree. It lets the resume restart-head re-shuttle a pending spawn
@@ -165,6 +189,7 @@ export type DriveOutcome =
       task_id: string | null;
       verdict: "accepted" | "rejected" | "failed_force_closed";
       summary: string;
+      usage_total?: DriveUsageTotal;
     }
   | {
       kind: "paused";
@@ -174,6 +199,7 @@ export type DriveOutcome =
       gate_event_id: string;
       message: string;
       valid_answers: UserAnswerSchema;
+      usage_total?: DriveUsageTotal;
     }
   | {
       kind: "error";
@@ -181,6 +207,7 @@ export type DriveOutcome =
       code: string;
       message: string;
       recovery_options: { choice: string; label: string; agent_run_ids?: string[] }[];
+      usage_total?: DriveUsageTotal;
     };
 
 // Executor-thrown KernelError codes the caller's retry policy must act on
@@ -193,6 +220,21 @@ const SURFACEABLE_EXECUTOR_CODES = new Set<string>([
   "EXECUTOR_RATE_LIMITED",
   "EXECUTOR_TIMEOUT",
   "EXECUTOR_IDLE_TIMEOUT",
+  // A truncated-at-max_tokens output: a provider cut its result at the token
+  // cap. Re-running with the same cap truncates identically, so it is surfaced
+  // by CODE and NOT spent against the in-loop retry budget (see below).
+  "EXECUTOR_OUTPUT_TRUNCATED",
+  ...PERMANENT_PROVIDER_ERROR_CODES,
+]);
+
+// Executor codes that re-running the SAME spawn cannot clear — surfaced at
+// once, never spent against the in-loop fast-retry budget. A rate-limit clears
+// only with a long wait (the supervisor's job), a permanent provider error
+// never clears, and a max_tokens truncation re-truncates on every identical
+// retry; all three want the caller's policy, not a tight retry.
+const NO_RETRY_EXECUTOR_CODES = new Set<string>([
+  "EXECUTOR_RATE_LIMITED",
+  "EXECUTOR_OUTPUT_TRUNCATED",
   ...PERMANENT_PROVIDER_ERROR_CODES,
 ]);
 
@@ -281,18 +323,39 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
 
   // ----- loop ------------------------------------------------------------
   let executorFailures = 0;
-  // Cumulative spawns this drive — checked against the optional hard cap below.
-  let totalSpawns = 0;
+  // DISTINCT agent_run_ids spawned this drive — checked against the optional
+  // hard cap below. Counted by id (not a running sum) so the executor-retry
+  // path, which RE-shuttles the same pending rows, never double-counts a spawn
+  // against the cap — a flaky backend that retries twice still counts once.
+  const countedSpawns = new Set<string>();
   const spawnCap = opts.max_total_spawns ?? 0;
+
+  // Running roll-up of every spawn's reported usage across this drive. Folded
+  // after each batch; snapshotted onto the terminal outcome via `withUsage` so a
+  // transport surfaces the WHOLE-task cost + token breakdown (incl. cache-write).
+  const usageAcc = { spawns: 0, anyCost: false, cost_usd: 0, in: 0, out: 0, cached: 0, cache_write: 0 };
+  const usageTotal = (): DriveUsageTotal | undefined => {
+    if (usageAcc.spawns === 0) return undefined;
+    return {
+      spawns: usageAcc.spawns,
+      ...(usageAcc.anyCost ? { cost_usd: usageAcc.cost_usd } : {}),
+      tokens: { in: usageAcc.in, out: usageAcc.out, cached: usageAcc.cached, cache_write: usageAcc.cache_write },
+    };
+  };
+  const withUsage = (o: DriveOutcome): DriveOutcome => {
+    const ut = usageTotal();
+    return ut !== undefined ? { ...o, usage_total: ut } : o;
+  };
+
   for (;;) {
     if (opts.signal?.aborted) {
-      return {
+      return withUsage({
         kind: "error",
         driver_state_id: driverStateId,
         code: "DRIVE_ABORTED",
         message: "drive aborted by signal",
         recovery_options: [],
-      };
+      });
     }
 
     switch (response.status) {
@@ -307,9 +370,9 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
         // Enforce the total-spawn ceiling BEFORE running the batch — a runaway
         // revise loop (or a flow bug) stops here instead of running up the bill.
         // The task stays in_progress (resumable): raise the cap or investigate.
-        totalSpawns += agentRunIds.length;
-        if (spawnCap > 0 && totalSpawns > spawnCap) {
-          return {
+        for (const id of agentRunIds) countedSpawns.add(id);
+        if (spawnCap > 0 && countedSpawns.size > spawnCap) {
+          return withUsage({
             kind: "error",
             driver_state_id: driverStateId,
             code: "DRIVE_SPAWN_CAP_EXCEEDED",
@@ -318,7 +381,7 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
               `converging. The task is left in progress; investigate, or raise LOOM_MAX_SPAWNS ` +
               `(0 disables the cap) and resume.`,
             recovery_options: [],
-          };
+          });
         }
         const intents = buildExecIntents(state, registry, agentRunIds);
         const cap = resolveConcurrencyCap(state, registry, opts.max_concurrent);
@@ -326,44 +389,58 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
 
         let results: ExecutorResult[];
         try {
-          results = await executeBatch(intents, opts.executor, cap, budgetMs);
+          results = await executeBatch(intents, opts.executor, cap, budgetMs, opts.signal);
         } catch (err) {
+          // An external cancel (the drive's own signal) cut the batch — its
+          // AbortController already killed the in-flight children. Stop now;
+          // never re-drive an aborted run (it would re-spawn what we just
+          // cancelled).
+          if (opts.signal?.aborted) {
+            return withUsage({
+              kind: "error",
+              driver_state_id: driverStateId,
+              code: "DRIVE_ABORTED",
+              message: "drive aborted by signal",
+              recovery_options: [],
+            });
+          }
           if (err instanceof SpawnBudgetExceeded) {
-            return {
+            return withUsage({
               kind: "error",
               driver_state_id: driverStateId,
               code: "SPAWN_BUDGET_EXCEEDED",
               message: err.message,
               recovery_options: [],
-            };
+            });
           }
           const execCode =
             err instanceof KernelError && SURFACEABLE_EXECUTOR_CODES.has(err.code)
               ? err.code
               : "EXECUTOR_FAILED";
-          // A rate-limit will not clear within the fast in-loop retries, and a
+          // A rate-limit will not clear within the fast in-loop retries, a
           // permanent provider error (bad model id, auth/billing) will not
-          // clear AT ALL — surface either at once so the caller applies its
-          // wait/park policy instead of burning the retry budget on a wall the
-          // next attempt hits identically.
-          if (execCode === "EXECUTOR_RATE_LIMITED" || PERMANENT_PROVIDER_ERROR_CODES.has(execCode)) {
-            return {
+          // clear AT ALL, and a max_tokens truncation re-truncates identically —
+          // surface any of them at once so the caller applies its wait/park
+          // policy instead of burning the retry budget on a wall the next
+          // attempt hits identically.
+          if (NO_RETRY_EXECUTOR_CODES.has(execCode)) {
+            return withUsage({
               kind: "error",
               driver_state_id: driverStateId,
               code: execCode,
               message: (err as Error).message,
               recovery_options: [],
-            };
+            });
           }
           executorFailures += 1;
           if (executorFailures > maxRetries) {
-            return {
+            return withUsage({
               kind: "error",
               driver_state_id: driverStateId,
               code: execCode,
               message: `executor failed after ${maxRetries} retries: ${(err as Error).message}`,
               recovery_options: [],
-            };
+            });
           }
           // Re-resume restart-head: re-shuttle the still-pending rows
           // REUSING each agent_run_id (no fresh begin_spawn → no
@@ -376,6 +453,24 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
         }
 
         executorFailures = 0;
+        // Fold this batch's reported usage into the drive-level roll-up (cost +
+        // tokens incl. cache-write), so the terminal outcome can surface the
+        // whole-task spend, not just the per-spawn lines.
+        for (const r of results) {
+          const u = r.usage;
+          if (u === undefined) continue;
+          usageAcc.spawns += 1;
+          if (u.cost_usd !== undefined) {
+            usageAcc.cost_usd += u.cost_usd;
+            usageAcc.anyCost = true;
+          }
+          if (u.tokens !== undefined) {
+            usageAcc.in += u.tokens.in;
+            usageAcc.out += u.tokens.out;
+            usageAcc.cached += u.tokens.cached ?? 0;
+            usageAcc.cache_write += u.tokens.cache_write ?? 0;
+          }
+        }
         // Write the per-spawn transcript sidecar (prompt + raw output + the
         // structured parse + usage) to the HOST project before delivering — so
         // an operator can read WHAT each spawn produced at the gate / in the
@@ -393,7 +488,7 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
       }
 
       case "ask-user":
-        return {
+        return withUsage({
           kind: "paused",
           reason: "ask-user",
           driver_state_id: response.driver_state_id,
@@ -401,15 +496,15 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
           gate_event_id: response.gate_event_id,
           message: response.message,
           valid_answers: response.valid_answers,
-        };
+        });
 
       case "complete":
-        return {
+        return withUsage({
           kind: "complete",
           task_id: response.task_id,
           verdict: response.verdict,
           summary: response.summary,
-        };
+        });
 
       case "error": {
         const errInfo: DriveError = {
@@ -420,7 +515,7 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
         };
         const choice = opts.recoverChoice ? await opts.recoverChoice(errInfo) : null;
         if (choice === null || choice === undefined) {
-          return { kind: "error", ...errInfo };
+          return withUsage({ kind: "error", ...errInfo });
         }
         driverStateId = response.driver_state_id;
         const agentRunIds = recoveryAgentRunIds(response.recovery_options, choice);
@@ -522,16 +617,31 @@ function buildExecIntents(
   });
 }
 
-// Run a batch at most `cap` at a time, preserving input order, and bound
-// the whole batch by the stage's wall-time budget when one is declared. A
-// rejected execute bubbles up (the loop re-resumes + retries); a budget
-// overrun throws SpawnBudgetExceeded (the loop cuts the fanout).
+// Run a batch at most `cap` at a time, preserving input order, and bound the
+// whole batch by the stage's wall-time budget when one is declared.
+//
+// One AbortController bounds the WHOLE batch and is threaded into every
+// `executor.execute`: a wall-time budget breach OR the parent drive's cancel
+// aborts it, which a sandboxed CLI backend turns into a SIGTERM on its child —
+// so an over-budget / cancelled fanout STOPS BURNING TOKENS instead of leaving
+// its already-running children to run to completion (the leak the abort-less
+// budget had). A rejected execute still bubbles up (the loop re-resumes +
+// retries); a budget overrun aborts the in-flight children THEN throws
+// SpawnBudgetExceeded (the loop cuts the fanout).
 async function executeBatch(
   intents: ProviderShuttleIntent[],
   executor: Executor,
   cap: number,
   budgetMs: number | null,
+  parentSignal: AbortSignal | undefined,
 ): Promise<ExecutorResult[]> {
+  const controller = new AbortController();
+  const onParentAbort = (): void => controller.abort();
+  if (parentSignal !== undefined) {
+    if (parentSignal.aborted) controller.abort();
+    else parentSignal.addEventListener("abort", onParentAbort, { once: true });
+  }
+
   const run = async (): Promise<ExecutorResult[]> => {
     const results = new Array<ExecutorResult>(intents.length);
     let cursor = 0;
@@ -542,31 +652,30 @@ async function executeBatch(
         if (i >= intents.length) return;
         const intent = intents[i];
         if (intent === undefined) return;
-        results[i] = await executor.execute(intent);
+        results[i] = await executor.execute(intent, controller.signal);
       }
     };
     const lanes = Math.max(1, Math.min(cap, intents.length));
     await Promise.all(Array.from({ length: lanes }, () => worker()));
     return results;
   };
-  if (budgetMs === null) return run();
-  return await raceWithTimeout(run(), budgetMs);
-}
 
-function raceWithTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new SpawnBudgetExceeded(ms)), ms);
-    p.then(
-      (v) => {
-        clearTimeout(timer);
-        resolve(v);
-      },
-      (e) => {
-        clearTimeout(timer);
-        reject(e instanceof Error ? e : new Error(String(e)));
-      },
-    );
-  });
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    if (budgetMs === null) return await run();
+    return await new Promise<ExecutorResult[]>((resolve, reject) => {
+      budgetTimer = setTimeout(() => {
+        // Cut the fanout: abort the in-flight children FIRST (so they stop
+        // billing), then surface the over-budget error to the loop.
+        controller.abort();
+        reject(new SpawnBudgetExceeded(budgetMs));
+      }, budgetMs);
+      run().then(resolve, (e) => reject(e instanceof Error ? e : new Error(String(e))));
+    });
+  } finally {
+    if (budgetTimer !== undefined) clearTimeout(budgetTimer);
+    if (parentSignal !== undefined) parentSignal.removeEventListener("abort", onParentAbort);
+  }
 }
 
 // ----- generic budget reads (bundle-blind) -------------------------------

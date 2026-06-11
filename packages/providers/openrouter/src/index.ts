@@ -28,6 +28,16 @@ import type {
 const DEFAULT_MAX_TOKENS = 4096;
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
+// Throw a max_tokens-truncation signal WITHOUT importing the kernel's
+// `KernelError` (it transitively pulls `node:sqlite`, which would break this
+// provider's lean import). The driver's provider-executor reads this `code` and
+// re-throws it as the surfaceable EXECUTOR_OUTPUT_TRUNCATED.
+function throwTruncated(message: string): never {
+  const err = new Error(message);
+  (err as { code?: string }).code = "EXECUTOR_OUTPUT_TRUNCATED";
+  throw err;
+}
+
 export type OpenRouterChatMessage =
   | { role: "system"; content: string }
   | { role: "user"; content: string };
@@ -45,6 +55,9 @@ export interface OpenRouterChatCompletionArgs {
 
 export interface OpenRouterChatCompletionResponseChoice {
   message?: { role?: string; content?: string | null };
+  // "length" means the model was CUT OFF at max_tokens — a truncated fragment,
+  // not a finished answer. Surfaced so the provider fails loudly.
+  finish_reason?: string | null;
 }
 
 export interface OpenRouterChatCompletionResponse {
@@ -117,6 +130,16 @@ function buildProvider(getClient: () => OpenRouterClientLike): LLMProvider {
       const response = await client.chat.completions.create(args, {
         idempotencyKey: req.agent_run_id,
       });
+      // A response cut off at max_tokens ("length") is a TRUNCATED fragment, not
+      // a finished answer — fail loudly so the loop surfaces it instead of
+      // feeding a half-response downstream. A same-cap retry truncates again, so
+      // the loop will not fast-retry it.
+      if (response.choices[0]?.finish_reason === "length") {
+        throwTruncated(
+          `openrouter output was truncated at max_tokens (${args.max_tokens}) — the result is ` +
+            `incomplete; raise max_tokens (req.extras.max_tokens) and retry`,
+        );
+      }
       const output = response.choices[0]?.message?.content ?? "";
       const usage = response.usage;
       const tokens: { in: number; out: number } = {

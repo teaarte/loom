@@ -127,6 +127,28 @@ describe("createOpenRouterProvider", () => {
     );
   });
 
+  it("throws EXECUTOR_OUTPUT_TRUNCATED (a coded, sqlite-free error) when finish_reason is 'length'", async () => {
+    const fake = makeFakeClient({
+      choices: [{ message: { role: "assistant", content: "a cut-off answer" }, finish_reason: "length" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4096 },
+    });
+    const provider = createOpenRouterProvider({ client: fake.client });
+    await assert.rejects(
+      provider.spawn(baseRequest()),
+      (err: unknown) => (err as { code?: string }).code === "EXECUTOR_OUTPUT_TRUNCATED",
+    );
+  });
+
+  it("does not throw when finish_reason is the normal 'stop'", async () => {
+    const fake = makeFakeClient({
+      choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
+    const provider = createOpenRouterProvider({ client: fake.client });
+    const result = await provider.spawn(baseRequest());
+    assert.equal(result.type, "result");
+  });
+
   it("returns an empty output string when message.content is null", async () => {
     const fake = makeFakeClient({
       choices: [{ message: { role: "assistant", content: null } }],

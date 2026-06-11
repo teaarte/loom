@@ -89,7 +89,10 @@ function isAdvanceError(err: unknown): boolean {
 }
 
 export function createDispatchExecutor(opts: DispatchExecutorOptions): Executor {
-  const runChain = async (spawn: ProviderShuttleIntent): Promise<ExecutorResult> => {
+  const runChain = async (
+    spawn: ProviderShuttleIntent,
+    signal: AbortSignal | undefined,
+  ): Promise<ExecutorResult> => {
     const chain = await opts.resolveExecutorChain!(spawn);
     if (chain.length === 0) {
       throw new KernelError({
@@ -104,7 +107,7 @@ export function createDispatchExecutor(opts: DispatchExecutorOptions): Executor 
       if (entry === undefined) continue;
       const intent = entry.model !== undefined ? { ...spawn, model: entry.model } : spawn;
       try {
-        return await entry.executor.execute(intent);
+        return await entry.executor.execute(intent, signal);
       } catch (err) {
         lastErr = err;
         const next = chain[i + 1];
@@ -126,8 +129,8 @@ export function createDispatchExecutor(opts: DispatchExecutorOptions): Executor 
 
   return {
     idempotent: opts.idempotent ?? true,
-    async execute(spawn: ProviderShuttleIntent): Promise<ExecutorResult> {
-      if (opts.resolveExecutorChain !== undefined) return runChain(spawn);
+    async execute(spawn: ProviderShuttleIntent, signal?: AbortSignal): Promise<ExecutorResult> {
+      if (opts.resolveExecutorChain !== undefined) return runChain(spawn, signal);
       if (opts.resolveExecutor === undefined) {
         throw new KernelError({
           code: "DISPATCH_MISCONFIGURED",
@@ -136,7 +139,7 @@ export function createDispatchExecutor(opts: DispatchExecutorOptions): Executor 
         });
       }
       const executor = await opts.resolveExecutor(spawn);
-      return executor.execute(spawn);
+      return executor.execute(spawn, signal);
     },
   };
 }

@@ -39,6 +39,9 @@ export interface DaemonStatus {
   // Free-form context for the phase: the gate name when parked, the error
   // code when backing off, etc. Never branched on.
   detail?: string;
+  // Process-identity token (Linux start-time) stamped at acquire so `stop` can
+  // tell a live owner from a process that reused the pid. Absent off Linux.
+  start_token?: string;
 }
 
 export class DaemonError extends Error {
@@ -59,8 +62,14 @@ export function statusFilePath(projectDir: string): string {
   return join(daemonDir(projectDir), "daemon.json");
 }
 
-function statusFile(projectDir: string): StatusFile<DaemonStatus> {
-  return createStatusFile<DaemonStatus>(statusFilePath(projectDir));
+function statusFile(
+  projectDir: string,
+  readStartToken?: (pid: number) => string | null,
+): StatusFile<DaemonStatus> {
+  return createStatusFile<DaemonStatus>(
+    statusFilePath(projectDir),
+    readStartToken !== undefined ? { readStartToken } : {},
+  );
 }
 
 export function readStatus(projectDir: string): DaemonStatus | null {
@@ -80,6 +89,10 @@ export function clearStatus(projectDir: string): void {
 export interface AcquireOptions {
   pid?: number;
   clock?: Clock;
+  // Injectable process-identity token reader (default = Linux `/proc` start
+  // time). A test passes a fake so the pid-reuse stop guard is deterministic on
+  // any OS; production leaves it unset.
+  readStartToken?: (pid: number) => string | null;
 }
 
 export interface DaemonHandle {
@@ -96,14 +109,7 @@ export interface DaemonHandle {
 export function acquireLock(projectDir: string, opts: AcquireOptions = {}): DaemonHandle {
   const pid = opts.pid ?? process.pid;
   const clock = opts.clock ?? systemClock;
-  const sf = statusFile(projectDir);
-
-  sf.guardAcquire(pid, (existing) => {
-    throw new DaemonError(
-      "DAEMON_ALREADY_RUNNING",
-      `a loom daemon (pid ${existing.pid}) already supervises ${projectDir}`,
-    );
-  });
+  const sf = statusFile(projectDir, opts.readStartToken);
 
   const startedAt = isoFrom(clock);
   const base = (): DaemonStatus => ({
@@ -113,7 +119,15 @@ export function acquireLock(projectDir: string, opts: AcquireOptions = {}): Daem
     updated_at: isoFrom(clock),
     phase: "starting",
   });
-  sf.write(base());
+  // Atomic claim (O_EXCL): two concurrent starts can never both win, and a
+  // stale (dead-pid) / own / "stopped" file is reclaimed. The owner's start
+  // token is stamped in by `acquire` for the pid-reuse stop guard.
+  sf.acquire(base(), (existing) => {
+    throw new DaemonError(
+      "DAEMON_ALREADY_RUNNING",
+      `a loom daemon (pid ${existing.pid}) already supervises ${projectDir}`,
+    );
+  });
 
   return {
     update(phase, fields) {
@@ -132,7 +146,11 @@ export function acquireLock(projectDir: string, opts: AcquireOptions = {}): Daem
 }
 
 // Signal a running daemon to stop (SIGTERM, the graceful-shutdown trigger).
-// A stale/absent status file or a dead pid reports "not-running".
-export function signalStop(projectDir: string): StopResult {
-  return statusFile(projectDir).signalStop();
+// A stale/absent status file, a dead pid, or a pid that was reused by an
+// unrelated process (start-token mismatch) reports "not-running".
+export function signalStop(
+  projectDir: string,
+  opts: { readStartToken?: (pid: number) => string | null } = {},
+): StopResult {
+  return statusFile(projectDir, opts.readStartToken).signalStop();
 }

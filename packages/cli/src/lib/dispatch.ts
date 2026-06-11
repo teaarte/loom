@@ -399,12 +399,12 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
   let inner: Executor | undefined;
   return {
     idempotent: true,
-    async execute(intent) {
+    async execute(intent, signal) {
       if (inner === undefined) {
         const { createDispatchExecutor } = await import("@loomfsm/driver");
         inner = createDispatchExecutor({ resolveExecutorChain: resolveChain, onNotice: args.onNotice });
       }
-      return inner.execute(intent);
+      return inner.execute(intent, signal);
     },
   };
 }

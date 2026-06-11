@@ -45,6 +45,16 @@ import type {
 const DEFAULT_NUM_PREDICT = 4096;
 const DEFAULT_OLLAMA_HOST = "http://localhost:11434";
 
+// Throw a truncation signal WITHOUT importing the kernel's `KernelError` (it
+// transitively pulls `node:sqlite`, which would break this provider's lean
+// import). The driver's provider-executor reads this `code` and re-throws it as
+// the surfaceable EXECUTOR_OUTPUT_TRUNCATED.
+function throwTruncated(message: string): never {
+  const err = new Error(message);
+  (err as { code?: string }).code = "EXECUTOR_OUTPUT_TRUNCATED";
+  throw err;
+}
+
 export type OllamaChatMessage =
   | { role: "system"; content: string }
   | { role: "user"; content: string };
@@ -64,6 +74,9 @@ export interface OllamaChatResponse {
   eval_count?: number;
   prompt_eval_count?: number;
   done?: boolean;
+  // "length" means generation was CUT OFF at num_predict — a truncated
+  // fragment, not a finished answer. Surfaced so the provider fails loudly.
+  done_reason?: string;
 }
 
 export interface OllamaClientLike {
@@ -112,6 +125,16 @@ function buildProvider(getClient: () => OllamaClientLike): LLMProvider {
       };
       const client = getClient();
       const response = await client.chat(args);
+      // A response cut off at num_predict ("length") is a TRUNCATED fragment,
+      // not a finished answer — fail loudly so the loop surfaces it rather than
+      // feeding a half-response downstream. A same-cap retry truncates again, so
+      // the loop will not fast-retry it.
+      if (response.done_reason === "length") {
+        throwTruncated(
+          `ollama output was truncated at num_predict (${args.options?.num_predict ?? "default"}) — the ` +
+            `result is incomplete; raise max_tokens (req.extras.max_tokens) and retry`,
+        );
+      }
       const output = response.message.content ?? "";
       const tokens: { in: number; out: number } = {
         in: response.prompt_eval_count ?? 0,

@@ -28,6 +28,16 @@ import { splitForCache, type CacheShapedPayload } from "./cache-control.js";
 
 const DEFAULT_MAX_TOKENS = 4096;
 
+// Throw a max_tokens-truncation signal WITHOUT importing the kernel's
+// `KernelError` (which transitively pulls `node:sqlite` and would break this
+// provider's lean, sqlite-free import). The driver's provider-executor reads
+// this `code` and re-throws it as the surfaceable EXECUTOR_OUTPUT_TRUNCATED.
+function throwTruncated(message: string): never {
+  const err = new Error(message);
+  (err as { code?: string }).code = "EXECUTOR_OUTPUT_TRUNCATED";
+  throw err;
+}
+
 export interface AnthropicMessageCreateArgs {
   model: string;
   max_tokens: number;
@@ -42,10 +52,18 @@ export interface AnthropicContentBlock {
 
 export interface AnthropicMessageResponse {
   content: AnthropicContentBlock[];
+  // "max_tokens" here means the model was CUT OFF at the output cap — the result
+  // is a truncated fragment, not a finished answer. Surfaced so the provider can
+  // fail loudly rather than return a half-response as success.
+  stop_reason?: string | null;
   usage: {
     input_tokens: number;
     output_tokens: number;
+    // Cache-READ (a hit on a previously-written prefix).
     cache_read_input_tokens?: number | null;
+    // Cache-CREATION (writing the prefix into the cache) — a distinct, premium
+    // line item the cost roll-up must not ignore.
+    cache_creation_input_tokens?: number | null;
   };
 }
 
@@ -106,8 +124,20 @@ function buildProvider(getClient: () => AnthropicSdkClientLike): LLMProvider {
       const response = await client.messages.create(args, {
         idempotencyKey: req.agent_run_id,
       });
+      // A response cut off at the output cap is a TRUNCATED fragment, not a
+      // finished answer — returning it as success feeds a half-written
+      // implementation / review into the next stage. Fail loudly instead so the
+      // loop surfaces it (and the operator can raise max_tokens). Re-running with
+      // the same cap truncates identically, so the loop will not fast-retry it.
+      if (response.stop_reason === "max_tokens") {
+        throwTruncated(
+          `anthropic-sdk output was truncated at max_tokens (${maxTokens}) — the result is ` +
+            `incomplete; raise max_tokens (req.extras.max_tokens) and retry`,
+        );
+      }
       const output = extractOutput(response.content);
       const cached = response.usage.cache_read_input_tokens ?? 0;
+      const cacheWrite = response.usage.cache_creation_input_tokens ?? 0;
       const tokens: { in: number; out: number; cached?: number } = {
         in: response.usage.input_tokens,
         out: response.usage.output_tokens,
@@ -116,7 +146,12 @@ function buildProvider(getClient: () => AnthropicSdkClientLike): LLMProvider {
       // "this spawn hit cache for N tokens" from "this spawn did not
       // hit cache at all".
       if (cached > 0) tokens.cached = cached;
-      return { type: "result", output, tokens };
+      const result: ProviderResult = { type: "result", output, tokens };
+      // Cache-WRITE tokens ride out-of-band (the kernel `tokens` shape models
+      // only cache-READ): the driver's provider-executor reads it the same way
+      // it reads OpenRouter's `cost_usd`. Omitted when zero (no cache write).
+      if (cacheWrite > 0) (result as { cache_write?: number }).cache_write = cacheWrite;
+      return result;
     },
   };
 }

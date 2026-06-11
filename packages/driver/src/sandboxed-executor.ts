@@ -26,6 +26,7 @@ import { join } from "node:path";
 import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import type { Executor, ExecutorResult, SpawnUsage } from "./drive.js";
+import { emptyDiffError } from "./executor-errors.js";
 import { gitDelta, gitDiffText } from "./git-delta.js";
 import { provisionWorktree, type WorktreeProvision } from "./worktree.js";
 
@@ -131,6 +132,16 @@ export interface SandboxedExecutorOptions {
   // executor instance, only when the sandbox is isolated. The shell names
   // nothing about what they are — the transport hands it (src, rel) pairs.
   sandbox_seed?: readonly SandboxSeed[];
+  // Predicate: does THIS spawn's agent edit project files? When it returns true
+  // and the spawn's self-diff comes back empty (on an isolated tree), the spawn
+  // FAILS with EXECUTOR_EMPTY_DIFF rather than returning a no-op result — so a
+  // file-editing agent that touched nothing is caught here (fast, with a retry)
+  // instead of riding an empty diff through the reviewers to the final gate.
+  // Decision agents — reviewers, planners, classifiers, anything that writes no
+  // project files — are EXEMPT: the predicate returns false for them, or is
+  // omitted entirely (the default: no empty-diff check at all). The shell stays
+  // domain-blind; the transport that knows which agents edit files supplies it.
+  expects_edits?: (intent: ProviderShuttleIntent) => boolean;
 }
 
 // Merge two optional abort signals into one that fires when EITHER does. Used
@@ -205,6 +216,24 @@ export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executo
       // Self-diff the isolated tree against the provision-time baseline so the
       // carrier is fed natively — no dependence on the backend to report it.
       const delta = gitDelta(wt.dir, wt.baseline);
+      // Fail fast on an edit-expecting agent that changed nothing. An empty
+      // self-diff from an agent whose job is to edit the project is a no-op
+      // (the F1 "I'll read the plan first" → 0 edits class of failure); riding
+      // it downstream burns the whole review panel before the final gate
+      // catches it. Gated on an isolated tree (the un-isolated fallback writes
+      // nowhere, so its delta cannot be judged) and on the transport's
+      // edit-expecting predicate. The throw rides the loop's generic
+      // executor-retry, so the agent gets a re-run and a SECOND empty diff
+      // parks the task.
+      if (
+        wt.isolated &&
+        opts.expects_edits?.(intent) === true &&
+        delta !== null &&
+        delta.modified.length === 0 &&
+        delta.created.length === 0
+      ) {
+        throw emptyDiffError(intent);
+      }
       if (delta !== null) {
         if (delta.modified.length > 0) result.files_modified = delta.modified;
         if (delta.created.length > 0) result.files_created = delta.created;

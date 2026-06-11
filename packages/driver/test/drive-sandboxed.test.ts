@@ -187,6 +187,47 @@ describe("drive — through the sandboxed executor (real git + SQLite)", () => {
     }
   });
 
+  it("an edit-expecting agent that changes nothing fails fast, retries once, then parks", async () => {
+    const dir = await freshGitProject();
+    try {
+      let runs = 0;
+      const executor = createSandboxedExecutor({
+        project_dir: dir,
+        // The agent produces output but never edits the worktree (the no-op
+        // class of failure). expects_edits flags impl-1 as a file-editing agent.
+        runSpawn: async () => {
+          runs += 1;
+          return "I read the plan but wrote no code.";
+        },
+        expects_edits: (intent) => intent.agent === "impl-1",
+      });
+
+      const outcome = await drive(dir, {
+        executor,
+        resolveRegistry: () => fixtureRegistry(),
+        task: "build the thing",
+        client_idempotency_uuid: "cidem-empty-diff",
+        // One retry: attempt 1 (empty) is retried, attempt 2 (empty) parks.
+        max_executor_retries: 1,
+      });
+
+      assert.equal(outcome.kind, "error");
+      if (outcome.kind === "error") {
+        // The typed empty-diff error rides the generic retry path, relabeling
+        // to EXECUTOR_FAILED once the budget is spent — the message preserves
+        // the cause.
+        assert.equal(outcome.code, "EXECUTOR_FAILED");
+        assert.match(outcome.message, /empty diff/);
+      }
+      assert.equal(runs, 2, "the spawn ran twice — one retry before parking");
+      // The task is left resumable (in_progress), not silently completed.
+      const state = await readState(dir);
+      assert.equal(state.status, "in_progress");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   // OPT-IN: real Claude Code on the subscription. Needs a signed-in `claude`
   // and bills usage, so it is skipped unless explicitly enabled.
   it(

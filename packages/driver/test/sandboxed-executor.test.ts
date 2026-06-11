@@ -29,6 +29,7 @@ import {
   provisionWorktree,
   worktreePathFor,
 } from "../src/index.js";
+import { EXECUTOR_EMPTY_DIFF } from "../src/executor-errors.js";
 
 import { mkdirSync } from "node:fs";
 
@@ -448,6 +449,84 @@ describe("claude -p runner helpers", () => {
       assert.fail("expected a throw");
     } catch (err) {
       assert.equal((err as { code?: string }).code, "EXECUTOR_RATE_LIMITED");
+    }
+  });
+});
+
+// ============================================================================
+// expects_edits — a file-editing agent that changed nothing fails fast
+// ============================================================================
+
+describe("createSandboxedExecutor — empty self-diff fail-fast", () => {
+  // A backend run that produces NO change to the worktree (the F1 "I'll read
+  // the plan first" → 0 edits class of no-op).
+  const runNoEdits = async (): Promise<string> => "I considered the task but wrote nothing.";
+
+  it("throws EXECUTOR_EMPTY_DIFF when an edit-expecting agent's self-diff is empty", async () => {
+    const projectDir = freshGitProject();
+    try {
+      const executor = createSandboxedExecutor({
+        project_dir: projectDir,
+        runSpawn: runNoEdits,
+        expects_edits: () => true,
+      });
+      await assert.rejects(
+        executor.execute(intent()),
+        (err: unknown) => {
+          assert.equal((err as { code?: string }).code, EXECUTOR_EMPTY_DIFF);
+          assert.match((err as Error).message, /empty diff/);
+          return true;
+        },
+      );
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  it("does NOT throw when the edit-expecting agent actually changed a file", async () => {
+    const projectDir = freshGitProject();
+    try {
+      const executor = createSandboxedExecutor({
+        project_dir: projectDir,
+        runSpawn: async (_intent, worktreeDir) => {
+          writeFileSync(join(worktreeDir, "added.ts"), "export const added = 1;\n", "utf8");
+          return "done";
+        },
+        expects_edits: () => true,
+      });
+      const result = await executor.execute(intent());
+      assert.equal(result.agent_output, "done");
+      assert.deepEqual(result.files_created, ["added.ts"]);
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  it("exempts a decision agent (expects_edits false) — an empty diff is fine", async () => {
+    const projectDir = freshGitProject();
+    try {
+      const executor = createSandboxedExecutor({
+        project_dir: projectDir,
+        runSpawn: runNoEdits,
+        expects_edits: () => false,
+      });
+      const result = await executor.execute(intent({ agent: "logic-reviewer" }));
+      assert.equal(result.agent_output, "I considered the task but wrote nothing.");
+      assert.equal(result.files_modified, undefined);
+      assert.equal(result.files_created, undefined);
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  it("applies no empty-diff check at all when the predicate is omitted (default)", async () => {
+    const projectDir = freshGitProject();
+    try {
+      const executor = createSandboxedExecutor({ project_dir: projectDir, runSpawn: runNoEdits });
+      const result = await executor.execute(intent());
+      assert.equal(result.agent_output, "I considered the task but wrote nothing.");
+    } finally {
+      cleanup(projectDir);
     }
   });
 });

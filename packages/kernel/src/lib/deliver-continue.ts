@@ -42,7 +42,12 @@ import { buildAgentResult } from "./build-agent-result.js";
 import { completeTask } from "./complete-task.js";
 import { readLedgerRow, writeLedgerRow } from "./ledger.js";
 import { persistAgentResult } from "./persist-agent-result.js";
-import { readPhaseIter, supersedeFindingsOnWalkBack } from "./supersede-findings.js";
+import {
+  clearOpenBlockers,
+  readPhaseIter,
+  snapshotOpenBlockers,
+  supersedeFindingsOnWalkBack,
+} from "./supersede-findings.js";
 
 export interface DeliverContinueArgs {
   input: ContinueTaskInput;
@@ -71,23 +76,31 @@ export async function deliverContinue(
   const { input } = args;
   switch (input.type) {
     case "agent-result": {
-      const delivered = await deliverAgentResult(
+      // A lone spawn can be safely re-issued (the stage re-interprets to a
+      // fresh begin_spawn), so an unparseable reviewer/validator output gets
+      // ONE retry before it is blocked — `allow_retry_reissue: true`.
+      const outcome = await deliverAgentResult(
         tx,
         args,
         input.agent_run_id,
         input.agent_output,
         input.tokens,
+        true,
       );
       // File accounting unions in only on a real (non-replay) delivery —
       // a retried delivery must not re-merge, though the union is itself
       // idempotent.
-      if (delivered) {
+      if (outcome.delivered) {
         await mergeDeliveredFiles(tx, input.files_modified, input.files_created);
       }
       // A pure replay (ledger row already present) is a no-op — it must
       // NOT advance the step a second time, or the FSM walks past the
-      // next stage on every retried delivery.
-      if (delivered) await advanceIfDrained(tx);
+      // next stage on every retried delivery. A retry re-issue holds the
+      // step too: the spawn was drained but must run again, so the FSM
+      // re-interprets this stage instead of advancing past it.
+      if (outcome.delivered && !outcome.schema_retry_requested) {
+        await advanceIfDrained(tx);
+      }
       return;
     }
     case "agents-results": {
@@ -99,17 +112,22 @@ export async function deliverContinue(
       }
       let anyDelivered = false;
       for (const result of input.results) {
-        const delivered = await deliverAgentResult(
+        // A fanout sibling cannot be re-issued alone (re-interpreting the
+        // fanout would re-spawn every sibling and double-count the good ones),
+        // so an unparseable sibling is blocked on the FIRST failure rather than
+        // retried — `allow_retry_reissue: false`.
+        const outcome = await deliverAgentResult(
           tx,
           args,
           result.agent_run_id,
           result.agent_output,
           result.tokens,
+          false,
         );
-        if (delivered) {
+        if (outcome.delivered) {
           await mergeDeliveredFiles(tx, result.files_modified, result.files_created);
         }
-        anyDelivered = anyDelivered || delivered;
+        anyDelivered = anyDelivered || outcome.delivered;
       }
       if (anyDelivered) await advanceIfDrained(tx);
       return;
@@ -131,18 +149,27 @@ export async function deliverContinue(
   }
 }
 
-// Returns true when this call actually persisted a delivery; false on a
-// pure replay (so the caller knows whether to advance the FSM step).
+interface DeliverAgentOutcome {
+  // True when this call actually persisted a delivery; false on a pure replay
+  // (so the caller knows whether to merge files / advance the FSM step).
+  delivered: boolean;
+  // True when an unparseable reviewer/validator output was tolerated for ONE
+  // retry — the spawn was drained but the step must NOT advance, so the FSM
+  // re-interprets the stage and re-issues the spawn.
+  schema_retry_requested: boolean;
+}
+
 async function deliverAgentResult(
   tx: Transaction,
   args: DeliverContinueArgs,
   agentRunId: string,
   agentOutput: string,
-  tokens?: { in: number; out: number; cached?: number },
-): Promise<boolean> {
+  tokens: { in: number; out: number; cached?: number } | undefined,
+  allowRetryReissue: boolean,
+): Promise<DeliverAgentOutcome> {
   const key = `agent-result:${agentRunId}`;
   const existing = await readLedgerRow(tx, key);
-  if (existing !== null) return false; // replay — already delivered
+  if (existing !== null) return { delivered: false, schema_retry_requested: false }; // replay
 
   const pending = await tx.queryRow<{ agent: unknown; phase: unknown; model: unknown }>(
     "SELECT agent, phase, model FROM pending_agents WHERE agent_run_id = ?",
@@ -177,12 +204,13 @@ async function deliverAgentResult(
   // the round-2 reviewer's findings land under iteration 2 and the
   // round-1 findings the resolver retired stay distinguishable.
   const iteration = readPhaseIter(await readDriverScratch(tx), phase);
-  await persistAgentResult(tx, {
+  const persisted = await persistAgentResult(tx, {
     result,
     output_kind: outputKind,
     phase,
     model,
     iteration,
+    allow_retry_reissue: allowRetryReissue,
     ...(args.vocabularies !== undefined ? { vocabularies: args.vocabularies } : {}),
   });
 
@@ -192,7 +220,7 @@ async function deliverAgentResult(
     task_id: taskId,
     response_blob: null,
   });
-  return true;
+  return { delivered: true, schema_retry_requested: persisted.schema_retry_requested };
 }
 
 async function deliverUserAnswer(
@@ -298,6 +326,9 @@ async function applyGateResult(
 ): Promise<void> {
   switch (result.type) {
     case "advance":
+      // A human approval settles the handed-off blockers — drop the snapshot
+      // so a downstream spawn does not still list resolved blockers.
+      state.driver.scratch = await clearOpenBlockers(tx, state.driver.scratch);
       await tx.exec(
         "UPDATE driver_state SET pending_user_answer = NULL, step_index = step_index + 1 WHERE id = 1",
       );
@@ -312,6 +343,10 @@ async function applyGateResult(
           detail: { target: result.step, reason: result.reason },
         });
       }
+      // Hand the rejecting round's open blockers to the re-entered flow BEFORE
+      // they are retired — the supersede write below carries the snapshot
+      // forward (same scratch blob), so the next spawn can list them.
+      state.driver.scratch = await snapshotOpenBlockers(tx, state.driver.scratch);
       // Retire the prior round's live findings across every phase the flow
       // re-runs from the target through this gate — co-committed with the
       // step_index rewind so the supersede and the walk-back land atomically.

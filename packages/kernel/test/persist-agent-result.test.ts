@@ -446,13 +446,16 @@ describe("persistAgentResult — four output_kind paths", () => {
     assert.equal(Number(cntRow.agents_count), 0);
   });
 
-  it("schema-invalid result: persists agent_records but skips findings/verdict", async () => {
+  it("schema-invalid review (no retry available) synthesizes a blocking finding, never a silent skip", async () => {
     await seedBaseline(projectDir);
     await seedPending(projectDir, "ar-rev-bad", "rev-agent");
 
+    // allow_retry_reissue defaults false (the fanout-sibling case): an
+    // unparseable reviewer output is blocked on the FIRST failure so the gate
+    // cannot read "no blockers" and silently approve.
     const persistNow = captureNow();
-    await withStateTransaction(projectDir, persistNow, async (tx) => {
-      await persistAgentResult(tx, {
+    const outcome = await withStateTransaction(projectDir, persistNow, (tx) =>
+      persistAgentResult(tx, {
         result: {
           agent: "rev-agent",
           agent_run_id: "ar-rev-bad",
@@ -462,19 +465,123 @@ describe("persistAgentResult — four output_kind paths", () => {
         output_kind: "reviewer",
         phase: "p1",
         model: null,
-      });
-    });
+      }),
+    );
+    assert.equal(outcome.schema_retry_requested, false);
 
     const state = await withStateTransaction(projectDir, captureNow(), (tx) => loadState(tx));
-    assert.equal(state.agents_count, 1); // record was persisted for forensics
-    assert.equal(state.agent_verdicts.length, 0); // no verdict row
-    const findingsCount = await withStateTransaction(projectDir, captureNow(), async (tx) => {
-      const row = await tx.queryRow<{ n: number }>(
-        "SELECT count(*) AS n FROM findings",
+    assert.equal(state.agents_count, 1); // forensic record persisted
+    // A synthetic blocking finding + a REQUEST_CHANGES verdict were recorded so
+    // the result is gated, not silently approved.
+    assert.equal(state.agent_verdicts.length, 1);
+    assert.equal(state.agent_verdicts[0]?.verdict, "REQUEST_CHANGES");
+    assert.equal(state.agent_verdicts[0]?.blocking_issues, 1);
+    const findings = await withStateTransaction(projectDir, captureNow(), async (tx) => {
+      const rows = await tx.queryAll<{ severity: string; category: string; agent: string; status: string }>(
+        "SELECT severity, category, agent, status FROM findings",
       );
-      return Number(row?.n ?? 0);
+      return rows;
     });
-    assert.equal(findingsCount, 0);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0]?.severity, "blocking");
+    assert.equal(findings[0]?.category, "unparseable-output");
+    assert.equal(findings[0]?.agent, "rev-agent");
+    assert.equal(findings[0]?.status, "open");
+  });
+
+  it("schema-invalid review with retry available: first failure re-issues (no finding), second failure blocks", async () => {
+    await seedBaseline(projectDir);
+    await seedPending(projectDir, "ar-rev-r1", "rev-agent");
+
+    const badResult = {
+      agent: "rev-agent",
+      output: "still no JSON",
+      schema_validation: { ok: false as const, reason: "no-json-fence" },
+    };
+
+    // First failure with allow_retry_reissue=true (the lone-spawn case): the
+    // spawn is drained (forensic row) but NO finding lands — the caller is told
+    // to re-issue.
+    const first = await withStateTransaction(projectDir, captureNow(), (tx) =>
+      persistAgentResult(tx, {
+        result: { ...badResult, agent_run_id: "ar-rev-r1" },
+        output_kind: "reviewer",
+        phase: "p1",
+        model: null,
+        allow_retry_reissue: true,
+      }),
+    );
+    assert.equal(first.schema_retry_requested, true);
+    let findingsCount = await withStateTransaction(projectDir, captureNow(), async (tx) =>
+      Number((await tx.queryRow<{ n: number }>("SELECT count(*) AS n FROM findings"))?.n ?? 0),
+    );
+    assert.equal(findingsCount, 0, "first unparseable failure is retried, not blocked");
+
+    // The re-issued spawn fails to parse AGAIN (a fresh agent_run_id). The
+    // per-(phase, agent) retry counter is now spent, so this synthesizes the
+    // blocking finding instead of retrying forever.
+    await seedPending(projectDir, "ar-rev-r2", "rev-agent");
+    const second = await withStateTransaction(projectDir, captureNow(), (tx) =>
+      persistAgentResult(tx, {
+        result: { ...badResult, agent_run_id: "ar-rev-r2" },
+        output_kind: "reviewer",
+        phase: "p1",
+        model: null,
+        allow_retry_reissue: true,
+      }),
+    );
+    assert.equal(second.schema_retry_requested, false);
+    findingsCount = await withStateTransaction(projectDir, captureNow(), async (tx) =>
+      Number((await tx.queryRow<{ n: number }>("SELECT count(*) AS n FROM findings WHERE severity = 'blocking'"))?.n ?? 0),
+    );
+    assert.equal(findingsCount, 1, "second unparseable failure blocks");
+  });
+
+  it("a clean reviewer delivery clears the retry counter a prior unparseable attempt set", async () => {
+    await seedBaseline(projectDir);
+    await seedPending(projectDir, "ar-rev-bad1", "rev-agent");
+
+    // One unparseable attempt bumps the counter (retry requested, no finding).
+    await withStateTransaction(projectDir, captureNow(), (tx) =>
+      persistAgentResult(tx, {
+        result: {
+          agent: "rev-agent",
+          agent_run_id: "ar-rev-bad1",
+          output: "x",
+          schema_validation: { ok: false, reason: "no-json-fence" },
+        },
+        output_kind: "reviewer",
+        phase: "p1",
+        model: null,
+        allow_retry_reissue: true,
+      }),
+    );
+    const counterAfterBump = await withStateTransaction(projectDir, captureNow(), async (tx) =>
+      (await tx.queryRow<{ scratch: string | null }>("SELECT scratch FROM driver_state WHERE id = 1"))?.scratch ?? "{}",
+    );
+    assert.match(counterAfterBump, /schema_retry_p1_rev-agent/);
+
+    // A clean delivery from the same (phase, agent) clears the marker.
+    await seedPending(projectDir, "ar-rev-ok", "rev-agent");
+    await withStateTransaction(projectDir, captureNow(), (tx) =>
+      persistAgentResult(tx, {
+        result: {
+          agent: "rev-agent",
+          agent_run_id: "ar-rev-ok",
+          output: "```json\n" + JSON.stringify({ verdict: "APPROVE", findings: [] }) + "\n```",
+          parsed_header: { verdict: "APPROVE", findings: [] },
+          schema_validation: { ok: true },
+        },
+        output_kind: "reviewer",
+        phase: "p1",
+        model: null,
+        allow_retry_reissue: true,
+      }),
+    );
+    const counterAfterClean = await withStateTransaction(projectDir, captureNow(), async (tx) =>
+      (await tx.queryRow<{ scratch: string | null }>("SELECT scratch FROM driver_state WHERE id = 1"))?.scratch ?? "{}",
+    );
+    assert.doesNotMatch(counterAfterClean, /schema_retry_p1_rev-agent/);
   });
 
   it("token roll-up is additive across multiple results", async () => {

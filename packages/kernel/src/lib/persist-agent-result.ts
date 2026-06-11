@@ -44,12 +44,24 @@ export interface PersistAgentResultArgs {
   // outside the merged set is refused with `VOCAB_UNKNOWN` before the
   // `agent_records` row lands.
   vocabularies?: KernelVocabularies;
+  // Whether the caller can re-issue THIS spawn alone (a lone spawn can; a
+  // fanout sibling cannot — re-interpreting the fanout re-spawns every
+  // sibling). When true, an unparseable reviewer/validator output is tolerated
+  // for ONE retry before it is turned into a blocking finding. Default false.
+  allow_retry_reissue?: boolean;
+}
+
+export interface PersistAgentResultOutcome {
+  // True when an unparseable reviewer/validator output was tolerated for one
+  // retry: the spawn was drained (forensic row kept) but NO finding was
+  // recorded, and the caller must NOT advance the step so the spawn re-issues.
+  schema_retry_requested: boolean;
 }
 
 export async function persistAgentResult(
   tx: Transaction,
   args: PersistAgentResultArgs,
-): Promise<void> {
+): Promise<PersistAgentResultOutcome> {
   const { result, output_kind, phase, model } = args;
   const iteration = args.iteration ?? 1;
   const now = tx.now;
@@ -102,25 +114,198 @@ export async function persistAgentResult(
     [ti, to, tc],
   );
 
-  // 4. Schema-invalid deliveries stop here — agent_records carries the
-  //    forensic row; findings and verdicts stay empty. Audit emission
-  //    is the caller's job (interpretSpawn / interpretFanout) so the
-  //    same persistor serves both single + fanout paths.
-  if (result.schema_validation.ok === false) return;
+  // 4. Schema-invalid handling. agent_records already carries the forensic
+  //    row (above). For an agent whose output_kind CARRIES verdicts/findings
+  //    (reviewer / validator), an unparseable output must never drain to a
+  //    silent zero-finding pass — a gate would read "no blockers" and approve.
+  //    So: ONE retry where the caller can safely re-issue the spawn, then a
+  //    synthetic blocking finding recorded through the normal path so the gate
+  //    sees it like any other blocker. A classifier / nonreview schema-invalid
+  //    has no findings contract — it keeps the legacy forensic-only behavior.
+  if (result.schema_validation.ok === false) {
+    if (output_kind === "reviewer" || output_kind === "validator") {
+      return await handleUnparseableReview(tx, {
+        result,
+        output_kind,
+        phase,
+        iteration,
+        allow_retry_reissue: args.allow_retry_reissue ?? false,
+      });
+    }
+    return { schema_retry_requested: false };
+  }
 
   if (output_kind === "reviewer" || output_kind === "validator") {
+    // A clean delivery clears any retry marker a prior unparseable attempt of
+    // this (phase, agent) left, so a later re-review starts from a fresh count.
+    await clearSchemaRetry(tx, phase, result.agent);
     await persistFindingsAndVerdict(tx, result, phase, iteration);
-    return;
+    return { schema_retry_requested: false };
   }
 
   if (output_kind === "classifier") {
     await mergeClassifierDecisions(tx, result.parsed_header);
-    return;
+    return { schema_retry_requested: false };
   }
   // nonreview + any bundle-extended output_kind: kernel has no
   // additional opinion. Bundle-owned persistence (when extends_vocab
   // adds an output_kind) runs via an event-position StepStage
   // subscribed to `after-agent-result` filtered by the kind.
+  return { schema_retry_requested: false };
+}
+
+// ============================================================================
+// Unparseable reviewer/validator output — retry once, then block (never pass)
+// ============================================================================
+
+interface UnparseableArgs {
+  result: AgentResult;
+  output_kind: AgentOutputKind;
+  phase: Phase;
+  iteration: number;
+  allow_retry_reissue: boolean;
+}
+
+// The per-(phase, agent) retry counter lives on the driver scratch, a sibling
+// of the other kernel-owned scratch counters. Keyed by phase+agent (not the
+// agent_run_id) so it survives the re-issue, which mints a fresh id.
+function schemaRetryKey(phase: string, agent: string): string {
+  return `schema_retry_${phase}_${agent}`;
+}
+
+async function handleUnparseableReview(
+  tx: Transaction,
+  args: UnparseableArgs,
+): Promise<PersistAgentResultOutcome> {
+  const { result, output_kind, phase, iteration } = args;
+  const key = schemaRetryKey(phase, result.agent);
+  const scratch = await readDriverScratch(tx);
+  const attempts = readRetryCount(scratch, key);
+
+  // First failure on a re-issuable spawn: tolerate it once. Record the bump
+  // and ask the caller to hold the step so the FSM re-interprets the stage and
+  // re-runs the agent (the forensic row + drain already happened above).
+  if (args.allow_retry_reissue && attempts < 1) {
+    await writeRetryCount(tx, scratch, key, attempts + 1);
+    return { schema_retry_requested: true };
+  }
+
+  // Retry exhausted, or a fanout sibling that cannot be re-issued alone:
+  // synthesize a blocking finding so the gate cannot silently approve over an
+  // output it could not read. Reset the counter so a future fresh attempt of
+  // this (phase, agent) is not pre-blocked.
+  await recordUnparseableBlocker(tx, {
+    agent: result.agent,
+    output_kind,
+    phase,
+    iteration,
+    reason: unparseableReason(result),
+  });
+  await clearRetryCount(tx, scratch, key);
+  return { schema_retry_requested: false };
+}
+
+function unparseableReason(result: AgentResult): string {
+  return result.schema_validation.ok === false
+    ? result.schema_validation.reason
+    : "schema validation failed";
+}
+
+// Insert one blocking finding + its verdict row for an agent whose output
+// could not be parsed — the same INSERT shape a real reviewer finding takes,
+// so gates, policies, and the supersede resolver treat it identically. The
+// finding is server-minted, server-stamped (id + iteration), attributed to the
+// agent, and categorized `unparseable-output` so an operator sees WHY the gate
+// held.
+async function recordUnparseableBlocker(
+  tx: Transaction,
+  opts: {
+    agent: string;
+    output_kind: AgentOutputKind;
+    phase: Phase;
+    iteration: number;
+    reason: string;
+  },
+): Promise<void> {
+  const id = makeFindingId(tx.now);
+  const summary = `Agent '${opts.agent}' returned output that could not be parsed as a review (${opts.reason}). Treated as a blocker so the result is not silently approved; re-run or review manually.`;
+  await tx.exec(
+    "INSERT INTO findings (id, task_id, agent, iteration, phase, file, " +
+      "line_start, line_end, severity, category, proposed_new_category, " +
+      "pattern_id, summary, evidence_excerpt, suggested_fix, status, " +
+      "ref_rule_id, recorded_at) " +
+      "VALUES (?, NULL, ?, ?, ?, NULL, NULL, NULL, 'blocking', " +
+      "'unparseable-output', NULL, NULL, ?, NULL, NULL, 'open', NULL, ?)",
+    [id, opts.agent, opts.iteration, opts.phase, summary, tx.now],
+  );
+  // A reviewer's contradicting verdict normalizes to REQUEST_CHANGES; a
+  // validator's to FAIL — the change-leaning verbs the gate reads, kept
+  // consistent with the synthesized blocker.
+  const verdict = opts.output_kind === "validator" ? "FAIL" : "REQUEST_CHANGES";
+  await tx.exec(
+    "INSERT INTO agent_verdicts (phase, agent, iteration, verdict, summary_line, " +
+      "blocking_issues, warn_issues, info_issues, categories_seen, recorded_at) " +
+      "VALUES (?, ?, ?, ?, ?, 1, 0, 0, ?, ?)",
+    [
+      opts.phase,
+      opts.agent,
+      opts.iteration,
+      verdict,
+      "unparseable output",
+      JSON.stringify(["unparseable-output"]),
+      tx.now,
+    ],
+  );
+}
+
+async function readDriverScratch(tx: Transaction): Promise<Record<string, unknown>> {
+  const row = await tx.queryRow<{ scratch: string | null }>(
+    "SELECT scratch FROM driver_state WHERE id = 1",
+  );
+  return parseStateJson<Record<string, unknown>>(row?.scratch ?? null, {});
+}
+
+function readRetryCount(scratch: Record<string, unknown>, key: string): number {
+  const raw = scratch[key];
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : 0;
+}
+
+async function writeRetryCount(
+  tx: Transaction,
+  scratch: Record<string, unknown>,
+  key: string,
+  next: number,
+): Promise<void> {
+  const merged = { ...scratch, [key]: next };
+  await tx.exec("UPDATE driver_state SET scratch = ? WHERE id = 1", [
+    JSON.stringify(merged),
+  ]);
+}
+
+async function clearRetryCount(
+  tx: Transaction,
+  scratch: Record<string, unknown>,
+  key: string,
+): Promise<void> {
+  if (!(key in scratch)) return;
+  const merged = { ...scratch };
+  delete merged[key];
+  await tx.exec("UPDATE driver_state SET scratch = ? WHERE id = 1", [
+    JSON.stringify(merged),
+  ]);
+}
+
+// Clear the retry marker for a (phase, agent) on a clean delivery — reads
+// scratch first so a no-marker delivery (the overwhelming common case) costs
+// one SELECT and no write.
+async function clearSchemaRetry(
+  tx: Transaction,
+  phase: string,
+  agent: string,
+): Promise<void> {
+  const key = schemaRetryKey(phase, agent);
+  const scratch = await readDriverScratch(tx);
+  await clearRetryCount(tx, scratch, key);
 }
 
 async function persistFindingsAndVerdict(

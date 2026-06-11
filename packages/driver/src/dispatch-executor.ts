@@ -69,6 +69,17 @@ export interface DispatchExecutorOptions {
   // `resolveExecutor`: the dispatch tries each entry in order and advances on a
   // rate-limit / permanent error to the next.
   resolveExecutorChain?: ResolveExecutorChain;
+  // Optional non-model routing checked BEFORE the backend chain. When it
+  // returns an executor for THIS spawn, the spawn runs on that executor and the
+  // backend chain is skipped entirely — the generic seam by which a transport
+  // routes a spawn whose bundle-declared capability marks it as something other
+  // than a model call (e.g. a deterministic checks runner). Returns null to
+  // fall through to the normal backend resolution. The shell stays
+  // capability-blind: it never learns WHAT the executor does, only that the
+  // resolver claimed this spawn.
+  resolveDirectExecutor?: (
+    spawn: ProviderShuttleIntent,
+  ) => Executor | null | Promise<Executor | null>;
   // Notice sink for a fallback advance (which backend failed, which is next).
   // Generic by CODE + label — names no domain. Omitted → advances silently.
   onNotice?: (message: string) => void;
@@ -130,6 +141,13 @@ export function createDispatchExecutor(opts: DispatchExecutorOptions): Executor 
   return {
     idempotent: opts.idempotent ?? true,
     async execute(spawn: ProviderShuttleIntent, signal?: AbortSignal): Promise<ExecutorResult> {
+      // A non-model capability (e.g. a deterministic checks runner) claims the
+      // spawn before any backend is resolved — so it needs no credential and
+      // runs even with no provider configured.
+      if (opts.resolveDirectExecutor !== undefined) {
+        const direct = await opts.resolveDirectExecutor(spawn);
+        if (direct !== null) return direct.execute(spawn, signal);
+      }
       if (opts.resolveExecutorChain !== undefined) return runChain(spawn, signal);
       if (opts.resolveExecutor === undefined) {
         throw new KernelError({

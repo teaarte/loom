@@ -46,13 +46,14 @@
 // Ambient timers/clock are fine here — this is transport, outside the kernel's
 // replay graph.
 
+import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve as resolvePath } from "node:path";
 
 import { listProjects } from "@loomfsm/config";
 import { pushTaskBranch, squashMergeTaskBranch } from "@loomfsm/daemon";
-import { archiveAndReset, captureNow, type Registry } from "@loomfsm/kernel";
+import { archiveAndReset, assertProjectDirAllowed, captureNow, KernelError, type Registry } from "@loomfsm/kernel";
 
 import { answerGate, parseAnswer } from "./answer.js";
 import {
@@ -74,6 +75,7 @@ import { serveDashboard } from "./dashboard/assets.js";
 import { fromKernelError, ServerError } from "./errors.js";
 import { listDirectory, resolveBrowseRoot } from "./fs-routes.js";
 import { readLogTail } from "./log-tail.js";
+import { hostHeaderAllowed, isStateChanging, originAllowed } from "./net-guards.js";
 import { readProjectStatus } from "./read-model.js";
 import type { SupervisorRegistry } from "./registry.js";
 import { submitTask } from "./submit.js";
@@ -123,8 +125,17 @@ export interface ControlServerDeps extends ConfigDeps {
   // (the CLI injects `assembleRegistry`).
   resolveRegistry: (projectDir: string) => Promise<Registry> | Registry;
   // When set, every API route requires this bearer token; the dashboard +
-  // /health stay open so the page can load and prompt for it.
+  // /health stay open so the page can load and prompt for it. A configured
+  // token also flips the request from "open loopback" to "operator-authorized":
+  // the Host-header (DNS-rebinding) check is skipped — a LAN / tunnel host is
+  // expected — and the project-dir allowlist is bypassed (the token IS the
+  // authorization), so a tokened deployment can drive any directory.
   token?: string;
+  // Override the project-dir allowlist file (`~/.loom/projects.allow`) the
+  // un-tokened drive routes (POST /submit, /projects) gate on. Production omits
+  // it (the kernel default); a test points it at a tmpfile. The gate only runs
+  // when NO token is configured — see `token` above.
+  allowlistPath?: string;
   // Injectable wall clock for read-model ageing (tests pin it). Default Date.now.
   now?: () => number;
   // SSE snapshot cadence + log-tail size.
@@ -136,6 +147,10 @@ export interface ControlServerDeps extends ConfigDeps {
 
 export function createControlServer(deps: ControlServerDeps): Server {
   return createServer((req, res) => {
+    // A client that resets mid-request (e.g. an upload abandoned after we answer
+    // 413 early) emits 'error' on the request; swallow it so it never becomes an
+    // unhandled exception. The response path is owned by `handle`.
+    req.on("error", () => {});
     void handle(req, res, deps).catch((err: unknown) => {
       deps.onError?.(err);
       if (!res.headersSent) sendJson(res, 500, { error: { code: "INTERNAL", message: "internal error" } });
@@ -149,6 +164,24 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
   const method = req.method ?? "GET";
   const parts = url.pathname.split("/").filter((s) => s.length > 0);
   const now = (): number => (deps.now ?? Date.now)();
+  const tokenGated = deps.token !== undefined && deps.token.length > 0;
+
+  // ----- network guards (DNS-rebinding + CSRF) -----
+  // Applied to EVERY request, before the page even loads: a hostile web page
+  // that rebinds its domain to 127.0.0.1 still sends its own `Host`, so an
+  // un-tokened loopback server refuses it here. A tokened server skips this (a
+  // LAN/tunnel host is expected; the token is the real gate).
+  if (!hostHeaderAllowed(req.headers["host"], tokenGated)) {
+    sendJson(res, 403, { error: { code: "FORBIDDEN_HOST", message: "request Host is not a loopback address" } });
+    return;
+  }
+  // Cross-site writes carry a foreign `Origin`; same-origin (the dashboard) and
+  // non-browser clients (curl, the CLI) pass. GETs are cross-origin-read-blocked
+  // by the browser, so only state-changing methods are checked.
+  if (isStateChanging(method) && !originAllowed(req.headers["origin"], req.headers["host"])) {
+    sendJson(res, 403, { error: { code: "FORBIDDEN_ORIGIN", message: "cross-origin request refused" } });
+    return;
+  }
 
   // ----- unauthenticated routes -----
   // The dashboard shell + its hashed assets load without a token (the page then
@@ -163,7 +196,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
   }
 
   // ----- auth gate -----
-  if (!authorized(req, url, deps.token)) {
+  // `?token=` is honoured ONLY for the SSE log stream (an EventSource cannot set
+  // the Authorization header); every other route is header-only, so the token
+  // never lands in a URL / access log.
+  const sseLog = method === "GET" && parts[0] === "projects" && parts[2] === "log";
+  if (!authorized(req, url, deps.token, sseLog)) {
     sendJson(res, 401, { error: { code: "UNAUTHORIZED", message: "a bearer token is required" } });
     return;
   }
@@ -243,7 +280,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
       }
       if (method === "POST") {
         const body = await readJsonBody(req);
-        routeRegister(res, body, deps);
+        await routeRegister(res, body, deps);
         return;
       }
     }
@@ -360,7 +397,8 @@ async function routeSubmit(
   // supervised gets a watcher here. Resolution order: the live supervised set
   // (by id or dir) → the durable catalog by id (the dashboard adds projects
   // there) → a real directory path. Each fallback registers the dir, which
-  // starts its watcher.
+  // starts its watcher — so the allowlist is checked BEFORE registering, never
+  // starting a watcher on a directory the request is not allowed to drive.
   let entry = deps.registry.resolve(project);
   if (entry === null) {
     const catalogDir =
@@ -368,12 +406,14 @@ async function routeSubmit(
         ? listProjects(deps.loomHome).find((p) => p.id === project)?.dir
         : undefined;
     if (catalogDir !== undefined) {
+      await assertDriveAllowed(catalogDir, deps);
       entry = deps.registry.register(catalogDir);
     } else {
       const dir = resolvePath(project);
       if (!existsSync(dir)) {
         throw new ServerError("PROJECT_NOT_FOUND", 404, `project '${project}' is not registered and is not a directory`);
       }
+      await assertDriveAllowed(dir, deps);
       entry = deps.registry.register(dir);
     }
   }
@@ -450,11 +490,12 @@ async function routeListProjects(res: ServerResponse, deps: ControlServerDeps, n
   sendJson(res, 200, out);
 }
 
-function routeRegister(res: ServerResponse, body: Record<string, unknown>, deps: ControlServerDeps): void {
+async function routeRegister(res: ServerResponse, body: Record<string, unknown>, deps: ControlServerDeps): Promise<void> {
   const dirRaw = typeof body["dir"] === "string" ? body["dir"] : "";
   if (dirRaw.length === 0) throw new ServerError("DIR_REQUIRED", 400, "dir is required");
   const dir = resolvePath(dirRaw);
   if (!existsSync(dir)) throw new ServerError("DIR_NOT_FOUND", 404, `${dir} does not exist`);
+  await assertDriveAllowed(dir, deps);
   const listing = deps.registry.register(dir);
   sendJson(res, 201, listing);
 }
@@ -606,18 +647,83 @@ async function resolveFsm(deps: ControlServerDeps, dir: string): Promise<Registr
   }
 }
 
-function authorized(req: IncomingMessage, url: URL, token: string | undefined): boolean {
-  if (token === undefined || token.length === 0) return true;
-  const header = req.headers["authorization"];
-  if (typeof header === "string" && header === `Bearer ${token}`) return true;
-  return url.searchParams.get("token") === token;
+// Gate a drive-initiating directory through the operator-authored allowlist —
+// the SAME `assertProjectDirAllowed` every other transport (MCP, CLI) routes
+// through, satisfying "mandatory on every transport". Bypassed when a token
+// gates the surface: a token-authenticated request is the operator, who may
+// drive any directory (the remote "code from phone" path always carries one).
+// On an un-tokened loopback server the allowlist is defense-in-depth against a
+// local process driving agents in an arbitrary directory.
+async function assertDriveAllowed(dir: string, deps: ControlServerDeps): Promise<void> {
+  if (deps.token !== undefined && deps.token.length > 0) return;
+  try {
+    await assertProjectDirAllowed(dir, deps.allowlistPath !== undefined ? { allowlistPath: deps.allowlistPath } : undefined);
+  } catch (err) {
+    if (err instanceof KernelError && err.code === "PROJECT_DIR_NOT_ALLOWED") {
+      throw new ServerError(err.code, 403, err.message);
+    }
+    throw fromKernelError(err);
+  }
 }
 
+// Constant-time string compare so the bearer-token check leaks no timing signal.
+// Unequal lengths short-circuit (the length itself is not a useful oracle here).
+function timingSafeStrEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+// `allowQueryToken` is true ONLY for the SSE log stream — every other route is
+// header-only, so the secret never rides in a URL (and thus an access log).
+function authorized(req: IncomingMessage, url: URL, token: string | undefined, allowQueryToken: boolean): boolean {
+  if (token === undefined || token.length === 0) return true;
+  const header = req.headers["authorization"];
+  if (typeof header === "string" && header.startsWith("Bearer ") && timingSafeStrEqual(header.slice(7), token)) {
+    return true;
+  }
+  if (allowQueryToken) {
+    const q = url.searchParams.get("token");
+    if (q !== null && timingSafeStrEqual(q, token)) return true;
+  }
+  return false;
+}
+
+// A request body larger than this is refused with 413 rather than buffered — a
+// JSON control body (a task description, a config blob) is kilobytes; anything
+// past 1 MiB is a mistake or a memory-exhaustion attempt.
+const MAX_BODY_BYTES = 1_048_576;
+
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  // Reject a declared oversize body BEFORE reading a byte (the common case — a
+  // client that sends Content-Length). Cheap, and it avoids buffering the
+  // upload at all.
+  const declared = Number(req.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    throw new ServerError("PAYLOAD_TOO_LARGE", 413, `request body exceeds ${MAX_BODY_BYTES} bytes`);
+  }
   const chunks: Buffer[] = [];
-  for await (const c of req) chunks.push(c as Buffer);
+  let size = 0;
+  for await (const c of req) {
+    const buf = c as Buffer;
+    size += buf.length;
+    if (size > MAX_BODY_BYTES) {
+      // Undeclared / chunked upload that runs past the cap: stop buffering and
+      // answer early. Memory stays bounded (the goal); the swallowed request
+      // 'error' handler in createControlServer absorbs the reset that follows.
+      throw new ServerError("PAYLOAD_TOO_LARGE", 413, `request body exceeds ${MAX_BODY_BYTES} bytes`);
+    }
+    chunks.push(buf);
+  }
   const raw = Buffer.concat(chunks).toString("utf8").trim();
   if (raw.length === 0) return {};
+  // A JSON body must be declared as such: a cross-site "simple" form POST can
+  // only send text/plain or form-encoding, so requiring application/json is a
+  // second CSRF fence (and rejects mislabelled payloads cleanly).
+  const contentType = (req.headers["content-type"] ?? "").toLowerCase();
+  if (!contentType.includes("application/json")) {
+    throw new ServerError("UNSUPPORTED_MEDIA_TYPE", 415, "request body must be Content-Type: application/json");
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -630,12 +736,15 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   return parsed as Record<string, unknown>;
 }
 
-function sendJson(res: ServerResponse, status: number, obj: unknown): void {
+function sendJson(res: ServerResponse, status: number, obj: unknown, extraHeaders?: Record<string, string>): void {
   const body = JSON.stringify(obj);
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...(extraHeaders ?? {}) });
   res.end(body);
 }
 
 function sendError(res: ServerResponse, err: ServerError): void {
-  sendJson(res, err.httpStatus, { error: { code: err.code, message: err.message } });
+  // A 413 is answered before the (oversized) request body is consumed, so the
+  // socket cannot be safely reused — tell a keep-alive client to drop it.
+  const extra = err.httpStatus === 413 ? { connection: "close" } : undefined;
+  sendJson(res, err.httpStatus, { error: { code: err.code, message: err.message } }, extra);
 }

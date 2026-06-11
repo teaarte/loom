@@ -25,6 +25,7 @@ import type { Registry } from "@loomfsm/kernel";
 import type { Server } from "node:http";
 
 import { createControlServer } from "./http.js";
+import { isLoopbackBindHost } from "./net-guards.js";
 import { acquireServerLock, type ServerHandle } from "./process-control.js";
 import { SupervisorRegistry, type FleetMergeBack, type ProjectListing } from "./registry.js";
 
@@ -36,6 +37,9 @@ export interface ControlPlaneOptions {
   host?: string;
   port?: number;
   token?: string;
+  // Override the project-dir allowlist file the un-tokened drive routes gate on
+  // (forwarded to the HTTP server; production omits it → the kernel default).
+  allowlistPath?: string;
   // Initial projects to supervise (in addition to the durable set).
   projects?: string[];
 
@@ -113,6 +117,18 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
   const clock = opts.clock ?? systemClock;
   const log = opts.serverLog ?? ((): void => {});
 
+  // Refuse to expose the plane beyond this machine without a token. A loopback
+  // bind is open-but-unreachable-from-outside; a non-loopback bind (a LAN IP,
+  // `0.0.0.0`, `::`) is reachable, so an un-tokened one would hand unauthenticated
+  // task execution to anyone on the network. Checked before the lock is claimed.
+  const hasToken = opts.token !== undefined && opts.token.length > 0;
+  if (!isLoopbackBindHost(host) && !hasToken) {
+    throw new Error(
+      `refusing to bind to non-loopback host '${host}' without a token — ` +
+        `pass --token (or set LOOM_SERVER_TOKEN) to expose the control plane safely`,
+    );
+  }
+
   // Claim the control plane (refuses if a live one already owns this state dir).
   const lock: ServerHandle = acquireServerLock(opts.stateDir, host, desiredPort, {
     clock,
@@ -153,6 +169,7 @@ export async function startControlPlane(opts: ControlPlaneOptions): Promise<Cont
     registry,
     resolveRegistry: opts.resolveRegistry,
     ...(opts.token !== undefined && opts.token.length > 0 ? { token: opts.token } : {}),
+    ...(opts.allowlistPath !== undefined ? { allowlistPath: opts.allowlistPath } : {}),
     ...(opts.loomHome !== undefined ? { loomHome: opts.loomHome } : {}),
     ...(opts.configEnv !== undefined ? { configEnv: opts.configEnv } : {}),
     ...(opts.invalidateRegistry !== undefined ? { invalidateRegistry: opts.invalidateRegistry } : {}),

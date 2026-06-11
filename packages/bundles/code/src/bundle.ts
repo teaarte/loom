@@ -38,6 +38,40 @@ function decisionEquals(state: BundleStateView, key: string, value: unknown): bo
   return state.decisions[key] === value;
 }
 
+// Differentiated rework panel: on a walk-back iteration, re-run ONLY the
+// reviewers that produced a blocking finding in the previous implementation
+// round — a focused re-verify instead of the full adversarial fanout (a
+// style-only blocker should not re-run the opus correctness panel). The signal
+// is the substrate's own per-agent verdict accounting: each `agent_verdicts`
+// row carries `blocking_issues` + `iteration`, so the reviewers that blocked
+// last round are exactly those with `blocking_issues > 0` at the latest
+// implementation iteration.
+//
+//   - First pass (no implementation verdicts yet) → full panel, unchanged.
+//   - A rework round whose blockers came from reviewers → re-run only those.
+//   - A rework round with NO reviewer blocker (e.g. an acceptance-only failure)
+//     → re-review fully, so the implementer's new code is never left unreviewed.
+//
+// A style-only round falls out for free: if the style reviewer was the only one
+// that blocked, it is the only one the re-run admits. Scoped to implementation
+// verdicts so a reviewer reused in the planning `plan-review` fanout is never
+// constrained there (planning carries no implementation verdicts).
+function reworkAllowsReviewer(state: BundleStateView, agentName: string): boolean {
+  const implVerdicts = (state.agent_verdicts ?? []).filter(
+    (v) => v.phase === "implementation",
+  );
+  if (implVerdicts.length === 0) return true; // first pass — full panel
+  let maxIter = 0;
+  for (const v of implVerdicts) if (v.iteration > maxIter) maxIter = v.iteration;
+  const blockedLastRound = implVerdicts
+    .filter((v) => v.iteration === maxIter && v.blocking_issues > 0)
+    .map((v) => v.agent);
+  // No reviewer blocked last round → the rework was driven by something else
+  // (an acceptance failure); re-review fully rather than skip review entirely.
+  if (blockedLastRound.length === 0) return true;
+  return blockedLastRound.includes(agentName);
+}
+
 // The complexity values the flow router understands. `trivial` is the fast-task
 // flow (one implementer spawn, no gates/review); the other three are the
 // classifier's own output range.
@@ -666,14 +700,14 @@ export default defineBundle({
       template_path: "agents/logic-reviewer.md",
       output_kind: "reviewer",
       default_model: "balanced",
-      applies_to: (s) => s.decisions["source_changed"] !== false,
+      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "logic-reviewer"),
     },
     {
       name: "logic-reviewer-deep",
       template_path: "agents/logic-reviewer.md",
       output_kind: "reviewer",
       default_model: "premium",
-      applies_to: (s) => s.decisions["source_changed"] !== false,
+      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "logic-reviewer-deep"),
     },
     // The adversarial challenger is the most expensive reviewer, so it also
     // gates on `change_kind`: a config-only / docs-only / type-only / pure
@@ -686,7 +720,7 @@ export default defineBundle({
       template_path: "agents/challenger-reviewer.md",
       output_kind: "reviewer",
       default_model: "balanced",
-      applies_to: (s) => s.decisions["source_changed"] !== false,
+      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "challenger-reviewer"),
       relevant_for_change_kinds: ["logic", "perf-sensitive", "security-sensitive"],
     },
     {
@@ -694,7 +728,7 @@ export default defineBundle({
       template_path: "agents/challenger-reviewer.md",
       output_kind: "reviewer",
       default_model: "premium",
-      applies_to: (s) => s.decisions["source_changed"] !== false,
+      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "challenger-reviewer-deep"),
       relevant_for_change_kinds: ["logic", "perf-sensitive", "security-sensitive"],
     },
     {
@@ -702,7 +736,7 @@ export default defineBundle({
       template_path: "agents/style-reviewer.md",
       output_kind: "reviewer",
       default_model: "fast",
-      applies_to: (s) => s.decisions["source_changed"] !== false,
+      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "style-reviewer"),
       relevant_for_change_kinds: ["logic", "ui", "perf-sensitive", "security-sensitive"],
     },
     {
@@ -710,7 +744,7 @@ export default defineBundle({
       template_path: "agents/security.md",
       output_kind: "reviewer",
       default_model: "balanced",
-      applies_to: (s) => s.decisions["security_needed"] !== false,
+      applies_to: (s) => s.decisions["security_needed"] !== false && reworkAllowsReviewer(s, "security"),
       relevant_for_change_kinds: ["logic", "ui", "security-sensitive", "perf-sensitive", "config-only"],
     },
     {
@@ -718,7 +752,7 @@ export default defineBundle({
       template_path: "agents/performance.md",
       output_kind: "reviewer",
       default_model: "balanced",
-      applies_to: (s) => s.decisions["source_changed"] !== false,
+      applies_to: (s) => s.decisions["source_changed"] !== false && reworkAllowsReviewer(s, "performance"),
       relevant_for_change_kinds: ["logic", "ui", "perf-sensitive", "security-sensitive"],
     },
     { name: "plan-grounding-check", template_path: "agents/plan-grounding-check.md", output_kind: "validator", default_model: "fast" },

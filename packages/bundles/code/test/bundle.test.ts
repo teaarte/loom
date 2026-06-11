@@ -575,6 +575,98 @@ describe("@loomfsm/bundle-code — review panel gates on source presence", () =>
 });
 
 // ============================================================================
+// differentiated rework panel — a rework round re-runs only the reviewers
+// that blocked last round (a style-only blocker does not re-run the panel)
+// ============================================================================
+
+describe("@loomfsm/bundle-code — differentiated rework panel", () => {
+  interface VerdictRow {
+    phase: string;
+    agent: string;
+    iteration: number;
+    blocking_issues: number;
+  }
+
+  // Whether a reviewer's applies_to admits it given the prior rounds' verdicts.
+  function reviewerApplies(
+    name: string,
+    decisions: Record<string, unknown>,
+    agent_verdicts: VerdictRow[],
+  ): boolean {
+    const agent = codeBundle.agents.find((a) => a.name === name);
+    assert.ok(agent?.applies_to !== undefined, `${name} must declare applies_to`);
+    const state = { decisions, agent_verdicts } as unknown as BundleStateView;
+    return agent.applies_to(state);
+  }
+
+  function verdict(agent: string, blocking: number, iteration = 1): VerdictRow {
+    return { phase: "implementation", agent, iteration, blocking_issues: blocking };
+  }
+
+  const SRC = { source_changed: true };
+
+  it("first pass (no implementation verdicts) runs the full panel", () => {
+    for (const name of ["logic-reviewer", "challenger-reviewer", "style-reviewer", "performance"]) {
+      assert.equal(reviewerApplies(name, SRC, []), true, `${name} runs on the first pass`);
+    }
+  });
+
+  it("a rework round re-runs ONLY the reviewers that blocked last round", () => {
+    // Round 1: logic blocked, the others approved (0 blocking).
+    const round1 = [
+      verdict("logic-reviewer", 2),
+      verdict("challenger-reviewer", 0),
+      verdict("style-reviewer", 0),
+      verdict("performance", 0),
+    ];
+    assert.equal(reviewerApplies("logic-reviewer", SRC, round1), true, "the blocker re-verifies");
+    assert.equal(reviewerApplies("challenger-reviewer", SRC, round1), false, "a clean reviewer is skipped");
+    assert.equal(reviewerApplies("style-reviewer", SRC, round1), false);
+    assert.equal(reviewerApplies("performance", SRC, round1), false);
+  });
+
+  it("a style-only round re-runs only the style reviewer", () => {
+    const styleOnly = [
+      verdict("logic-reviewer", 0),
+      verdict("challenger-reviewer", 0),
+      verdict("style-reviewer", 1),
+      verdict("performance", 0),
+    ];
+    assert.equal(reviewerApplies("style-reviewer", SRC, styleOnly), true);
+    assert.equal(reviewerApplies("logic-reviewer", SRC, styleOnly), false);
+    assert.equal(reviewerApplies("challenger-reviewer", SRC, styleOnly), false);
+  });
+
+  it("a rework with no reviewer blocker (e.g. acceptance-only failure) re-reviews fully", () => {
+    const noBlockers = [verdict("logic-reviewer", 0), verdict("style-reviewer", 0)];
+    assert.equal(reviewerApplies("logic-reviewer", SRC, noBlockers), true);
+    assert.equal(reviewerApplies("challenger-reviewer", SRC, noBlockers), true);
+    assert.equal(reviewerApplies("style-reviewer", SRC, noBlockers), true);
+  });
+
+  it("keys off the LATEST round, and ignores planning-phase verdicts", () => {
+    // Round 1 logic blocked; round 2 challenger blocked. The current (round-3)
+    // re-run should admit only the round-2 blocker (challenger). A stray
+    // planning verdict must not influence the implementation rework.
+    const verdicts = [
+      verdict("logic-reviewer", 1, 1),
+      verdict("challenger-reviewer", 0, 1),
+      verdict("logic-reviewer", 0, 2),
+      verdict("challenger-reviewer", 3, 2),
+      { phase: "planning", agent: "logic-reviewer", iteration: 9, blocking_issues: 5 },
+    ];
+    assert.equal(reviewerApplies("challenger-reviewer", SRC, verdicts), true, "round-2 blocker re-runs");
+    assert.equal(reviewerApplies("logic-reviewer", SRC, verdicts), false, "no longer blocking at round 2");
+  });
+
+  it("still honours the source_changed / security_needed gate on a rework round", () => {
+    // A doc-only outcome skips the panel even if a reviewer blocked last round.
+    const blocked = [verdict("logic-reviewer", 1)];
+    assert.equal(reviewerApplies("logic-reviewer", { source_changed: false }, blocked), false);
+  });
+});
+
+// ============================================================================
 // complexity-scaled review-path models — the medium flow reviews on the
 // balanced tier, the complex flow on premium, via per-flow `-deep` variants
 // ============================================================================

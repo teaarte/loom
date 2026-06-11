@@ -8,6 +8,7 @@ export type {
   NotifyConfig,
   ResilienceConfig,
   BackendCredentialConfig,
+  ChecksConfig,
   LoomConfig,
   SecretsFile,
   WorkspaceEntry,
@@ -15,6 +16,15 @@ export type {
   BundleRoster,
   ResolvedConfig,
 } from "./types.js";
+
+export {
+  CHECK_NAMES,
+  detectPackageManager,
+  resolveCheckCommands,
+  type CheckName,
+  type ResolvedCheckRun,
+  type ResolvedCheckCommand,
+} from "./checks.js";
 
 export {
   resolveLoomHome,

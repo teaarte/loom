@@ -20,6 +20,7 @@ import { readGlobalConfig, readProjectConfig } from "./stores.js";
 import type {
   BackendCredentialConfig,
   BundleModelConfig,
+  ChecksConfig,
   LoomConfig,
   NotifyConfig,
   ResilienceConfig,
@@ -75,6 +76,9 @@ export function mergeConfig(lower: LoomConfig, higher: LoomConfig): LoomConfig {
 
   const credentials = mergeCredentials(lower.credentials, higher.credentials);
   if (credentials !== undefined) out.credentials = credentials;
+
+  const checks = mergeFields<ChecksConfig>(lower.checks, higher.checks);
+  if (checks !== undefined) out.checks = checks;
 
   return out;
 }

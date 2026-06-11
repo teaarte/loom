@@ -50,6 +50,12 @@ const BackendCredentialConfigSchema = z.object({
   base_url_ref: z.string().optional(),
 });
 
+const ChecksConfigSchema = z.object({
+  typecheck: z.string().optional(),
+  lint: z.string().optional(),
+  test: z.string().optional(),
+});
+
 export const LoomConfigSchema = z.object({
   backend: z.string().min(1).optional(),
   harness: z.string().min(1).optional(),
@@ -57,6 +63,7 @@ export const LoomConfigSchema = z.object({
   notify: NotifyConfigSchema.optional(),
   resilience: ResilienceConfigSchema.optional(),
   credentials: z.record(z.string(), BackendCredentialConfigSchema).optional(),
+  checks: ChecksConfigSchema.optional(),
 });
 
 export const SecretsFileSchema = z.record(z.string(), z.string());

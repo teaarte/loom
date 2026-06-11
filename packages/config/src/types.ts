@@ -83,6 +83,20 @@ export interface LoomConfig {
   // Per-backend credential overrides (optional — the convention covers the
   // common case). Keyed by backend name.
   credentials?: Record<string, BackendCredentialConfig>;
+  // Per-project validation commands (typecheck / lint / test). Absent values
+  // fall back to package.json script auto-detection. Run deterministically
+  // before the review fanout so broken code is caught for free.
+  checks?: ChecksConfig;
+}
+
+// Per-project validation commands the pipeline runs deterministically before
+// review. Each value is a shell command line executed verbatim in the task's
+// working copy; an absent value falls back to package.json script detection
+// (see checks.ts). The full shape + resolution live in checks.ts.
+export interface ChecksConfig {
+  typecheck?: string;
+  lint?: string;
+  test?: string;
 }
 
 // secrets.json: a flat name → value map, machine-local, chmod 600. Never in a

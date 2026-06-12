@@ -15,11 +15,16 @@
 //   2. Resolve the command list (typecheck / lint / test) the transport injects
 //      from the project's config + package.json detection.
 //   3. Run each command in the worktree with the spawn's env, a per-command
-//      wall-time cap, and capture exit code + an output TAIL (the most recent
-//      16 KB — where a compiler/test run leaves its errors).
+//      wall-time cap, and capture exit code + an output HEAD (the first 32 KB,
+//      where a compiler prints its first error) AND an output TAIL (the most
+//      recent 16 KB — the run's summary).
 //   4. Return the envelope as the spawn's text output: a JSON object
-//      `{ checks: [{ name, status, exit_code?, output_tail?, command? }] }`.
+//      `{ checks: [{ name, status, exit_code?, output_head?, output_tail?, command? }] }`.
 //      The bundle reads it back into its own state; the kernel sees opaque text.
+//   5. Write the FULL-fidelity failure report into the worktree at
+//      `.loom/work/check-failures.txt` so the next file-editing spawn (which
+//      reuses this worktree) reads the complete compiler output the bounded
+//      finding only points at. Overwritten each round, removed when all pass.
 //
 // It edits no files, so it reports no file delta — `agent_output` is the only
 // channel it uses. POSIX shells only: a configured shell-string check runs via
@@ -29,6 +34,8 @@
 // wall clock directly.
 
 import { spawn } from "node:child_process";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { KernelError, type ProviderShuttleIntent } from "@loomfsm/kernel";
 
@@ -44,6 +51,21 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
 // where a failing typecheck / test run prints its errors + summary. Bounds the
 // envelope so a noisy build cannot balloon the delivered output.
 const OUTPUT_TAIL_BYTES = 16 * 1024;
+
+// How much of the HEAD is retained — where a compiler prints its FIRST error
+// (and a test runner its first failure). The blocking finding is built from the
+// head, and the failure file leads with it, so the implementer reads the first
+// errors first.
+const OUTPUT_HEAD_BYTES = 32 * 1024;
+
+// Per-check bounds in the failure file: the head (first errors) plus a tail
+// (final summary), with an omission marker between when the run produced more.
+const FILE_TAIL_BYTES = 8 * 1024;
+
+// The worktree-relative path of the full-fidelity failure report the next
+// file-editing spawn reads. Lives under loom's own `.loom/work/` scratch area,
+// beside the diff the reviewers read.
+const CHECK_FAILURES_REL = join(".loom", "work", "check-failures.txt");
 
 // Grace between SIGTERM and SIGKILL when a timeout kills the child — let it tear
 // down cleanly before forcing it.
@@ -79,6 +101,10 @@ export interface CheckResult {
   command?: string;
   // Present for ok/fail (null when the child was killed before exiting).
   exit_code?: number | null;
+  // Head of the combined output — the FIRST bytes (capped to 32 KB), where a
+  // compiler/test run prints its first error. The bundle builds the blocking
+  // finding from this. Present for ok/fail when the run produced any output.
+  output_head?: string;
   // Tail of the combined output — present for ok/fail, capped to 16 KB.
   output_tail?: string;
 }
@@ -102,6 +128,10 @@ export interface CheckCommandOutcome {
   exit_code: number | null;
   // Combined stdout+stderr, already tail-capped by the runner.
   output_tail: string;
+  // The first bytes of the combined output (head-capped by the runner).
+  // Optional so an injected test runner that only cares about the tail need not
+  // supply it.
+  output_head?: string;
   timed_out: boolean;
 }
 
@@ -151,6 +181,14 @@ export function tailCap(s: string, max = OUTPUT_TAIL_BYTES): string {
   return `…[${s.length - max} earlier chars omitted]…\n${kept}`;
 }
 
+// Keep the FIRST `max` bytes of a string (the head). A shorter string passes
+// through unchanged; a longer one is suffixed with an omission marker so a
+// reader knows more followed.
+export function headCap(s: string, max = OUTPUT_HEAD_BYTES): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max)}\n…[${s.length - max} later chars omitted]…`;
+}
+
 export function createChecksExecutor(opts: ChecksExecutorOptions): Executor {
   const runCommand = opts.runCommand ?? defaultRunCommand(opts);
   const timeoutMs = opts.command_timeout_ms ?? DEFAULT_COMMAND_TIMEOUT_MS;
@@ -197,14 +235,18 @@ export function createChecksExecutor(opts: ChecksExecutorOptions): Executor {
       ...(signal !== undefined ? { signal } : {}),
     });
     const status: CheckStatus = !outcome.timed_out && outcome.exit_code === 0 ? "ok" : "fail";
-    const tail = outcome.timed_out
-      ? tailCap(`${outcome.output_tail}\n[killed: exceeded ${timeoutMs}ms timeout]`)
-      : outcome.output_tail;
+    // A timeout note rides on BOTH bounds: the tail (its natural place) and the
+    // head (so a SHORT run that timed out — whose head holds the whole output —
+    // still surfaces the kill in the finding and the failure file).
+    const note = outcome.timed_out ? `\n[killed: exceeded ${timeoutMs}ms timeout]` : "";
+    const tail = note.length > 0 ? tailCap(`${outcome.output_tail}${note}`) : outcome.output_tail;
+    const head = headCap(`${outcome.output_head ?? ""}${note}`);
     return {
       name: spec.name,
       status,
       command: display,
       exit_code: outcome.exit_code,
+      ...(head.length > 0 ? { output_head: head } : {}),
       output_tail: tail,
     };
   };
@@ -222,6 +264,9 @@ export function createChecksExecutor(opts: ChecksExecutorOptions): Executor {
       for (const spec of specs) {
         checks.push(await runOne(spec, wt.dir, signal));
       }
+      // Drop the full-fidelity failure report into the worktree the next
+      // file-editing spawn reuses (or clear a stale one on a clean round).
+      writeCheckFailures(wt.dir, checks);
       const envelope: ChecksEnvelope = { checks };
       // The envelope rides as the spawn's text output: the bundle reads it back
       // via the kernel's structured-output merge. No file delta — checks edit
@@ -231,9 +276,50 @@ export function createChecksExecutor(opts: ChecksExecutorOptions): Executor {
   };
 }
 
-// The real child-process runner. Captures combined stdout+stderr (tail-capped),
-// returns the exit code for ANY exit, and kills the child on a per-command
-// timeout via the injected timer seam (SIGTERM then SIGKILL after a grace).
+// Compose one failed check's body for the failure file: the head (first errors,
+// carrying its own omission marker when the run produced more) followed by the
+// last bytes of the tail (the final summary). A short run's whole output already
+// lives in the head, so the tail is appended ONLY when it carries bytes the head
+// does not — keeping the file to roughly the head's 32 KB plus an 8 KB tail.
+function composeFailureBody(head: string, tail: string): string {
+  if (head.length === 0) return tail;
+  const tailPiece = tail.length > FILE_TAIL_BYTES ? tail.slice(tail.length - FILE_TAIL_BYTES) : tail;
+  if (tailPiece.length === 0 || head.includes(tailPiece)) return head;
+  return `${head}\n${tailPiece}`;
+}
+
+// Write (or clear) the full-fidelity failure report in the task worktree so the
+// NEXT file-editing spawn — which reuses this same copy — reads the complete
+// compiler output the bounded blocking finding only points at. One section per
+// FAILED check (name, command, exit code, head + tail); overwritten every round
+// and REMOVED when nothing failed, so a stale failure never haunts a later green
+// round. Best-effort: a write failure never fails the checks (the finding still
+// carries the bounded head). The path rides on the injected `provision` seam, so
+// a test directs it at a temp dir without a new file-system seam.
+function writeCheckFailures(dir: string, checks: CheckResult[]): void {
+  const path = join(dir, CHECK_FAILURES_REL);
+  try {
+    const failed = checks.filter((c) => c.status === "fail");
+    if (failed.length === 0) {
+      rmSync(path, { force: true });
+      return;
+    }
+    const sections = failed.map((c) => {
+      const exit = c.exit_code === null || c.exit_code === undefined ? "killed" : String(c.exit_code);
+      const body = composeFailureBody(c.output_head ?? "", c.output_tail ?? "");
+      return `=== ${c.name} — ${c.command ?? c.name} (exit ${exit}) ===\n${body}`;
+    });
+    mkdirSync(join(dir, ".loom", "work"), { recursive: true });
+    writeFileSync(path, `${sections.join("\n\n")}\n`, "utf8");
+  } catch {
+    /* best-effort — the bundle's finding still carries the bounded head */
+  }
+}
+
+// The real child-process runner. Captures combined stdout+stderr as a HEAD (the
+// first 32 KB) AND a tail-capped tail, returns the exit code for ANY exit, and
+// kills the child on a per-command timeout via the injected timer seam (SIGTERM
+// then SIGKILL after a grace).
 function defaultRunCommand(opts: ChecksExecutorOptions): CheckCommandRunner {
   const setT = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
   const clearT = opts.clearTimer ?? ((h) => clearTimeout(h));
@@ -258,11 +344,17 @@ function defaultRunCommand(opts: ChecksExecutorOptions): CheckCommandRunner {
         return;
       }
 
+      let headBuf = "";
       let buf = "";
       const append = (chunk: Buffer): void => {
-        buf += chunk.toString("utf8");
-        // Keep the buffer bounded as it grows — retain a generous head room over
-        // the final cap so the tail is intact without holding an unbounded log.
+        const s = chunk.toString("utf8");
+        // Retain the FIRST bytes (stop once the head cap is reached, overshooting
+        // by at most one chunk — headCap clamps it) so the first errors survive
+        // even when the rolling tail has scrolled past them.
+        if (headBuf.length < OUTPUT_HEAD_BYTES) headBuf += s;
+        buf += s;
+        // Keep the tail buffer bounded as it grows — retain a generous head room
+        // over the final cap so the tail is intact without holding an unbounded log.
         if (buf.length > OUTPUT_TAIL_BYTES * 2) buf = buf.slice(buf.length - OUTPUT_TAIL_BYTES * 2);
       };
       child.stdout?.on("data", append);
@@ -287,12 +379,20 @@ function defaultRunCommand(opts: ChecksExecutorOptions): CheckCommandRunner {
       child.on("error", (err: NodeJS.ErrnoException) => {
         cleanup();
         const note = err.code === "ENOENT" ? `command not found: ${spec.bin}` : err.message;
-        resolve({ exit_code: null, output_tail: tailCap(`${buf}\n[${note}]`), timed_out: timedOut });
+        const combined = buf.length > 0 ? `${buf}\n[${note}]` : `[${note}]`;
+        // The note rides in the head too (an ENOENT leaves no other output, so
+        // the finding — built from the head — would otherwise be empty).
+        resolve({
+          exit_code: null,
+          output_head: headBuf.length > 0 ? `${headBuf}\n[${note}]` : `[${note}]`,
+          output_tail: tailCap(combined),
+          timed_out: timedOut,
+        });
       });
 
       child.on("close", (code) => {
         cleanup();
-        resolve({ exit_code: code, output_tail: tailCap(buf), timed_out: timedOut });
+        resolve({ exit_code: code, output_head: headBuf, output_tail: tailCap(buf), timed_out: timedOut });
       });
     });
 }

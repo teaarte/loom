@@ -77,7 +77,7 @@ export type {
 // Deterministic checks executor — runs the project's typecheck / lint / test
 // commands in the task worktree and reports a structured envelope, never a model
 // call. Routed via the dispatch shell's `resolveDirectExecutor` seam.
-export { createChecksExecutor, tailCap } from "./checks-executor.js";
+export { createChecksExecutor, headCap, tailCap } from "./checks-executor.js";
 export type {
   CheckName,
   CheckRun,

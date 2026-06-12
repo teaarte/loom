@@ -257,6 +257,12 @@ const CHECKS_AGENT = "checks-runner";
 // substrate stores verbatim, not a closed vocabulary.
 const CHECK_FAILED_CATEGORY = "failed-check";
 
+// Where the checks executor leaves the FULL compiler/test output, inside the
+// worktree the implementer re-enters on a walk-back. The blocking finding is
+// bounded to the field caps and points HERE for the rest; the file is the
+// full-fidelity channel. (Worktree-relative — POSIX form for the prompt text.)
+const CHECK_FAILURES_FILE = ".loom/work/check-failures.txt";
+
 // The executor's three check names mapped to the bundle_state field the
 // safety-floor invariants read (`lint`→`lint_result`, `test`→`test_run`).
 const CHECK_STATE_FIELD: Readonly<Record<string, string>> = {
@@ -269,6 +275,7 @@ interface CheckResultRow {
   name: string;
   status: string;
   exit_code: number | null;
+  output_head: string | null;
   output_tail: string | null;
   command: string | null;
 }
@@ -289,6 +296,7 @@ function parseCheckRows(raw: unknown): CheckResultRow[] {
       name,
       status: typeof o["status"] === "string" ? o["status"] : "skipped",
       exit_code: typeof o["exit_code"] === "number" ? o["exit_code"] : null,
+      output_head: typeof o["output_head"] === "string" ? o["output_head"] : null,
       output_tail: typeof o["output_tail"] === "string" ? o["output_tail"] : null,
       command: typeof o["command"] === "string" ? o["command"] : null,
     });
@@ -315,11 +323,11 @@ function clampField(s: string, max: number): string {
 
 // Apply the deterministic checks executor's envelope. Writes each check's status
 // into the bundle_state field the floor reads, synthesizes one blocking finding
-// per FAILED check (command + output head, within the finding field caps; the
-// full tail also rides in bundle_state for forensics), records `checks_ok` for
-// the reviewer self-gate, and compacts the bulky envelope out of `decisions` so
-// the output never bloats a downstream prompt. A skipped check writes a skipped
-// status and no finding — a check never owed is not a failure.
+// per FAILED check (command + the output HEAD within the finding field caps,
+// pointing at the worktree file the executor wrote for the full output), records
+// `checks_ok` for the reviewer self-gate, and compacts the bulky envelope out of
+// `decisions` so the output never bloats a downstream prompt. A skipped check
+// writes a skipped status and no finding — a check never owed is not a failure.
 async function applyChecks(state: BundleStateView, ctx: StageContext): Promise<void> {
   const rows = parseCheckRows(state.decisions["checks"]);
   const byName = new Map(rows.map((r) => [r.name, r]));
@@ -337,8 +345,13 @@ async function applyChecks(state: BundleStateView, ctx: StageContext): Promise<v
     if (status === "fail") {
       failed.push(name);
       const cmd = row?.command ?? name;
-      const out = row?.output_tail ?? "";
+      // The finding is built from the output HEAD (a compiler prints its first
+      // error first), within the existing field caps; the FULL output is the
+      // file the checks executor left in the worktree the implementer re-enters.
+      // Fall back to the tail if a degraded delivery carried no head.
+      const head = row?.output_head ?? row?.output_tail ?? "";
       const exit = row?.exit_code ?? "non-zero";
+      const firstLine = head.split("\n", 1)[0] ?? "";
       ctx.tx.record_finding?.({
         schema_version: "1.0",
         id: checkFindingId(ctx.now, name),
@@ -353,11 +366,12 @@ async function applyChecks(state: BundleStateView, ctx: StageContext): Promise<v
         proposed_new_category: null,
         pattern_id: null,
         summary: clampField(`${name} check failed: \`${cmd}\` exited ${exit}`, 200),
-        evidence_excerpt: out.length > 0 ? clampField(out, 400) : null,
+        evidence_excerpt: head.length > 0 ? clampField(head, 400) : null,
+        // The file pointer leads (so the cap never truncates it away); the head's
+        // first line follows as an at-a-glance hint of what broke.
         suggested_fix: clampField(
-          out.length > 0
-            ? `Resolve the reported errors, then re-run. Output: ${out}`
-            : "Resolve the failing check, then re-run.",
+          `Fix the reported errors and re-run. Full output: ${CHECK_FAILURES_FILE}` +
+            (firstLine.length > 0 ? ` — ${firstLine}` : ""),
           300,
         ),
         status: "open",

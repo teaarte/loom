@@ -55,10 +55,10 @@ async function runApplyChecks(checks: unknown, taskId = "t-2026-06-11-x"): Promi
 }
 
 describe("@loomfsm/bundle-code — apply-checks reads the executor envelope", () => {
-  it("a failed check → fail status, a blocking finding carrying the output, checks_ok=false", async () => {
-    const out = "src/foo.ts(12,5): error TS2345: Argument of type 'string' is not assignable.";
+  it("a failed check → fail status, a blocking finding carrying the head + a file pointer, checks_ok=false", async () => {
+    const head = "src/foo.ts(12,5): error TS2345: Argument of type 'string' is not assignable.";
     const cap = await runApplyChecks([
-      { name: "typecheck", status: "fail", exit_code: 2, output_tail: out, command: "pnpm run typecheck" },
+      { name: "typecheck", status: "fail", exit_code: 2, output_head: head, output_tail: "…tail summary…", command: "pnpm run typecheck" },
       { name: "lint", status: "ok", exit_code: 0 },
       { name: "test", status: "skipped" },
     ]);
@@ -69,9 +69,7 @@ describe("@loomfsm/bundle-code — apply-checks reads the executor envelope", ()
     assert.equal((cap.bundle_state["lint_result"] as { status: string }).status, "ok");
     assert.equal((cap.bundle_state["test_run"] as { status: string }).status, "skipped");
 
-    // Exactly one blocking finding, attributed to the checks runner, carrying
-    // the command + the compiler output (so the open-blocker hand-off delivers
-    // it to the implementer on the walk-back).
+    // Exactly one blocking finding, attributed to the checks runner.
     assert.equal(cap.findings.length, 1);
     const f = cap.findings[0]!;
     assert.equal(f.severity, "blocking");
@@ -80,7 +78,11 @@ describe("@loomfsm/bundle-code — apply-checks reads the executor envelope", ()
     assert.match(f.id, FINDING_ID_PATTERN);
     assert.match(f.summary, /typecheck check failed/);
     assert.match(f.summary, /exited 2/);
-    assert.ok((f.suggested_fix ?? "").includes("error TS2345"), "output rides in suggested_fix");
+    // Evidence carries the output HEAD (a compiler's first error first).
+    assert.ok((f.evidence_excerpt ?? "").includes("error TS2345"), "the head rides in evidence");
+    // suggested_fix points at the full-output file and hints with the head's first line.
+    assert.ok((f.suggested_fix ?? "").includes(".loom/work/check-failures.txt"), "the fix points at the full-output file");
+    assert.ok((f.suggested_fix ?? "").includes("error TS2345"), "the fix hints with the head's first line");
 
     // The reviewer self-gate is off, and the bulky envelope is compacted.
     assert.equal(cap.decisions["checks_ok"], false);
@@ -88,15 +90,27 @@ describe("@loomfsm/bundle-code — apply-checks reads the executor envelope", ()
     assert.deepEqual(cap.audits, [{ type: "checks-recorded", ok: false, failed: ["typecheck"] }]);
   });
 
-  it("clamps a huge output into the finding fields (schema caps respected)", async () => {
+  it("falls back to the tail when a degraded delivery carried no head", async () => {
+    const cap = await runApplyChecks([
+      { name: "test", status: "fail", exit_code: 1, output_tail: "the only thing we have is the tail", command: "node --test" },
+    ]);
+    const f = cap.findings[0]!;
+    assert.ok((f.evidence_excerpt ?? "").includes("the only thing we have is the tail"));
+    assert.ok((f.suggested_fix ?? "").includes(".loom/work/check-failures.txt"));
+  });
+
+  it("clamps a huge output into the finding fields, never truncating the file pointer away", async () => {
     const out = "E".repeat(50_000);
     const cap = await runApplyChecks([
-      { name: "test", status: "fail", exit_code: 1, output_tail: out, command: "node --test" },
+      { name: "test", status: "fail", exit_code: 1, output_head: out, output_tail: out, command: "node --test" },
     ]);
     const f = cap.findings[0]!;
     assert.ok((f.summary ?? "").length <= 200);
     assert.ok((f.suggested_fix ?? "").length <= 300);
     assert.ok((f.evidence_excerpt ?? "").length <= 400);
+    // The pointer leads the suggested_fix, so even a giant first line cannot
+    // clamp it away.
+    assert.ok((f.suggested_fix ?? "").includes(".loom/work/check-failures.txt"));
   });
 
   it("all green → checks_ok=true, no findings", async () => {

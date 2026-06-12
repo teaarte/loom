@@ -151,3 +151,135 @@ export function gitDiffText(projectDir: string, baseline: string | null): string
   }
   return parts.length > 0 ? `${parts.join("\n")}\n` : "";
 }
+
+// ----- Pathological-diff cap -------------------------------------------------
+//
+// The reviewer-facing `diff.txt` is read by up to ~8 reviewer spawns, so a
+// multi-megabyte diff is the same huge payload re-sent eight times. A NORMAL
+// diff is left untouched; only when the FULL diff crosses the threshold is it
+// capped — each file's hunk keeps its first changed lines (a reviewer reads the
+// start of a change), and a COMPLETE per-file stat list is appended so no file
+// is invisible. The reviewer runs in the same worktree, so a truncated hunk is
+// always recoverable by opening the file.
+
+// Above this byte size the diff is treated as pathological and capped. A diff
+// under it is written verbatim (the common case sees zero difference).
+const DIFF_CAP_BYTES = 256 * 1024;
+
+// Per-file budget of CHANGED (`+`/`-`) lines kept in a capped diff. Context
+// lines ride along for free until the budget is spent.
+const PER_FILE_CHANGED_LINE_CAP = 300;
+
+interface FileStat {
+  path: string;
+  added: number;
+  removed: number;
+  truncated: boolean;
+}
+
+// Split a unified diff into one section per file. A section starts at a
+// `diff --git ` line and runs until the next one; any preamble before the first
+// such line (none in git's own output, but tolerated) is kept as a leading
+// section so nothing is dropped.
+function splitDiffSections(diff: string): string[] {
+  const lines = diff.split("\n");
+  const sections: string[] = [];
+  let current: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("diff --git ") && current.length > 0) {
+      sections.push(current.join("\n"));
+      current = [line];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length > 0) sections.push(current.join("\n"));
+  return sections;
+}
+
+// A content line is an added/removed line — NOT the `+++`/`---` file headers,
+// which also start with `+`/`-`.
+function isAdded(line: string): boolean {
+  return line.startsWith("+") && !line.startsWith("+++");
+}
+function isRemoved(line: string): boolean {
+  return line.startsWith("-") && !line.startsWith("---");
+}
+
+// Extract the file path a section touches (the post-image side of
+// `diff --git a/<path> b/<path>`), falling back to the pre-image or a marker.
+function sectionPath(section: string): string {
+  const first = section.split("\n", 1)[0] ?? "";
+  const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(first);
+  if (m !== null) return m[2] ?? m[1] ?? "(unknown)";
+  return "(unknown)";
+}
+
+// Truncate one file's section to the first PER_FILE_CHANGED_LINE_CAP changed
+// lines, returning the kept text plus the file's FULL added/removed counts
+// (counted over the whole section, before truncation, so the stat list is
+// complete regardless of where the cut fell).
+function capSection(section: string): { text: string; stat: FileStat } {
+  const path = sectionPath(section);
+  const lines = section.split("\n");
+  let added = 0;
+  let removed = 0;
+  const kept: string[] = [];
+  let changedKept = 0;
+  let cut = false;
+  for (const line of lines) {
+    const add = isAdded(line);
+    const rem = isRemoved(line);
+    if (add) added += 1;
+    if (rem) removed += 1;
+    if (cut) continue; // keep counting the tail for the stat, emit nothing more
+    if (add || rem) {
+      if (changedKept >= PER_FILE_CHANGED_LINE_CAP) {
+        cut = true;
+        kept.push(
+          `… [diff truncated: first ${PER_FILE_CHANGED_LINE_CAP} changed lines shown; open ${path} in the worktree for the rest] …`,
+        );
+        continue;
+      }
+      changedKept += 1;
+    }
+    kept.push(line);
+  }
+  return { text: kept.join("\n"), stat: { path, added, removed, truncated: cut } };
+}
+
+// Render the complete per-file change summary appended to a capped diff.
+function renderStatList(stats: readonly FileStat[], originalBytes: number): string {
+  const kb = Math.round(originalBytes / 1024);
+  const out = [
+    `=== diff truncated (full diff was ~${kb} KB) — complete per-file change summary below; open files in the worktree for full detail ===`,
+  ];
+  for (const s of stats) {
+    out.push(`  +${s.added} -${s.removed}\t${s.path}${s.truncated ? "  (hunk truncated above)" : ""}`);
+  }
+  return out.join("\n");
+}
+
+// Cap a pathological diff. A diff at or under DIFF_CAP_BYTES is returned
+// verbatim (the normal case). Over it: each file's hunk is truncated to its
+// first changed lines with an omission marker, and a complete per-file stat
+// list is appended. Pure and deterministic (no clock, git-order preserved) —
+// the same diff always caps to the same text.
+export function capDiffText(diff: string): string {
+  const originalBytes = Buffer.byteLength(diff, "utf8");
+  if (originalBytes <= DIFF_CAP_BYTES) return diff;
+  const sections = splitDiffSections(diff);
+  const stats: FileStat[] = [];
+  const capped: string[] = [];
+  for (const section of sections) {
+    if (!section.startsWith("diff --git ")) {
+      // A non-file preamble (not produced by git here) — keep it as-is.
+      capped.push(section);
+      continue;
+    }
+    const { text, stat } = capSection(section);
+    capped.push(text);
+    stats.push(stat);
+  }
+  return `${capped.join("\n")}\n${renderStatList(stats, originalBytes)}\n`;
+}

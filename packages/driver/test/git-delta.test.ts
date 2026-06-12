@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
-import { gitBaselineRef, gitDelta, gitDiffText } from "../src/git-delta.js";
+import { capDiffText, gitBaselineRef, gitDelta, gitDiffText } from "../src/git-delta.js";
 
 // Run git for test setup; throws on failure (a broken fixture must fail
 // loudly, not silently produce a misleading assertion).
@@ -202,5 +202,71 @@ describe("git-delta — honest delta of committed + uncommitted + untracked work
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ============================================================================
+// Pathological-diff cap — a normal diff is untouched; a multi-MB diff is
+// truncated per file with a COMPLETE per-file stat list so no change is hidden.
+// ============================================================================
+
+describe("git-delta — capDiffText", () => {
+  // Build one file's add-only section with `adds` `+` lines, padded so the
+  // fixture crosses the 256 KB pathological threshold.
+  function addOnlySection(path: string, adds: number): string {
+    const lines = [
+      `diff --git a/${path} b/${path}`,
+      "new file mode 100644",
+      "--- /dev/null",
+      `+++ b/${path}`,
+      `@@ -0,0 +1,${adds} @@`,
+    ];
+    for (let i = 0; i < adds; i += 1) lines.push(`+line ${i} ${"x".repeat(600)}`);
+    return lines.join("\n");
+  }
+
+  it("returns a normal (sub-threshold) diff verbatim", () => {
+    const small =
+      "diff --git a/foo.ts b/foo.ts\n--- a/foo.ts\n+++ b/foo.ts\n@@ -1 +1 @@\n-old\n+new\n";
+    assert.ok(Buffer.byteLength(small, "utf8") <= 256 * 1024);
+    assert.equal(capDiffText(small), small);
+  });
+
+  it("truncates each file's hunk to its first 300 changed lines + a complete stat list", () => {
+    // Two pathological files: 400 and 350 added lines.
+    const diff = `${addOnlySection("src/a.ts", 400)}\n${addOnlySection("src/b.ts", 350)}\n`;
+    assert.ok(Buffer.byteLength(diff, "utf8") > 256 * 1024, "fixture must be pathological");
+
+    const capped = capDiffText(diff);
+
+    // Each file kept EXACTLY its first 300 added content lines (300 + 300).
+    const keptAdds = (capped.match(/^\+line \d+ /gm) ?? []).length;
+    assert.equal(keptAdds, 600, "300 changed lines kept per file");
+
+    // One omission marker per truncated file, naming the file to open.
+    assert.equal((capped.match(/diff truncated:/g) ?? []).length, 2);
+    assert.ok(capped.includes("first 300 changed lines"));
+    assert.ok(capped.includes("open src/a.ts in the worktree"));
+
+    // The COMPLETE per-file stat list carries each file's FULL counts (400 / 350),
+    // not the truncated 300 — so no change is invisible.
+    assert.ok(capped.includes("complete per-file change summary"));
+    assert.ok(capped.includes("+400 -0\tsrc/a.ts"));
+    assert.ok(capped.includes("+350 -0\tsrc/b.ts"));
+  });
+
+  it("counts removals too and is byte-stable on repeat", () => {
+    const big = ["diff --git a/c.ts b/c.ts", "--- a/c.ts", "+++ b/c.ts", "@@ -1,800 +1,1 @@"];
+    for (let i = 0; i < 800; i += 1) big.push(`-gone ${i} ${"y".repeat(600)}`);
+    big.push("+kept");
+    const diff = `${big.join("\n")}\n`;
+    assert.ok(Buffer.byteLength(diff, "utf8") > 256 * 1024);
+
+    const a = capDiffText(diff);
+    const b = capDiffText(diff);
+    assert.equal(a, b, "deterministic");
+    // 800 removals + 1 addition reported in full; the hunk truncated at 300 changed.
+    assert.ok(a.includes("+1 -800\tc.ts"));
+    assert.equal((a.match(/^-gone \d+ /gm) ?? []).length, 300, "300 changed lines kept");
   });
 });

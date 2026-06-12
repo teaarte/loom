@@ -7,7 +7,7 @@
 
 export { createTransportAdapter, shape } from "./adapter.js";
 
-export { gitBaselineRef, gitDelta, gitDiffText } from "./git-delta.js";
+export { capDiffText, gitBaselineRef, gitDelta, gitDiffText } from "./git-delta.js";
 export type { GitDelta } from "./git-delta.js";
 export { persistDeltaBaseline, readDeltaBaseline } from "./delta-baseline.js";
 export { persistDriverStepIndex } from "./progress.js";

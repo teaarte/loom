@@ -27,7 +27,7 @@ import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import type { Executor, ExecutorResult, SpawnUsage } from "./drive.js";
 import { emptyDiffError } from "./executor-errors.js";
-import { gitDelta, gitDiffText } from "./git-delta.js";
+import { capDiffText, gitDelta, gitDiffText } from "./git-delta.js";
 import { provisionWorktree, type WorktreeProvision } from "./worktree.js";
 
 // One static directory/file to copy into the sandbox before the first spawn.
@@ -72,9 +72,13 @@ function writeSandboxDiff(dir: string, baseline: string): void {
   try {
     const text = gitDiffText(dir, baseline);
     if (text === null) return;
+    // Cap a pathological (multi-MB) diff before it is read by up to ~8 reviewer
+    // spawns — each file keeps its first changed lines plus a complete per-file
+    // stat list, and the reviewer recovers the rest from the worktree. A normal
+    // diff is written verbatim.
     const workDir = join(dir, ".loom", "work");
     mkdirSync(workDir, { recursive: true });
-    writeFileSync(join(workDir, "diff.txt"), text, "utf8");
+    writeFileSync(join(workDir, "diff.txt"), capDiffText(text), "utf8");
   } catch {
     /* best-effort — the worktree itself is always readable */
   }

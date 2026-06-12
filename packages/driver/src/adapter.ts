@@ -85,7 +85,7 @@ export function shape(
       // agent count, not the sum of every prompt; the host then fetches
       // each prompt by reference, keyed by agent_run_id.
       const totalPromptChars = directive.spawns.reduce(
-        (sum, intent) => sum + intent.prompt.length,
+        (sum, intent) => sum + shuttlePromptText(intent).length,
         0,
       );
       const inline = totalPromptChars <= INLINE_FANOUT_PROMPT_CHAR_CAP;
@@ -134,6 +134,18 @@ export function shape(
   }
 }
 
+// The prompt text a SHUTTLE host executes. A shuttle host runs the spawn as a
+// plain subagent prompt — it has no separate system channel — so an intent's
+// `system_prompt` (the static template body a provider would cache as a system
+// prefix) is inlined back in front of the rendered context here, at the
+// transport edge. Provider-backed paths never pass through this adapter and
+// keep the split (that is where the caching benefit lives).
+export function shuttlePromptText(intent: ProviderShuttleIntent): string {
+  return intent.system_prompt !== undefined && intent.system_prompt.length > 0
+    ? `${intent.system_prompt}\n\n${intent.prompt}`
+    : intent.prompt;
+}
+
 function toSpawnRequest(
   intent: ProviderShuttleIntent,
   opts: { inlinePrompt: boolean },
@@ -143,7 +155,7 @@ function toSpawnRequest(
     description: `${intent.agent} (${intent.phase})`,
     model: intent.model,
   };
-  if (opts.inlinePrompt) req.prompt = intent.prompt;
+  if (opts.inlinePrompt) req.prompt = shuttlePromptText(intent);
   if (intent.extras !== undefined) req.extras = intent.extras;
   return req;
 }

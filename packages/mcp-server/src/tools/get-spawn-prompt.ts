@@ -75,7 +75,15 @@ export function createGetSpawnPromptTool(
           );
         }
         const state = await loadState(tx);
-        const prompt = buildPrompt(state, agent, registry);
+        // A shuttle host runs the spawn as one plain prompt (no separate
+        // system channel), so a template's static system prefix is inlined
+        // back in front of the rendered context — the same shaping the
+        // directive adapter applies on the inline path.
+        const rendered = buildPrompt(state, agent, registry);
+        const prompt =
+          agent.system_prompt !== undefined && agent.system_prompt.length > 0
+            ? `${agent.system_prompt}\n\n${rendered}`
+            : rendered;
         return { prompt, agent: pending.agent, model: pending.model };
       });
     } catch (err) {

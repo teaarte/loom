@@ -451,6 +451,25 @@ function checksAllow(state: BundleStateView): boolean {
   return state.decisions["checks_ok"] !== false;
 }
 
+// Land the responder's answer as the task's completion summary — the one
+// place an operator reads a finished task's outcome (dashboard result panel,
+// bot summary, archived trace). The responder's structured output merged
+// `answer` into decisions; this step moves it to the summary field and
+// compacts the bulky decision so it never bloats a later prompt or view.
+async function applyAnswer(state: BundleStateView, ctx: StageContext): Promise<void> {
+  const raw = state.decisions["answer"];
+  const answer = typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+  // `finish-summary` is the single owner of `completion_summary` (the loader
+  // enforces one writer per effect); this step lands the answer in its own
+  // slot, and the summary step prefers it over the file-accounting digest.
+  ctx.tx.set_bundle_state_field?.(
+    "answer",
+    answer ?? "The responder recorded no answer — re-submit the question or ask your agent host directly.",
+  );
+  ctx.tx.set_decision?.("answer", answer !== null);
+  ctx.tx.audit({ type: "answer-recorded", answered: answer !== null });
+}
+
 // Sacred-tests check: record which test files the run modified, so the
 // final-gate invariant can refuse a silent auto-approve of work that
 // rewrote its own tests. Deterministic over the file accounting.
@@ -480,6 +499,15 @@ async function deriveFinishSummary(
   state: BundleStateView,
   ctx: StageContext,
 ): Promise<void> {
+  // An answer-flow task's deliverable IS the recorded answer — surface it
+  // verbatim instead of the file-accounting digest (which would honestly but
+  // uselessly read "No file changes were recorded").
+  const answer = state.bundle_state?.["answer"];
+  if (typeof answer === "string" && answer.length > 0) {
+    ctx.tx.set_bundle_state_field?.("completion_summary", answer);
+    ctx.tx.audit({ type: "finish-summary", kind: "answer" });
+    return;
+  }
   const created = state.files_created;
   const modified = state.files_modified;
 
@@ -816,7 +844,11 @@ export default defineBundle({
   complexity_flows: {
     decision_key: "complexity",
     after_stage: "classify-agent",
-    map: { trivial: "trivial", simple: "simple", medium: "medium", complex: "complex" },
+    // `question` routes an informational task (a question / diagnosis /
+    // explanation request) to the no-edit answer flow — a responder reads the
+    // repo and answers; nothing is implemented, so no editing agent ever runs
+    // and the empty-diff guard has nothing to fire on.
+    map: { trivial: "trivial", simple: "simple", medium: "medium", complex: "complex", question: "answer" },
   },
 
   // Honest baseline: every role gates on open blockers. A deployment may
@@ -1044,6 +1076,11 @@ export default defineBundle({
       default_model: "fast",
       applies_to: (s) => checksAllow(s) && decisionEquals(s, "ui_touched", true),
     },
+    // The answer-flow responder: reads the repo and answers the operator's
+    // question. Single-shot (it edits nothing — the empty-diff guard must not
+    // apply); `output_kind: classifier` so its structured `{ "answer": … }`
+    // lands in decisions for the `apply-answer` step to pick up.
+    { name: "responder", template_path: "agents/responder.md", output_kind: "classifier", default_model: "balanced" },
     { name: "research", template_path: "agents/research.md", output_kind: "nonreview", default_model: "premium" },
     { name: "migration", template_path: "agents/migration.md", output_kind: "nonreview", default_model: "premium" },
     { name: "dependency-auditor", template_path: "agents/dependency-auditor.md", output_kind: "nonreview", default_model: "fast" },
@@ -1120,6 +1157,19 @@ export default defineBundle({
       message: gatePlanMsg,
       valid_answers: planGateAnswers,
       on_resume: gatePlanResume,
+    },
+    // Answer flow: one responder spawn, then land its answer as the summary.
+    respond: { kind: "spawn", name: "respond", phase: "implementation", agent: "responder" },
+    "apply-answer": {
+      kind: "step",
+      name: "apply-answer",
+      phase: "validation",
+      position: "positional",
+      effects: [
+        { kind: "bundle_state.set", path: "answer" },
+        { kind: "decisions.set", key: "answer" },
+      ],
+      run: applyAnswer,
     },
     "test-first": { kind: "spawn", name: "test-first", phase: "test_first", agent: "test" },
     "git-stash": { kind: "step", name: "git-stash", phase: "implementation", position: "positional", effects: [] },
@@ -1309,6 +1359,16 @@ export default defineBundle({
     trivial: [
       "initialize", "classify", "classify-agent", "stack-to-bundle-state",
       "implement", "git-diff", "run-checks", "apply-checks", "finalize",
+    ],
+    // Informational path: the task asks a QUESTION about the project ("how do
+    // I run the backend?", "why does X happen?") — nothing should be edited.
+    // One responder spawn reads the repo and answers; `apply-answer` lands the
+    // answer as the task's completion summary. No checks (nothing changed),
+    // no reviewers, no gates — the answer IS the deliverable, and the
+    // operator reads it where every finished task's summary lives.
+    answer: [
+      "initialize", "classify", "classify-agent", "stack-to-bundle-state",
+      "respond", "apply-answer", "finish-summary", "finalize",
     ],
     // Lean path for routine work: a fast-tier scout (enrich-light), one planner,
     // one implementer, ONE reviewer (review-light), acceptance, the final gate,

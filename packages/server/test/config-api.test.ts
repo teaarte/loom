@@ -7,7 +7,7 @@
 // resolves against a FABRICATED non-code roster with zero hardcoded names.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -33,6 +33,9 @@ function resolveRegistry(dir: string): Registry {
 interface ServerOpts {
   loomHome?: string;
   claudeAvailable?: () => boolean;
+  // Sandbox the add-project allowlist enrollment at a tmpfile so the suite never
+  // touches the real `~/.loom/projects.allow`.
+  allowlistPath?: string;
 }
 function startServer(opts: ServerOpts): Promise<{ base: string; server: Server }> {
   const registry = new SupervisorRegistry({
@@ -45,6 +48,7 @@ function startServer(opts: ServerOpts): Promise<{ base: string; server: Server }
     resolveRegistry,
     token: TOKEN,
     ...(opts.loomHome !== undefined ? { loomHome: opts.loomHome } : {}),
+    ...(opts.allowlistPath !== undefined ? { allowlistPath: opts.allowlistPath } : {}),
     ...(opts.claudeAvailable !== undefined ? { claudeAvailable: opts.claudeAvailable } : {}),
     invalidateRegistry: (dir) => invalidated.push(dir === undefined ? "*" : dir),
   });
@@ -80,6 +84,7 @@ async function req(base: string, method: string, path: string, opts: { token?: s
 }
 
 let loomHome: string;
+let allowFile: string;
 let base: string;
 let server: Server;
 let noConfigBase: string;
@@ -89,7 +94,8 @@ const projectDirs: string[] = [];
 
 before(async () => {
   loomHome = mkdtempSync(join(tmpdir(), "loom-config-api-"));
-  ({ base, server } = await startServer({ loomHome, claudeAvailable: () => true }));
+  allowFile = join(loomHome, "projects.allow");
+  ({ base, server } = await startServer({ loomHome, allowlistPath: allowFile, claudeAvailable: () => true }));
   ({ base: noConfigBase, server: noConfigServer } = await startServer({}));
 });
 
@@ -247,7 +253,15 @@ describe("config api — genericity: fabricated non-code roster, zero hardcode",
     ], { fast: "haiku-x", premium: "opus-x" }));
     const add = await req(base, "POST", "/workspace/projects", { token: TOKEN, body: { dir, label: "research" } });
     assert.equal(add.status, 201);
+    assert.equal(add.json.enrolled, true, "adding a project authorizes it");
     id = add.json.id;
+  });
+
+  it("POST /workspace/projects enrolls the dir into the allowlist (no manual edit)", () => {
+    // The add-project gesture doubles as authorization — the canonical dir is now
+    // in the same allowlist the drive routes gate on, so the first run won't 403.
+    const body = readFileSync(allowFile, "utf8");
+    assert.ok(body.includes(realpathSync(dir)), "the added project's canonical dir is allowlisted");
   });
 
   it("GET /workspace lists the catalog entry with a domain-blind status", async () => {

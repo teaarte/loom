@@ -132,9 +132,10 @@ export interface ControlServerDeps extends ConfigDeps {
   // authorization), so a tokened deployment can drive any directory.
   token?: string;
   // Override the project-dir allowlist file (`~/.loom/projects.allow`) the
-  // un-tokened drive routes (POST /submit, /projects) gate on. Production omits
-  // it (the kernel default); a test points it at a tmpfile. The gate only runs
-  // when NO token is configured — see `token` above.
+  // un-tokened drive routes (POST /submit, /projects) gate on, and that the
+  // dashboard add-project gesture (POST /workspace/projects) enrolls into.
+  // Production omits it (the kernel default); a test points it at a tmpfile. The
+  // gate only runs when NO token is configured — see `token` above.
   allowlistPath?: string;
   // Injectable wall clock for read-model ageing (tests pin it). Default Date.now.
   now?: () => number;
@@ -264,7 +265,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ControlSe
     }
     if (parts[0] === "workspace" && parts[1] === "projects" && parts.length === 2 && method === "POST") {
       const body = await readJsonBody(req);
-      addWorkspaceProject(res, body, deps);
+      await addWorkspaceProject(res, body, deps);
       return;
     }
     if (parts[0] === "workspace" && parts[1] === "projects" && parts.length === 3 && method === "DELETE") {

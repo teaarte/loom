@@ -46,7 +46,7 @@ import type { CliEnv } from "../lib/env.js";
 
 // The complexity levels the operator may pin via `--complexity` (skips the
 // classifier so the flow + cost are predictable). Matches the bundle's flow set.
-const COMPLEXITY_LEVELS = ["trivial", "simple", "medium", "complex"] as const;
+const COMPLEXITY_LEVELS = ["trivial", "simple", "medium", "complex", "question"] as const;
 type ComplexityLevel = (typeof COMPLEXITY_LEVELS)[number];
 
 // Seams for tests: a suite injects a ready registry / stub executor / fake

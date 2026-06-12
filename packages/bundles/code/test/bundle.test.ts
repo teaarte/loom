@@ -92,19 +92,20 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
       now,
     });
 
-    // 28 canonical agents: the prior 26 plus the fast-tier `code-analyzer-light`
-    // (the simple-flow scout) and the premium `implementer-escalated` (the
-    // escalation-round implementer). The prompt map keys by agent NAME, so the
-    // variants that reuse a base template still get their own entry.
-    assert.equal(registry.agents.size, 28);
+    // 29 canonical agents: the prior 26 plus the fast-tier `code-analyzer-light`
+    // (the simple-flow scout), the premium `implementer-escalated` (the
+    // escalation-round implementer), and the answer-flow `responder`. The
+    // prompt map keys by agent NAME, so the variants that reuse a base
+    // template still get their own entry.
+    assert.equal(registry.agents.size, 29);
     // Every agent's `.md` is read off disk into the prompt map at load. The
     // templates ship `system_prompt: body`, so the static instructions land in
     // the cacheable system prompt and the rendered body is empty — the user
     // message becomes just the spawn context.
-    assert.equal(registry.prompts?.size, 28);
+    assert.equal(registry.prompts?.size, 29);
     assert.ok((registry.prompts?.get("classifier")?.system_prompt?.length ?? 0) > 0);
     assert.equal(registry.prompts?.get("classifier")?.body, "");
-    assert.equal(registry.flows.size, 4);
+    assert.equal(registry.flows.size, 5);
     assert.deepEqual(
       registry.flows.get("medium"),
       [
@@ -146,12 +147,13 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
       simple: "simple",
       medium: "medium",
       complex: "complex",
+      question: "answer",
     });
 
     // Every mapped flow shares the [initialize, classify, classify-agent]
     // prefix (the invariant the loader enforced to admit this bundle).
     const sharedPrefix = ["initialize", "classify", "classify-agent"];
-    for (const name of ["trivial", "simple", "medium", "complex"]) {
+    for (const name of ["trivial", "simple", "medium", "complex", "answer"]) {
       assert.deepEqual(
         registry.flows.get(name)?.slice(0, 3),
         sharedPrefix,
@@ -288,8 +290,8 @@ describe("@loomfsm/bundle-code — agent templates", () => {
     }
   });
 
-  it("declares exactly the 28 canonical agents", () => {
-    assert.equal(codeBundle.agents.length, 28);
+  it("declares exactly the 29 canonical agents", () => {
+    assert.equal(codeBundle.agents.length, 29);
     const names = codeBundle.agents.map((a) => a.name).sort();
     // The three CC-harness trigger agents are NOT bundle agents.
     for (const excluded of ["fe-test-all-agent", "runtime-debug-agent", "test-all-agent"]) {

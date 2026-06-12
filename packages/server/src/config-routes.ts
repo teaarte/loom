@@ -40,7 +40,7 @@ import {
   type BundleRoster,
   type LoomConfig,
 } from "@loomfsm/config";
-import type { Registry } from "@loomfsm/kernel";
+import { enrollProjectDir, type Registry } from "@loomfsm/kernel";
 import type { ServerResponse } from "node:http";
 import { resolve as resolvePath } from "node:path";
 
@@ -451,7 +451,7 @@ export async function getWorkspace(res: ServerResponse, deps: ControlServerDeps)
   sendJson(res, 200, { projects });
 }
 
-export function addWorkspaceProject(res: ServerResponse, body: Record<string, unknown>, deps: ControlServerDeps): void {
+export async function addWorkspaceProject(res: ServerResponse, body: Record<string, unknown>, deps: ControlServerDeps): Promise<void> {
   const loomHome = requireConfig(deps);
   const dir = resolvePath(requireStringBody(body, "dir"));
   const id = projectId(dir);
@@ -467,7 +467,22 @@ export function addWorkspaceProject(res: ServerResponse, body: Record<string, un
     ...(label !== undefined ? { label } : {}),
     ...(bundle !== undefined ? { bundle } : {}),
   });
-  sendJson(res, 201, { id, dir, ...(label !== undefined ? { label } : {}), ...(bundle !== undefined ? { bundle } : {}) });
+  // Adding a project is the operator's explicit "I want to work on this dir"
+  // gesture, reachable only behind the loopback + same-origin guards (or a token)
+  // — so it doubles as authorization: enroll the dir in the allowlist the drive
+  // routes gate on, sparing the user a manual edit before the first run. This is
+  // NOT the gate or an agent path (those stay default-deny); a tool call can still
+  // never self-enroll. Best-effort: a dir that does not yet resolve, or an
+  // unwritable allowlist, must not fail the catalog add — the drive routes still
+  // gate, so the worst case is the prior behaviour (a clear 403 at first run).
+  let enrolled = false;
+  try {
+    await enrollProjectDir(dir, deps.allowlistPath !== undefined ? { allowlistPath: deps.allowlistPath } : undefined);
+    enrolled = true;
+  } catch {
+    /* enrollment is advisory here — see above */
+  }
+  sendJson(res, 201, { id, dir, enrolled, ...(label !== undefined ? { label } : {}), ...(bundle !== undefined ? { bundle } : {}) });
 }
 
 export function removeWorkspaceProject(res: ServerResponse, id: string, deps: ControlServerDeps): void {

@@ -172,6 +172,9 @@ describe("http security — un-tokened loopback server", () => {
       port: 0,
       // NO token → the open-loopback posture: Host/Origin guards + allowlist gate.
       allowlistPath: allowFile,
+      // The catalog home enables /workspace/projects, whose add-project gesture
+      // enrolls into the same allowFile — exercised by the enrollment test below.
+      loomHome: home,
       resolveRegistry: (dir) => registries.get(dir) ?? spawnRegistry(),
       buildExecutor: () => recordingExecutor([]),
       dashboardDir: makeDashboardFixture(),
@@ -257,6 +260,38 @@ describe("http security — un-tokened loopback server", () => {
     });
     assert.equal(res.status, 403);
     assert.equal(res.json.error.code, "PROJECT_DIR_NOT_ALLOWED");
+  });
+
+  it("add-project enrolls the dir into the allowlist, lifting the gate for a later drive", async () => {
+    const fresh = await freshProject("loom-sec-enroll-");
+    dirs.push(fresh);
+    registries.set(fresh, spawnRegistry());
+    registries.set(realpathSync(fresh), spawnRegistry());
+
+    // Baseline: the dir is not allowlisted, so a drive is refused — the dead end
+    // the dashboard user hit before this change.
+    const denied = await raw(port, "POST", "/projects", {
+      headers: { host: `127.0.0.1:${port}` },
+      body: { dir: fresh },
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.json.error.code, "PROJECT_DIR_NOT_ALLOWED");
+
+    // The explicit add-project gesture authorizes it (catalog + allowlist).
+    const add = await raw(port, "POST", "/workspace/projects", {
+      headers: { host: `127.0.0.1:${port}` },
+      body: { dir: fresh },
+    });
+    assert.equal(add.status, 201, JSON.stringify(add.json));
+    assert.equal(add.json.enrolled, true);
+
+    // The same drive now passes the gate — no manual `projects.allow` edit.
+    const allowed = await raw(port, "POST", "/projects", {
+      headers: { host: `127.0.0.1:${port}` },
+      body: { dir: fresh },
+    });
+    assert.equal(allowed.status, 201, JSON.stringify(allowed.json));
+    assert.ok(allowed.json.id);
   });
 });
 

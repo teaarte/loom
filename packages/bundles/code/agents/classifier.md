@@ -26,7 +26,7 @@ A single fenced JSON code block. No prose outside. Schema:
   "agent": "classifier",
   "task_id": "<canonical task_id from spawn context's 'Canonical identifiers' section>",
   "task_short": "<short kebab-case slug, ≤60 chars, summarising the task>",
-  "complexity": "<trivial | simple | medium | complex>",
+  "complexity": "<trivial | simple | medium | complex | question>",
   "refs_to_load": ["<file>.md", "..."],
   "security_needed": true,
   "antipattern_rules_applicable": ["<rule-id>", "..."],
@@ -51,6 +51,7 @@ A single fenced JSON code block. No prose outside. Schema:
   - `simple` — a localized, low-risk change with a little logic: a single module/file, a small bug fix, a small config change. No new architecture, no contract change, no security surface.
   - `medium` — a normal feature/fix spanning a few files, some new logic, but no architectural redesign or high-stakes surface.
   - `complex` — cross-cutting or high-stakes: architecture/redesign, a migration, a security/auth/crypto surface, a public-contract change, work touching many layers/modules, OR scaffolding/bootstrapping a NEW project or service from little/no existing code.
+  - `question` — the task asks for INFORMATION, not a change: "how do I run/configure X?", "why does Y happen?", "where is Z handled?", "explain how … works". Nothing should be edited — the pipeline routes to a read-only responder that investigates the repo and answers. Choose this whenever the requested deliverable is an ANSWER rather than a diff; if the task asks to BOTH explain and change something, classify by the change.
   - **Tie-breaker — cost-aware, not fear-driven.** The heavier flow costs more tokens, latency, and failure surface, so escalate ONLY on genuine RISK — a `complex` marker above (contract / security / migration / cross-cutting). When the scope is clearly localized, prefer the LOWER level even if the brief is long or noisy. (`trivial` stays the exception: choose it only when certain.)
   - GREENFIELD NOTE: when the project is empty / near-empty (a setup, scaffold, or "deploy/initialize a new …" task), classify by the scope of what is being CREATED, not by the absent codebase — such tasks are usually `medium` or `complex`, never `trivial`.
 - **`refs_to_load`** — up to **5** ref filenames (the basename only, e.g. `api-design.md`) that materially help the agents listed in Active agents. Skip refs whose `when_to_load` clearly doesn't match the task. Empty array if nothing fits. Downstream agents read each picked ref from `.loom/work/refs/<name>`.

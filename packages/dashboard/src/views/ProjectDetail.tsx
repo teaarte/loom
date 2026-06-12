@@ -238,6 +238,7 @@ const COMPLEXITY_OPTIONS: { value: string; label: string }[] = [
   { value: "simple", label: "simple" },
   { value: "medium", label: "medium" },
   { value: "complex", label: "complex" },
+  { value: "question", label: "question (answer, no edits)" },
 ];
 
 // Plain-language hint for the Docker-off state: the server reports the raw

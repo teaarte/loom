@@ -71,7 +71,7 @@ export function gateKeyboard(gateEventId: string): InlineKeyboard {
 // The generic create-arg complexity row. These values are FSM / create-args
 // vocabulary, NOT domain names — `auto` means "let the classifier decide" (the
 // bot omits `complexity` so the bundle picks).
-export const COMPLEXITY_VALUES = ["trivial", "simple", "medium", "complex"] as const;
+export const COMPLEXITY_VALUES = ["trivial", "simple", "medium", "complex", "question"] as const;
 
 export function complexityKeyboard(opts: { dockerAvailable: boolean; dockerOn: boolean }): InlineKeyboard {
   const rows: InlineKeyboard = [

@@ -51,6 +51,9 @@ before(async () => {
     buildExecutor: () => recordingExecutor([]),
     dashboardDir: makeDashboardFixture(),
     loomHome,
+    // Sandbox the add-project allowlist enrollment so the suite never writes to
+    // the real `~/.loom/projects.allow`.
+    allowlistPath: join(loomHome, "projects.allow"),
     signal: controller.signal,
     ...FAST,
   });

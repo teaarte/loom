@@ -40,13 +40,13 @@ import type {
 // them so they are edited once (as dropdowns) on the shared draft, not twice.
 const CONNECTION_KEYS = new Set(["backend", "harness", "credentials"]);
 
-export function SettingsView() {
+export function SettingsView({ initialTab }: { initialTab?: string } = {}) {
   return (
     <div>
       <Title order={2} mb="md">
         Settings
       </Title>
-      <Tabs defaultValue="config" keepMounted={false}>
+      <Tabs defaultValue={initialTab ?? "config"} keepMounted={false}>
         <Tabs.List>
           <Tabs.Tab value="config">Config</Tabs.Tab>
           <Tabs.Tab value="models">Models</Tabs.Tab>

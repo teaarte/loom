@@ -1,40 +1,55 @@
-// The Mantine theme — tuned to keep loom's terminal identity through the UI-kit
-// swap: a monospace base font (the prior console's `ui-monospace` stack) and a
-// primary mapped to the existing steel-blue accent, so migrated Mantine
-// components read as the same product as the not-yet-migrated CSS-module views.
-// Color scheme is `auto` (follows the OS), matching the prior `prefers-color-
-// scheme` behaviour. Mantine styles are imported under `@layer mantine` (see
-// `main.tsx`), so the legacy CSS-modules win during the incremental migration
-// without a specificity fight.
+// The Mantine theme — loom's product identity: a warm light/dark surface with
+// the brand's orange accent, a system sans for UI chrome, and the monospace
+// stack reserved for what is genuinely code-shaped (paths, logs, ids, model
+// refs). Color scheme is `auto` (follows the OS). Mantine styles are imported
+// under `@layer mantine` (see `main.tsx`), so the few remaining unlayered
+// overrides in `index.css` win without a specificity fight.
 
 import { createTheme, type MantineColorsTuple } from "@mantine/core";
 
-// The terminal monospace stack the dashboard has always used.
-const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';
+// Code-shaped text only — not the UI default.
+export const MONO =
+  'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';
 
-// A 10-shade tuple around the prior accent (`#3b6ea5` light / `#6ea8e6` dark).
-// Index 6 is the light primary shade (≈ the old accent); the lighter shades
-// carry the dark-scheme accent.
-const loomBlue: MantineColorsTuple = [
-  "#ecf3fb",
-  "#dae6f3",
-  "#b2cae6",
-  "#88acd9",
-  "#6592ce",
-  "#4f83c8",
-  "#3b6ea5",
-  "#356395",
-  "#2c5380",
-  "#22425f",
+const SANS =
+  'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+
+// A 10-shade ramp around the brand accent (#ea580c at index 6 — the light
+// primary). Dark mode uses the lighter index 4 so the accent stays readable
+// on dark surfaces.
+const loomOrange: MantineColorsTuple = [
+  "#fff4ec",
+  "#ffe8d9",
+  "#ffd0b0",
+  "#fdb284",
+  "#f9935a",
+  "#f47b3c",
+  "#ea580c",
+  "#d14e0a",
+  "#b54409",
+  "#8f3607",
 ];
 
 export const theme = createTheme({
-  primaryColor: "loomBlue",
-  // Lighter accent in dark mode (≈ the old `#6ea8e6`), the old accent in light.
+  primaryColor: "loomOrange",
   primaryShade: { light: 6, dark: 4 },
-  colors: { loomBlue },
-  fontFamily: MONO,
+  colors: { loomOrange },
+  fontFamily: SANS,
   fontFamilyMonospace: MONO,
-  headings: { fontFamily: MONO, fontWeight: "700" },
+  headings: { fontFamily: SANS, fontWeight: "700" },
   defaultRadius: "md",
+  components: {
+    Card: {
+      defaultProps: { withBorder: true, radius: "md", padding: "md" },
+    },
+    Paper: {
+      defaultProps: { withBorder: true, radius: "md" },
+    },
+    Badge: {
+      defaultProps: { radius: "sm" },
+    },
+    Code: {
+      styles: { root: { fontFamily: MONO } },
+    },
+  },
 });

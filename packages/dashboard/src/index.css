@@ -5,8 +5,8 @@
   --line: #0002;
   --hover: #0001;
   --muted: #9994;
-  --accent: #3b6ea5;
-  --accent-soft: #3b6ea51f;
+  --accent: #ea580c;
+  --accent-soft: #ea580c1f;
   --ok: #2a8a2a;
   --warn: #c07a00;
   --bad: #c02a2a;
@@ -19,8 +19,8 @@
     --line: #fff2;
     --hover: #fff1;
     --muted: #fff3;
-    --accent: #6ea8e6;
-    --accent-soft: #6ea8e626;
+    --accent: #f9935a;
+    --accent-soft: #f9935a26;
   }
 }
 
@@ -36,7 +36,7 @@ body,
 
 body {
   margin: 0;
-  font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: light-dark(#1a1a1a, #e6e6e6);
 }

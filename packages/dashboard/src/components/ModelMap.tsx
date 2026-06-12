@@ -13,13 +13,22 @@
 // `bundles[<bundle>].agents[<agent>]`. The masked config is round-tripped whole
 // — the server reconciles any masked secret back to its stored literal.
 
+import {
+  Button,
+  Code,
+  Group,
+  Select,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+} from "@mantine/core";
 import { useCallback, useEffect, useState } from "react";
 
 import { useModelList } from "../hooks/useModelList.js";
 import { api, errText } from "../lib/api.js";
 import { validateModelRef } from "../lib/validatePair.js";
 import type { AgentsResponse, LoomConfigShape, ProvidersResponse } from "../lib/types.js";
-import styles from "./ModelMap.module.css";
 
 export function ModelMap({ projectId }: { projectId: string }) {
   const [agents, setAgents] = useState<AgentsResponse | null>(null);
@@ -80,130 +89,163 @@ export function ModelMap({ projectId }: { projectId: string }) {
     }
   };
 
-  if (error !== null) return <div className={styles.error}>{error}</div>;
-  if (agents === null || providers === null) return <div className={styles.loading}>loading models…</div>;
+  if (error !== null)
+    return (
+      <Text size="sm" c="red">
+        {error}
+      </Text>
+    );
+  if (agents === null || providers === null)
+    return (
+      <Text size="sm" c="dimmed">
+        loading models…
+      </Text>
+    );
   // Hide backends with no credential / unsupported family (`available === false`);
   // keep the unprobed ones (`null` — local / external CLI, may still work).
   const backends = providers.providers.filter((p) => p.available !== false).map((p) => p.backend);
 
   return (
-    <div>
-      <div className={styles.bundle}>
-        bundle <strong>{agents.bundle}</strong> · backend <strong>{providers.backend_mode}</strong>
-      </div>
-      <table className={styles.table}>
-        <thead>
-          <tr>
-            <th>agent</th>
-            <th>current</th>
-            <th>set model (pick or type provider:model | tier)</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {agents.agents.map((a) => {
-            const draft = drafts[a.agent];
-            const editing = draft !== undefined;
-            const value = editing ? draft : (a.ref ?? "");
-            const hint =
-              value.trim().length > 0
-                ? validateModelRef(providers.backend_mode, providers.providers, value)
-                : { ok: true as const };
-            const selBackend = providerSel[a.agent] ?? "";
-            const modelList = selBackend.length > 0 ? modelsByBackend[selBackend] : undefined;
-            const search = (modelSearch[a.agent] ?? "").trim().toLowerCase();
-            const allModels = modelList?.models ?? [];
-            const shownModels = search.length > 0 ? allModels.filter((m) => m.toLowerCase().includes(search)) : allModels;
-            return (
-              <tr key={a.agent}>
-                <td className={styles.agent}>{a.agent}</td>
-                <td>
-                  {a.ref !== null ? (
-                    <>
-                      <code>{a.ref}</code>
-                      <span className={styles.source}> {a.model ?? "?"} · {a.source}</span>
-                    </>
-                  ) : (
-                    <span className={styles.source}>unset</span>
-                  )}
-                </td>
-                <td>
-                  <div className={styles.pickers}>
-                    <select
-                      className={styles.select}
-                      value={selBackend}
-                      onChange={(e) => {
-                        const b = e.target.value;
-                        setProviderSel((s) => ({ ...s, [a.agent]: b }));
-                        void loadModels(b);
-                      }}
-                    >
-                      <option value="">provider…</option>
-                      {backends.map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
-                      ))}
-                    </select>
-                    {modelList !== undefined && allModels.length > 8 && (
-                      <input
-                        className={styles.search}
-                        type="text"
-                        placeholder="filter models…"
-                        value={modelSearch[a.agent] ?? ""}
-                        onChange={(e) => setModelSearch((s) => ({ ...s, [a.agent]: e.target.value }))}
-                      />
+    <Stack gap="sm">
+      <Text size="sm" c="dimmed">
+        bundle{" "}
+        <Text span fw={600} c="var(--mantine-color-text)">
+          {agents.bundle}
+        </Text>{" "}
+        · backend{" "}
+        <Text span fw={600} c="var(--mantine-color-text)">
+          {providers.backend_mode}
+        </Text>
+      </Text>
+      <Table.ScrollContainer minWidth={760}>
+        <Table verticalSpacing="sm" highlightOnHover>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Agent</Table.Th>
+              <Table.Th>Current</Table.Th>
+              <Table.Th>Set model (pick, or type provider:model | tier)</Table.Th>
+              <Table.Th />
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {agents.agents.map((a) => {
+              const draft = drafts[a.agent];
+              const editing = draft !== undefined;
+              const value = editing ? draft : (a.ref ?? "");
+              const hint =
+                value.trim().length > 0
+                  ? validateModelRef(providers.backend_mode, providers.providers, value)
+                  : { ok: true as const };
+              const selBackend = providerSel[a.agent] ?? "";
+              const modelList = selBackend.length > 0 ? modelsByBackend[selBackend] : undefined;
+              const search = (modelSearch[a.agent] ?? "").trim().toLowerCase();
+              const allModels = modelList?.models ?? [];
+              const shownModels =
+                search.length > 0 ? allModels.filter((m) => m.toLowerCase().includes(search)) : allModels;
+              return (
+                <Table.Tr key={a.agent}>
+                  <Table.Td>
+                    <Text size="sm" fw={600}>
+                      {a.agent}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    {a.ref !== null ? (
+                      <Stack gap={2}>
+                        <Code>{a.ref}</Code>
+                        <Text size="xs" c="dimmed">
+                          {a.model ?? "?"} · {a.source}
+                        </Text>
+                      </Stack>
+                    ) : (
+                      <Text size="xs" c="dimmed">
+                        unset
+                      </Text>
                     )}
-                    <select
-                      className={styles.select}
-                      value=""
-                      disabled={modelList === undefined || allModels.length === 0}
-                      onChange={(e) => {
-                        if (e.target.value.length > 0) setDrafts((d) => ({ ...d, [a.agent]: e.target.value }));
-                      }}
+                  </Table.Td>
+                  <Table.Td>
+                    <Stack gap={6}>
+                      <Group gap={6} wrap="wrap">
+                        <Select
+                          size="xs"
+                          w={170}
+                          placeholder="provider…"
+                          data={backends}
+                          value={selBackend.length > 0 ? selBackend : null}
+                          onChange={(v) => {
+                            const b = v ?? "";
+                            setProviderSel((s) => ({ ...s, [a.agent]: b }));
+                            if (b.length > 0) void loadModels(b);
+                          }}
+                        />
+                        {modelList !== undefined && allModels.length > 8 && (
+                          <TextInput
+                            size="xs"
+                            w={150}
+                            placeholder="filter models…"
+                            value={modelSearch[a.agent] ?? ""}
+                            onChange={(e) =>
+                              setModelSearch((s) => ({ ...s, [a.agent]: e.currentTarget.value }))
+                            }
+                          />
+                        )}
+                        <Select
+                          size="xs"
+                          w={230}
+                          placeholder={
+                            modelList === undefined
+                              ? "model…"
+                              : allModels.length === 0
+                                ? "no list — type below"
+                                : shownModels.length === 0
+                                  ? "no match"
+                                  : `model… (${shownModels.length})`
+                          }
+                          data={shownModels}
+                          disabled={modelList === undefined || allModels.length === 0}
+                          value={null}
+                          onChange={(v) => {
+                            if (v !== null && v.length > 0)
+                              setDrafts((d) => ({ ...d, [a.agent]: v }));
+                          }}
+                        />
+                      </Group>
+                      {modelList?.reason !== undefined && (
+                        <Text size="xs" c="dimmed">
+                          {modelList.reason}
+                        </Text>
+                      )}
+                      <TextInput
+                        size="xs"
+                        ff="monospace"
+                        value={value}
+                        placeholder={a.ref ?? "(bundle default)"}
+                        onChange={(e) => setDrafts((d) => ({ ...d, [a.agent]: e.currentTarget.value }))}
+                      />
+                      {!hint.ok && (
+                        <Text size="xs" c="yellow.8">
+                          {hint.message}
+                        </Text>
+                      )}
+                    </Stack>
+                  </Table.Td>
+                  <Table.Td>
+                    <Button
+                      size="xs"
+                      variant="light"
+                      disabled={!editing || !hint.ok || saving === a.agent}
+                      loading={saving === a.agent}
+                      onClick={() => void save(a.agent, value)}
                     >
-                      <option value="">
-                        {modelList === undefined
-                          ? "model…"
-                          : allModels.length === 0
-                            ? "no list — type below"
-                            : shownModels.length === 0
-                              ? "no match"
-                              : `model… (${shownModels.length})`}
-                      </option>
-                      {shownModels.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  {modelList?.reason !== undefined && (
-                    <div className={styles.modelNote}>{modelList.reason}</div>
-                  )}
-                  <input
-                    className={styles.input}
-                    type="text"
-                    value={value}
-                    placeholder={a.ref ?? "(bundle default)"}
-                    onChange={(e) => setDrafts((d) => ({ ...d, [a.agent]: e.target.value }))}
-                  />
-                  {!hint.ok && <div className={styles.warn}>{hint.message}</div>}
-                </td>
-                <td>
-                  <button
-                    className={styles.saveBtn}
-                    disabled={!editing || !hint.ok || saving === a.agent}
-                    onClick={() => void save(a.agent, value)}
-                  >
-                    {saving === a.agent ? "…" : "save"}
-                  </button>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+                      Save
+                    </Button>
+                  </Table.Td>
+                </Table.Tr>
+              );
+            })}
+          </Table.Tbody>
+        </Table>
+      </Table.ScrollContainer>
+    </Stack>
   );
 }

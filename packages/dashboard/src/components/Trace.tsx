@@ -21,6 +21,7 @@ import {
   deriveAgentDurations,
   findingsForAgent,
   tokenSummary,
+  tokenTotals,
   totalTime,
   verdictsForAgent,
   type TimedAgent,
@@ -56,6 +57,7 @@ export function Trace({ projectId, archivedTaskId }: { projectId: string; archiv
 
   const timed = deriveAgentDurations(data.agents, data.summary?.started_at ?? null);
   const totalMs = totalTime(data);
+  const totals = tokenTotals(data.agents);
   const summaryNote = data.summary?.completion_summary ?? null;
   const selectedAgent = selected !== null ? (timed.find((a) => a.agent_run_id === selected) ?? null) : null;
 
@@ -69,6 +71,7 @@ export function Trace({ projectId, archivedTaskId }: { projectId: string; archiv
       {totalMs !== null && (
         <Text className={styles.total}>
           total {formatDuration(totalMs)} · {data.agents.length} run{data.agents.length === 1 ? "" : "s"}
+          {totals.length > 0 && <> · {totals}</>}
         </Text>
       )}
 

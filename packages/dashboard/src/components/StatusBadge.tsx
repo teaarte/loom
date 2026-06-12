@@ -1,30 +1,36 @@
-// The operator-facing status pill — a tone-coloured dot + the collapsed status
-// label, pulsing only while a task is actively in_progress. Shared by the
-// project grid and the detail header (the R3 de-dup of the duplicated DOT_CLASS
-// map + dot markup). Domain-blind: it reads only the generic read-model status
-// via `statusBadge`, never a bundle's gate meaning.
+// The operator-facing status pill — a tone-coloured Mantine badge with a dot
+// that pulses only while a task is actively in_progress. Shared by the project
+// grid, the attention strip, and the detail header. Domain-blind: it reads only
+// the generic read-model status via `statusBadge`, never a bundle's gate
+// meaning.
+
+import { Badge } from "@mantine/core";
 
 import { cx } from "../lib/cx.js";
 import { statusBadge, type StatusTone } from "../lib/status.js";
 import type { ProjectStatus } from "../lib/types.js";
 import styles from "./StatusBadge.module.css";
 
-const DOT_CLASS: Record<StatusTone, string | undefined> = {
-  idle: styles.idle,
-  ok: styles.ok,
-  warn: styles.warn,
-  bad: styles.bad,
+const TONE_COLOR: Record<StatusTone, string> = {
+  idle: "gray",
+  ok: "green",
+  warn: "yellow",
+  bad: "red",
 };
 
 export function StatusBadge({ status }: { status: ProjectStatus | null | undefined }) {
   const badge = statusBadge(status);
-  // Pulse only while genuinely running (a completed-accepted dot is also tone
+  // Pulse only while genuinely running (a completed-accepted badge is also tone
   // "ok" but must stay steady).
   const running = status?.has_task === true && status.status === "in_progress";
   return (
-    <span className={styles.badge}>
-      <span className={cx(styles.dot, DOT_CLASS[badge.tone], running && styles.pulse)} />
+    <Badge
+      variant="light"
+      color={TONE_COLOR[badge.tone]}
+      leftSection={<span className={cx(styles.dot, running && styles.pulse)} />}
+      styles={{ label: { textTransform: "none", fontWeight: 600 } }}
+    >
       {badge.label}
-    </span>
+    </Badge>
   );
 }

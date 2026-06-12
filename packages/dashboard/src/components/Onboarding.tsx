@@ -7,14 +7,27 @@
 //
 // The panel guides three steps over the SAME routes the views use: pick a
 // backend (`PUT /config`), optionally store a credential secret
-// (`PUT /secrets/:name`), and add a first project (`POST /workspace/projects`).
-// Backend names are infra DATA from `/providers` — nothing here is hardcoded.
+// (`PUT /secrets/:name`), and add a first project (`POST /workspace/projects`,
+// with the same folder browser the Add view uses). Backend names are infra DATA
+// from `/providers` — nothing here is hardcoded.
 
+import {
+  Button,
+  Card,
+  Collapse,
+  Group,
+  PasswordInput,
+  Select,
+  Stack,
+  Text,
+  TextInput,
+} from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import { useCallback, useEffect, useState } from "react";
 
-import { api } from "../lib/api.js";
+import { api, errText } from "../lib/api.js";
 import type { LoomConfigShape, ProvidersResponse, WorkspaceResponse } from "../lib/types.js";
-import styles from "./Onboarding.module.css";
+import { FolderBrowser } from "./FolderBrowser.js";
 
 const DISMISS_KEY = "loom_onboarded";
 
@@ -33,6 +46,17 @@ function setDismissed(): void {
   }
 }
 
+function Step({ n, label, children }: { n: number; label: string; children: React.ReactNode }) {
+  return (
+    <Stack gap={6}>
+      <Text size="sm" fw={600}>
+        {n} · {label}
+      </Text>
+      {children}
+    </Stack>
+  );
+}
+
 export function Onboarding({ onChanged }: { onChanged: () => void }) {
   const [hidden, setHidden] = useState(dismissed());
   const [needed, setNeeded] = useState<boolean | null>(null);
@@ -42,7 +66,7 @@ export function Onboarding({ onChanged }: { onChanged: () => void }) {
   const [secretName, setSecretName] = useState("");
   const [secretValue, setSecretValue] = useState("");
   const [dir, setDir] = useState("");
-  const [msg, setMsg] = useState<string | null>(null);
+  const [browse, setBrowse] = useState(false);
 
   const detect = useCallback(async () => {
     try {
@@ -72,16 +96,20 @@ export function Onboarding({ onChanged }: { onChanged: () => void }) {
     setHidden(true);
   };
 
+  const fail = (err: unknown): void => {
+    notifications.show({ message: errText(err), color: "red" });
+  };
+
   const saveBackend = async (): Promise<void> => {
     if (backend.length === 0) return;
     try {
       const cfg = await api<LoomConfigShape>("GET", "/config");
       await api("PUT", "/config", { ...cfg, backend });
-      setMsg(`backend set to ${backend}`);
+      notifications.show({ message: `Backend set to ${backend}`, color: "green" });
       onChanged();
       void detect();
     } catch (err) {
-      setMsg(String(err));
+      fail(err);
     }
   };
 
@@ -90,10 +118,10 @@ export function Onboarding({ onChanged }: { onChanged: () => void }) {
     try {
       await api("PUT", `/secrets/${encodeURIComponent(secretName.trim())}`, { value: secretValue });
       setSecretValue("");
-      setMsg(`stored secret ${secretName.trim()}`);
+      notifications.show({ message: `Stored secret ${secretName.trim()}`, color: "green" });
       void detect();
     } catch (err) {
-      setMsg(String(err));
+      fail(err);
     }
   };
 
@@ -101,83 +129,94 @@ export function Onboarding({ onChanged }: { onChanged: () => void }) {
     if (dir.trim().length === 0) return;
     try {
       await api("POST", "/workspace/projects", { dir: dir.trim() });
-      setMsg(`added ${dir.trim()}`);
+      notifications.show({ message: `Added ${dir.trim()}`, color: "green" });
       onChanged();
       void detect();
     } catch (err) {
-      setMsg(String(err));
+      fail(err);
     }
   };
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.head}>
-        <strong>Welcome to loom</strong>
-        <button className={styles.dismiss} onClick={dismiss}>
-          dismiss
-        </button>
-      </div>
-      <p className={styles.intro}>
-        A couple of one-time steps to get a task running. You can skip any of these and configure
-        them later in Settings.
-      </p>
+    <Card mb="lg" style={{ borderColor: "var(--mantine-primary-color-filled)" }}>
+      <Stack gap="md">
+        <Group justify="space-between" align="baseline">
+          <Text fw={700}>Welcome to loom</Text>
+          <Button variant="subtle" size="compact-xs" color="gray" onClick={dismiss}>
+            dismiss
+          </Button>
+        </Group>
+        <Text size="sm" c="dimmed">
+          A couple of one-time steps to get a task running. You can skip any of these and configure
+          them later in Settings.
+        </Text>
 
-      <div className={styles.step}>
-        <span className={styles.stepLabel}>1 · choose a backend</span>
-        <select className={styles.input} value={backend} onChange={(e) => setBackend(e.target.value)}>
-          <option value="">(pick a backend)</option>
-          {providers?.providers.map((p) => (
-            <option key={p.backend} value={p.backend}>
-              {p.backend}
-              {p.available === true ? " — available" : p.available === false ? " — needs setup" : ""}
-            </option>
-          ))}
-        </select>
-        <button className={styles.btn} disabled={backend.length === 0} onClick={() => void saveBackend()}>
-          set
-        </button>
-      </div>
+        <Step n={1} label="Choose a backend">
+          <Group gap="sm" align="flex-end" wrap="wrap">
+            <Select
+              size="xs"
+              w={300}
+              placeholder="pick a backend"
+              data={(providers?.providers ?? []).map((p) => ({
+                value: p.backend,
+                label: `${p.backend}${p.available === true ? " — available" : p.available === false ? " — needs setup" : ""}`,
+              }))}
+              value={backend.length > 0 ? backend : null}
+              onChange={(v) => setBackend(v ?? "")}
+            />
+            <Button size="xs" disabled={backend.length === 0} onClick={() => void saveBackend()}>
+              Set
+            </Button>
+          </Group>
+        </Step>
 
-      <div className={styles.step}>
-        <span className={styles.stepLabel}>2 · credential (if the backend needs an API key)</span>
-        <input
-          className={styles.input}
-          type="text"
-          placeholder="secret name"
-          value={secretName}
-          onChange={(e) => setSecretName(e.target.value)}
-        />
-        <input
-          className={styles.input}
-          type="password"
-          placeholder="value (write-only)"
-          value={secretValue}
-          onChange={(e) => setSecretValue(e.target.value)}
-        />
-        <button
-          className={styles.btn}
-          disabled={secretName.trim().length === 0 || secretValue.length === 0}
-          onClick={() => void saveSecret()}
-        >
-          store
-        </button>
-      </div>
+        <Step n={2} label="Credential (if the backend needs an API key)">
+          <Group gap="sm" align="flex-end" wrap="wrap">
+            <TextInput
+              size="xs"
+              w={220}
+              placeholder="secret name"
+              value={secretName}
+              onChange={(e) => setSecretName(e.currentTarget.value)}
+            />
+            <PasswordInput
+              size="xs"
+              w={260}
+              placeholder="value (write-only)"
+              value={secretValue}
+              onChange={(e) => setSecretValue(e.currentTarget.value)}
+            />
+            <Button
+              size="xs"
+              disabled={secretName.trim().length === 0 || secretValue.length === 0}
+              onClick={() => void saveSecret()}
+            >
+              Store
+            </Button>
+          </Group>
+        </Step>
 
-      <div className={styles.step}>
-        <span className={styles.stepLabel}>3 · add your first project</span>
-        <input
-          className={styles.input}
-          type="text"
-          placeholder="/abs/path/to/project"
-          value={dir}
-          onChange={(e) => setDir(e.target.value)}
-        />
-        <button className={styles.btn} disabled={dir.trim().length === 0} onClick={() => void addProject()}>
-          add
-        </button>
-      </div>
-
-      {msg !== null && <div className={styles.msg}>{msg}</div>}
-    </div>
+        <Step n={3} label="Add your first project">
+          <Group gap="sm" align="flex-end" wrap="wrap">
+            <TextInput
+              size="xs"
+              w={360}
+              placeholder="/abs/path/to/project"
+              value={dir}
+              onChange={(e) => setDir(e.currentTarget.value)}
+            />
+            <Button size="xs" variant="default" onClick={() => setBrowse((b) => !b)}>
+              {browse ? "Hide browser" : "Browse…"}
+            </Button>
+            <Button size="xs" disabled={dir.trim().length === 0} onClick={() => void addProject()}>
+              Add
+            </Button>
+          </Group>
+          <Collapse expanded={browse}>
+            <FolderBrowser onPick={(p) => setDir(p)} />
+          </Collapse>
+        </Step>
+      </Stack>
+    </Card>
   );
 }

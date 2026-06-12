@@ -85,3 +85,22 @@ export function compact(n: number): string {
   if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }
+
+// Fleet-of-one economics: the summed token usage across a task's whole chain —
+// the archive-friendly counterpart of the live log's cost line (per-spawn cost
+// is not in the trace; tokens are, and on a flat-rate subscription they ARE the
+// signal). Empty string when no run reported usage.
+export function tokenTotals(agents: TraceAgent[]): string {
+  let tin = 0;
+  let tout = 0;
+  let cached = 0;
+  for (const a of agents) {
+    tin += a.tokens_in ?? 0;
+    tout += a.tokens_out ?? 0;
+    cached += a.tokens_cached ?? 0;
+  }
+  if (tin === 0 && tout === 0 && cached === 0) return "";
+  const parts = [`${compact(tin)} in`, `${compact(tout)} out`];
+  if (cached > 0) parts.push(`${compact(cached)} cached`);
+  return parts.join(" · ");
+}

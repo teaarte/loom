@@ -9,6 +9,7 @@
 import { useState } from "react";
 
 import { api, errText } from "../lib/api.js";
+import { parseChecksEnvelope, type CheckChip } from "../lib/checks.js";
 import { cx } from "../lib/cx.js";
 import type { SpawnTranscript, SpawnTranscriptResponse } from "../lib/types.js";
 import styles from "./SpawnTranscript.module.css";
@@ -59,11 +60,61 @@ export function SpawnTranscriptView({
   if (err !== null) return <div className={styles.note}>could not read the transcript: {err}</div>;
   if (data === null) return <div className={styles.note}>no transcript recorded for this spawn</div>;
 
+  // A deterministic-checks envelope renders as status chips instead of raw
+  // JSON — detected by DATA SHAPE, never by agent name.
+  const chips = parseChecksEnvelope(data.raw_output);
+
   return (
     <div className={styles.box}>
-      <Field label="output" body={data.raw_output} defaultOpen={autoOpen} />
+      {chips !== null ? (
+        <ChecksSummary chips={chips} />
+      ) : (
+        <Field label="output" body={data.raw_output} defaultOpen={autoOpen} />
+      )}
       <Field label="prompt" body={data.prompt} defaultOpen={false} />
       <Parse parse={data.parse_result} />
+    </div>
+  );
+}
+
+const CHIP_GLYPH: Record<CheckChip["status"], string> = {
+  ok: "✓",
+  fail: "✗",
+  skipped: "—",
+};
+
+const CHIP_CLASS: Record<CheckChip["status"], string> = {
+  ok: styles.checkOk ?? "",
+  fail: styles.checkFail ?? "",
+  skipped: styles.checkSkip ?? "",
+};
+
+// The chip row for a checks envelope: one chip per check; a failed chip expands
+// to its captured output (head-first — where a compiler puts the first error).
+function ChecksSummary({ chips }: { chips: CheckChip[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const expandable = (c: CheckChip): boolean => c.status === "fail" && c.output !== null;
+  const current = chips.find((c) => c.name === open);
+  return (
+    <div className={styles.checks}>
+      <div className={styles.checksRow}>
+        {chips.map((c) => (
+          <button
+            key={c.name}
+            type="button"
+            className={cx(styles.checkChip, CHIP_CLASS[c.status])}
+            disabled={!expandable(c)}
+            title={c.command ?? undefined}
+            onClick={() => setOpen((o) => (o === c.name ? null : c.name))}
+          >
+            {CHIP_GLYPH[c.status]} {c.name}
+            {c.status === "fail" && c.exit_code !== null ? ` (exit ${c.exit_code})` : ""}
+          </button>
+        ))}
+      </div>
+      {current !== undefined && current.output !== null && (
+        <pre className={styles.body}>{current.output}</pre>
+      )}
     </div>
   );
 }

@@ -72,3 +72,38 @@
   padding: 0.1rem 0.2rem;
   word-break: break-word;
 }
+
+/* Deterministic-checks chips (a checks-envelope output). */
+.checks {
+  margin: 0.2rem 0;
+}
+.checksRow {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.checkChip {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+}
+.checkChip:disabled {
+  cursor: default;
+}
+.checkOk {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+.checkFail {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+  font-weight: 600;
+}
+.checkSkip {
+  opacity: 0.65;
+}

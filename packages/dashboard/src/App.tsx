@@ -1,133 +1,257 @@
+import {
+  ActionIcon,
+  AppShell,
+  Badge,
+  Box,
+  Burger,
+  Button,
+  Group,
+  Indicator,
+  NavLink,
+  PasswordInput,
+  Popover,
+  Stack,
+  Text,
+  Title,
+} from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
+import { notifications } from "@mantine/notifications";
 import { useState } from "react";
 
-import styles from "./App.module.css";
+import { IconGear, IconGrid, IconKey, IconPlug, IconPlus } from "./components/icons.js";
 import { Onboarding } from "./components/Onboarding.js";
 import { useApi } from "./hooks/useApi.js";
+import { needsAttention, useFleet } from "./hooks/useFleet.js";
 import { getToken, setToken } from "./lib/api.js";
-import { cx } from "./lib/cx.js";
+import { useRoute, type Route } from "./lib/router.js";
 import { AddProjectView } from "./views/AddProjectView.js";
+import { HomeView } from "./views/HomeView.js";
 import { ProjectDetail } from "./views/ProjectDetail.js";
-import { ProjectsView } from "./views/ProjectsView.js";
 import { ProvidersView } from "./views/ProvidersView.js";
 import { SettingsView } from "./views/SettingsView.js";
 
-type View = "projects" | "settings" | "providers" | "add";
-
-interface OpenProject {
-  id: string;
-  dir: string;
-  label?: string;
-}
-
-const NAV: { id: View; label: string }[] = [
-  { id: "projects", label: "Projects" },
-  { id: "settings", label: "Settings" },
-  { id: "providers", label: "Providers" },
-  { id: "add", label: "+ Add" },
-];
-
-// A localhost-reachability dot: `/health` needs no token, so a green dot means
-// the control plane is up. An API-auth problem (a missing/wrong token) surfaces
-// as an error inside the authed views, not here.
-function ConnDot() {
+// A localhost-reachability pill: `/health` needs no token, so green means the
+// control plane is up. An API-auth problem (missing/wrong token) surfaces as an
+// error inside the authed views, not here.
+function ConnStatus() {
   const health = useApi<{ ok: boolean }>("/health", 5000);
   const up = health.data?.ok === true && health.error === null;
-  return <span className={cx(styles.dot, up ? styles.dotOk : styles.dotBad)} />;
+  return (
+    <Group gap={6} wrap="nowrap">
+      <Indicator color={up ? "green" : "red"} size={9} processing={up} />
+      <Text size="xs" c="dimmed" visibleFrom="xs">
+        {up ? "connected" : "offline"}
+      </Text>
+    </Group>
+  );
 }
 
-export function App() {
-  const [view, setView] = useState<View>("projects");
-  const [open, setOpen] = useState<OpenProject | null>(null);
-  const [token, setTokenInput] = useState(getToken());
-  // Bump to nudge views that fetch on mount to re-detect after an onboarding /
-  // add-project action (without a global data layer).
-  const [refreshKey, setRefreshKey] = useState(0);
+// The bearer-token control, tucked into a header popover — set once, then out
+// of the way (localhost-trust deployments never need it).
+function TokenControl({ onSaved }: { onSaved: () => void }) {
+  const [opened, setOpened] = useState(false);
+  const [value, setValue] = useState(getToken());
 
   const save = (): void => {
-    setToken(token.trim());
-    setRefreshKey((k) => k + 1);
+    setToken(value.trim());
+    setOpened(false);
+    notifications.show({ message: "API token saved", color: "green" });
+    onSaved();
   };
-
-  const goProjects = (): void => {
-    setOpen(null);
-    setView("projects");
-  };
-
-  // Cross-view jump: the project page links its bundle's model map to Settings
-  // (the models editor lives there, not inline on the project page).
-  const goSettings = (): void => {
-    setOpen(null);
-    setView("settings");
-  };
-
-  const refresh = (): void => setRefreshKey((k) => k + 1);
 
   return (
-    <div className={styles.app}>
-      <aside className={styles.sidebar}>
-        <div className={styles.brand}>loom</div>
-        <nav className={styles.nav}>
-          {NAV.map((n) => (
-            <button
-              key={n.id}
-              className={cx(styles.navItem, view === n.id && open === null && styles.navItemActive)}
-              onClick={() => {
-                setOpen(null);
-                setView(n.id);
-              }}
-            >
-              {n.label}
-            </button>
-          ))}
-        </nav>
-        <div className={styles.spacer} />
-        <div className={styles.conn}>
-          <span className={styles.connLabel}>
-            <ConnDot /> token
-          </span>
-          <input
-            className={styles.connInput}
-            type="password"
-            placeholder="(none — localhost trust)"
-            value={token}
-            onChange={(e) => setTokenInput(e.target.value)}
+    <Popover opened={opened} onChange={setOpened} width={280} position="bottom-end" withArrow>
+      <Popover.Target>
+        <ActionIcon
+          variant={getToken().length > 0 ? "light" : "subtle"}
+          color="gray"
+          aria-label="API token"
+          onClick={() => setOpened((o) => !o)}
+        >
+          <IconKey />
+        </ActionIcon>
+      </Popover.Target>
+      <Popover.Dropdown>
+        <Stack gap="xs">
+          <Text size="sm" fw={600}>
+            API token
+          </Text>
+          <PasswordInput
+            size="xs"
+            placeholder="none — localhost trust"
+            value={value}
+            onChange={(e) => setValue(e.currentTarget.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") save();
             }}
           />
-          <button className={styles.connBtn} onClick={save}>
-            save
-          </button>
-        </div>
-      </aside>
+          <Button size="xs" onClick={save}>
+            Save
+          </Button>
+        </Stack>
+      </Popover.Dropdown>
+    </Popover>
+  );
+}
 
-      <main className={styles.main}>
-        {open === null && <Onboarding key={refreshKey} onChanged={refresh} />}
+export function App() {
+  const { route, navigate } = useRoute();
+  const fleet = useFleet();
+  const [navOpened, { toggle: toggleNav, close: closeNav }] = useDisclosure(false);
+  // Bump to nudge the onboarding detector to re-run after an action that may
+  // complete a step (without a global data layer).
+  const [refreshKey, setRefreshKey] = useState(0);
 
-        {open !== null ? (
-          <ProjectDetail
-            projectId={open.id}
-            dir={open.dir}
-            {...(open.label !== undefined ? { label: open.label } : {})}
-            onBack={goProjects}
-            onOpenSettings={goSettings}
+  const go = (to: Route): void => {
+    closeNav();
+    navigate(to);
+  };
+
+  const refresh = (): void => {
+    fleet.reload();
+    setRefreshKey((k) => k + 1);
+  };
+
+  const attention = needsAttention(fleet.projects).length;
+
+  return (
+    <AppShell
+      header={{ height: 52 }}
+      navbar={{ width: 220, breakpoint: "sm", collapsed: { mobile: !navOpened } }}
+      padding="lg"
+    >
+      <AppShell.Header>
+        <Group h="100%" px="md" justify="space-between" wrap="nowrap">
+          <Group gap="sm" wrap="nowrap">
+            <Burger opened={navOpened} onClick={toggleNav} hiddenFrom="sm" size="sm" />
+            <Title
+              order={4}
+              style={{ cursor: "pointer", letterSpacing: "-0.02em" }}
+              onClick={() => go({ name: "home" })}
+            >
+              🧵 loom
+            </Title>
+          </Group>
+          <Group gap="sm" wrap="nowrap">
+            <ConnStatus />
+            <TokenControl onSaved={refresh} />
+          </Group>
+        </Group>
+      </AppShell.Header>
+
+      <AppShell.Navbar p="sm">
+        <Stack gap={4} h="100%">
+          <NavLink
+            label="Projects"
+            leftSection={<IconGrid />}
+            rightSection={
+              attention > 0 ? (
+                <Badge size="sm" color="yellow" variant="filled" circle>
+                  {attention}
+                </Badge>
+              ) : undefined
+            }
+            active={route.name === "home" || route.name === "project"}
+            onClick={() => go({ name: "home" })}
           />
-        ) : (
+          <NavLink
+            label="Settings"
+            leftSection={<IconGear />}
+            active={route.name === "settings"}
+            onClick={() => go({ name: "settings" })}
+          />
+          <NavLink
+            label="Providers"
+            leftSection={<IconPlug />}
+            active={route.name === "providers"}
+            onClick={() => go({ name: "providers" })}
+          />
+          <Box flex={1} />
+          <Button
+            variant="light"
+            leftSection={<IconPlus />}
+            onClick={() => go({ name: "add" })}
+          >
+            Add project
+          </Button>
+        </Stack>
+      </AppShell.Navbar>
+
+      <AppShell.Main>
+        {route.name === "home" && (
           <>
-            {view === "projects" && <ProjectsView key={refreshKey} onOpen={setOpen} />}
-            {view === "settings" && <SettingsView />}
-            {view === "providers" && <ProvidersView />}
-            {view === "add" && (
-              <AddProjectView
-                onAdded={() => {
-                  refresh();
-                  goProjects();
-                }}
-              />
-            )}
+            <Onboarding key={refreshKey} onChanged={refresh} />
+            <HomeView
+              fleet={fleet}
+              onOpen={(id) => go({ name: "project", id })}
+              onAdd={() => go({ name: "add" })}
+            />
           </>
         )}
-      </main>
-    </div>
+        {route.name === "project" && (
+          <ProjectDetailRoute
+            id={route.id}
+            fleet={fleet}
+            onBack={() => go({ name: "home" })}
+            onOpenSettings={() => go({ name: "settings", tab: "models" })}
+          />
+        )}
+        {route.name === "settings" && <SettingsView {...(route.tab !== undefined ? { initialTab: route.tab } : {})} />}
+        {route.name === "providers" && <ProvidersView />}
+        {route.name === "add" && (
+          <AddProjectView
+            onAdded={() => {
+              refresh();
+              go({ name: "home" });
+            }}
+          />
+        )}
+      </AppShell.Main>
+    </AppShell>
+  );
+}
+
+// Resolve a deep-linked project route against the shared fleet snapshot — the
+// detail header needs dir/label before the first SSE tick, and a pasted URL
+// (or a page reload) arrives without them.
+function ProjectDetailRoute({
+  id,
+  fleet,
+  onBack,
+  onOpenSettings,
+}: {
+  id: string;
+  fleet: ReturnType<typeof useFleet>;
+  onBack: () => void;
+  onOpenSettings: () => void;
+}) {
+  const found = fleet.projects?.find((p) => p.id === id);
+  if (fleet.projects === null) {
+    return (
+      <Text c="dimmed" size="sm">
+        loading project…
+      </Text>
+    );
+  }
+  if (found === undefined) {
+    return (
+      <Stack gap="sm" align="flex-start">
+        <Text c="red" size="sm">
+          Project “{id}” isn’t in the catalog on this server.
+        </Text>
+        <Button variant="light" size="xs" onClick={onBack}>
+          ← all projects
+        </Button>
+      </Stack>
+    );
+  }
+  return (
+    <ProjectDetail
+      projectId={found.id}
+      dir={found.dir}
+      {...(found.label !== undefined ? { label: found.label } : {})}
+      onBack={onBack}
+      onOpenSettings={onOpenSettings}
+    />
   );
 }

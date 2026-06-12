@@ -67,6 +67,12 @@ export const defaultClassifier: ErrorClassifier = (code: string): ErrorDispositi
   // EXPLICITLY so a later edit cannot slip one into the transient set and
   // re-introduce the "retried a 400 five times with backoff" bug.
   if (PERMANENT_PROVIDER_ERROR_CODES.has(code)) return "terminal";
+  // An edit-expecting agent that changed nothing already got its second
+  // chance from the drive loop's fast in-loop retry. The agent is not
+  // failing — it is DECIDING there is nothing to edit (an informational
+  // task, a brief it judges complete), and a re-drive re-decides the same
+  // way at full spawn cost. Park it for the operator instead of looping.
+  if (code === "EXECUTOR_EMPTY_DIFF") return "terminal";
   // Everything not explicitly transient escalates: a structural error
   // (SPAWN_BUDGET_EXCEEDED, KERNEL_INVARIANT, NO_ACTIVE_TASK, FLOW_OVERFLOW)
   // or a deliberate shutdown (DRIVE_ABORTED) will not clear by retrying, so

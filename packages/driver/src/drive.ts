@@ -224,6 +224,13 @@ const SURFACEABLE_EXECUTOR_CODES = new Set<string>([
   // cap. Re-running with the same cap truncates identically, so it is surfaced
   // by CODE and NOT spent against the in-loop retry budget (see below).
   "EXECUTOR_OUTPUT_TRUNCATED",
+  // An edit-expecting agent that changed nothing. The in-loop retry budget IS
+  // spent first (one re-run is the designed second chance), but after it the
+  // code must SURVIVE to the supervisor: relabelled to the generic
+  // EXECUTOR_FAILED it reads as transient and the whole drive is re-driven
+  // with backoff — multiplying the spend on a task that will no-op
+  // identically every round. Surfaced by code, the supervisor parks it.
+  "EXECUTOR_EMPTY_DIFF",
   ...PERMANENT_PROVIDER_ERROR_CODES,
 ]);
 

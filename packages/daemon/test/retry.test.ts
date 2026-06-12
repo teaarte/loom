@@ -15,6 +15,10 @@ describe("retry — error classification (by code, not domain)", () => {
   it("treats a dropped/missing backend round-trip as transient", () => {
     assert.equal(defaultClassifier("EXECUTOR_FAILED"), "transient");
     assert.equal(defaultClassifier("EXECUTOR_NOT_FOUND"), "transient");
+    // A no-op edit run already used the drive loop's fast retry; the agent
+    // decides identically on every re-drive, so the supervisor must park, not
+    // back off and re-spend.
+    assert.equal(defaultClassifier("EXECUTOR_EMPTY_DIFF"), "terminal");
   });
 
   it("treats a wedged-spawn timeout (session/idle) as transient — re-drive", () => {

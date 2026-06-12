@@ -213,10 +213,10 @@ describe("drive — through the sandboxed executor (real git + SQLite)", () => {
 
       assert.equal(outcome.kind, "error");
       if (outcome.kind === "error") {
-        // The typed empty-diff error rides the generic retry path, relabeling
-        // to EXECUTOR_FAILED once the budget is spent — the message preserves
-        // the cause.
-        assert.equal(outcome.code, "EXECUTOR_FAILED");
+        // The typed empty-diff code SURVIVES the retry budget (it is in the
+        // surfaceable set): the supervisor needs the code intact to park the
+        // task instead of re-driving it as a generic transient failure.
+        assert.equal(outcome.code, "EXECUTOR_EMPTY_DIFF");
         assert.match(outcome.message, /empty diff/);
       }
       assert.equal(runs, 2, "the spawn ran twice — one retry before parking");

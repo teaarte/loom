@@ -2,13 +2,14 @@
 // provider errors (provider-error.ts) and from the rate-limit / timeout codes
 // the backends surface.
 //
-// EXECUTOR_EMPTY_DIFF rides the drive loop's GENERIC executor-retry path by
-// design: it is deliberately NOT in the loop's NO_RETRY set (so a retry IS
-// attempted) and NOT in its SURFACEABLE set (so it relabels to EXECUTOR_FAILED
-// after the budget is spent). That is exactly the "retry once, then park"
-// disposition a no-op implementation wants — re-run the editing agent, and if
-// it STILL changes nothing, surface a terminal failure for the operator rather
-// than feeding an empty diff to the reviewers and the final gate.
+// EXECUTOR_EMPTY_DIFF rides the drive loop's GENERIC executor-retry path
+// (deliberately NOT in the loop's NO_RETRY set, so one fast re-run IS
+// attempted) but IS in its SURFACEABLE set: after the in-loop budget the code
+// must reach the supervisor intact. Relabelled to the generic EXECUTOR_FAILED
+// it read as transient and the daemon re-drove the whole task with backoff —
+// each round re-running the agent that keeps deciding there is nothing to
+// edit. Surfaced by code, the supervisor parks it for the operator after the
+// loop's single retry — the intended "retry once, then park" disposition.
 
 import { KernelError, type ProviderShuttleIntent } from "@loomfsm/kernel";
 

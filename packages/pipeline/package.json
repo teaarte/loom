@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/pipeline",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "type": "module",
   "description": "Install loom in one step: npm i -g @loomfsm/pipeline && loom setup. Pulls the CLI, the MCP server, the default bundle, and the zero-config provider.",
   "license": "Apache-2.0",

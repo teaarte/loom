@@ -89,6 +89,11 @@ export interface RunSpawnResult {
   usage?: SpawnUsage;
 }
 
+// Predicate over a spawn intent: does THIS agent edit project files? It rides
+// from the transport (which knows each agent's bundle-declared execution shape)
+// into the shell so the empty-diff guard knows whom to hold to a non-empty diff.
+export type ExpectsEdits = (intent: ProviderShuttleIntent) => boolean;
+
 // The injected backend: run one spawn in `worktreeDir` and return the agent's
 // output (text, or text + usage). Throws on failure — the loop's
 // executor-retry / error-surfacing handles it (a thrown executor re-resumes
@@ -141,7 +146,7 @@ export interface SandboxedExecutorOptions {
   // project files — are EXEMPT: the predicate returns false for them, or is
   // omitted entirely (the default: no empty-diff check at all). The shell stays
   // domain-blind; the transport that knows which agents edit files supplies it.
-  expects_edits?: (intent: ProviderShuttleIntent) => boolean;
+  expects_edits?: ExpectsEdits;
 }
 
 // Merge two optional abort signals into one that fires when EITHER does. Used
@@ -217,14 +222,14 @@ export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executo
       // carrier is fed natively — no dependence on the backend to report it.
       const delta = gitDelta(wt.dir, wt.baseline);
       // Fail fast on an edit-expecting agent that changed nothing. An empty
-      // self-diff from an agent whose job is to edit the project is a no-op
-      // (the F1 "I'll read the plan first" → 0 edits class of failure); riding
-      // it downstream burns the whole review panel before the final gate
-      // catches it. Gated on an isolated tree (the un-isolated fallback writes
-      // nowhere, so its delta cannot be judged) and on the transport's
-      // edit-expecting predicate. The throw rides the loop's generic
-      // executor-retry, so the agent gets a re-run and a SECOND empty diff
-      // parks the task.
+      // self-diff from an agent whose job is to edit the project is a no-op —
+      // the class of failure where a backend reads the plan, edits nothing, and
+      // reports success; riding it downstream burns the whole review panel
+      // before the final gate catches it. Gated on an isolated tree (the
+      // un-isolated fallback writes nowhere, so its delta cannot be judged) and
+      // on the transport's edit-expecting predicate. The throw rides the loop's
+      // generic executor-retry, so the agent gets a re-run and a SECOND empty
+      // diff parks the task.
       if (
         wt.isolated &&
         opts.expects_edits?.(intent) === true &&

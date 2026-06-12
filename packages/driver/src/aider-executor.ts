@@ -43,7 +43,12 @@ import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import type { Executor, SpawnUsage } from "./drive.js";
 import { defaultRateLimitDetector, type RateLimitDetector } from "./rate-limit.js";
-import { createSandboxedExecutor, type RunSpawn, type RunSpawnResult } from "./sandboxed-executor.js";
+import {
+  createSandboxedExecutor,
+  type ExpectsEdits,
+  type RunSpawn,
+  type RunSpawnResult,
+} from "./sandboxed-executor.js";
 import { spawnCapture } from "./spawn-cli.js";
 
 export interface AiderExecutorOptions {
@@ -91,6 +96,11 @@ export interface AiderExecutorOptions {
   // Test seam: inject the per-spawn runner instead of spawning the real binary,
   // so the shell (worktree + self-diff) can be exercised offline.
   runSpawn?: RunSpawn;
+  // Predicate forwarded to the shell's empty-diff guard: does this spawn's agent
+  // edit project files? A work-agent run through Aider always does, but the
+  // transport supplies it per spawn so the shell stays domain-blind. Omitted →
+  // no empty-diff check (the shell's default).
+  expects_edits?: ExpectsEdits;
 }
 
 // Build the argv for one aider invocation. Pure → unit-tested directly.
@@ -275,5 +285,6 @@ export function createAiderExecutor(opts: AiderExecutorOptions): Executor {
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     ...(opts.onNotice !== undefined ? { onNotice: opts.onNotice } : {}),
     ...(opts.onUsage !== undefined ? { onUsage: opts.onUsage } : {}),
+    ...(opts.expects_edits !== undefined ? { expects_edits: opts.expects_edits } : {}),
   });
 }

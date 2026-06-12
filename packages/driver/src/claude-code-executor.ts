@@ -32,6 +32,7 @@ import { classifyPermanentProviderError, PERMANENT_PROVIDER_ERROR_CODE } from ".
 import { defaultRateLimitDetector, type RateLimitDetector } from "./rate-limit.js";
 import {
   createSandboxedExecutor,
+  type ExpectsEdits,
   type RunSpawn,
   type RunSpawnResult,
   type SandboxSeed,
@@ -73,6 +74,10 @@ export interface ClaudeCodeExecutorOptions {
   // the shell). Used to deliver a bundle's bundled knowledge so an agent can
   // read it at a stable sandbox path.
   sandbox_seed?: readonly SandboxSeed[];
+  // Predicate forwarded to the shell's empty-diff guard: does this spawn's agent
+  // edit project files? When true and the self-diff is empty, the spawn fails
+  // fast. Omitted → no empty-diff check (the shell's default).
+  expects_edits?: ExpectsEdits;
 }
 
 // Build the argv for one `claude -p` invocation. Pure → unit-tested directly.
@@ -326,5 +331,6 @@ export function createClaudeCodeExecutor(opts: ClaudeCodeExecutorOptions): Execu
     ...(opts.onNotice !== undefined ? { onNotice: opts.onNotice } : {}),
     ...(opts.onUsage !== undefined ? { onUsage: opts.onUsage } : {}),
     ...(opts.sandbox_seed !== undefined ? { sandbox_seed: opts.sandbox_seed } : {}),
+    ...(opts.expects_edits !== undefined ? { expects_edits: opts.expects_edits } : {}),
   });
 }

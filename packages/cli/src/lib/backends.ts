@@ -15,7 +15,7 @@
 //     as the external `claude` binary the worktree backend shells out to).
 
 import type { ResolvedCredential } from "@loomfsm/config";
-import type { Executor, SandboxSeed, SpawnUsage } from "@loomfsm/driver";
+import type { Executor, ExpectsEdits, SandboxSeed, SpawnUsage } from "@loomfsm/driver";
 import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import type { ContainerPlan } from "./container.js";
@@ -39,6 +39,9 @@ export interface ClaudeCodeBackendOptions {
   // active bundle's bundled knowledge). Forwarded to whichever Claude Code
   // backend the plan selects (worktree or container).
   sandbox_seed?: readonly SandboxSeed[];
+  // The empty-diff guard's predicate — forwarded to whichever Claude Code
+  // backend the plan selects (worktree or container).
+  expects_edits?: ExpectsEdits;
 }
 
 // Read a numeric HTTP status off a thrown error across the SDKs' differing
@@ -86,6 +89,7 @@ export async function buildClaudeCodeBackend(
       onUsage: sinks.onUsage,
       ...(sinks.signal !== undefined ? { signal: sinks.signal } : {}),
       ...(opts.sandbox_seed !== undefined ? { sandbox_seed: opts.sandbox_seed } : {}),
+      ...(opts.expects_edits !== undefined ? { expects_edits: opts.expects_edits } : {}),
     });
   }
   return driver.createClaudeCodeExecutor({
@@ -98,6 +102,7 @@ export async function buildClaudeCodeBackend(
     onUsage: sinks.onUsage,
     ...(sinks.signal !== undefined ? { signal: sinks.signal } : {}),
     ...(opts.sandbox_seed !== undefined ? { sandbox_seed: opts.sandbox_seed } : {}),
+    ...(opts.expects_edits !== undefined ? { expects_edits: opts.expects_edits } : {}),
   });
 }
 
@@ -263,6 +268,9 @@ export interface HarnessBackendOptions {
   // Child env carrying the resolved provider credential (see `harnessChildEnv`).
   env: NodeJS.ProcessEnv;
   timeouts: SpawnTimeouts;
+  // The empty-diff guard's predicate — a harness work-agent edits files, so an
+  // empty self-diff is the no-op failure the guard catches before review.
+  expects_edits?: ExpectsEdits;
 }
 
 // Build the Aider work-agent executor (always a worktree — no container; the CLI
@@ -282,6 +290,7 @@ export async function buildAiderBackend(
     onNotice: sinks.onNotice,
     onUsage: sinks.onUsage,
     ...(sinks.signal !== undefined ? { signal: sinks.signal } : {}),
+    ...(opts.expects_edits !== undefined ? { expects_edits: opts.expects_edits } : {}),
   });
 }
 
@@ -300,6 +309,7 @@ export async function buildOpencodeBackend(
     onNotice: sinks.onNotice,
     onUsage: sinks.onUsage,
     ...(sinks.signal !== undefined ? { signal: sinks.signal } : {}),
+    ...(opts.expects_edits !== undefined ? { expects_edits: opts.expects_edits } : {}),
   });
 }
 

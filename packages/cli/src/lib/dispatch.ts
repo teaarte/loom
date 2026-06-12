@@ -199,6 +199,34 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
   const cache = new Map<string, Promise<Executor>>();
   const noticed = new Set<string>();
 
+  // Memoized per-agent execution shape. Every resolver below reads an agent's
+  // shape through here, so the FIRST time an agent is dispatched its shape is
+  // cached synchronously — and the dispatch always resolves the chain (which
+  // fills this) BEFORE the chosen executor's `execute` runs. That ordering is
+  // what lets the empty-diff predicate be synchronous over an async hook.
+  const executionMemo = new Map<string, AgentExecution>();
+  const resolveExecution = async (agent: string): Promise<AgentExecution> => {
+    const cached = executionMemo.get(agent);
+    if (cached !== undefined) return cached;
+    const execution = await Promise.resolve(
+      (args.resolveAgentExecution ?? (() => "single-shot" as const))(agent),
+    );
+    executionMemo.set(agent, execution);
+    return execution;
+  };
+
+  // The empty-diff guard's predicate, built ONCE and handed to every
+  // file-editing backend (worktree / container / aider / opencode). A spawn
+  // whose agent the bundle declares "agentic" edits files and MUST leave a
+  // non-empty self-diff; a single-shot model call or a deterministic checks run
+  // writes no project files and is exempt. Sync by necessity (the sandbox shell
+  // evaluates it inline right after a spawn), reading the memo the resolvers
+  // fill as they route each agent. An agent not yet seen reads as exempt — the
+  // safe no-guard default, matching the shell's behaviour when no predicate is
+  // supplied at all.
+  const expectsEdits = (intent: ProviderShuttleIntent): boolean =>
+    executionMemo.get(intent.agent) === "agentic";
+
   // Map a spawn → the harness CLI's `--model` string from the agent's configured
   // ref (so a mixed-model backend works); a bare/absent ref falls back to the
   // resolved model verbatim. `modelFn` is the per-CLI family→prefix mapper.
@@ -240,6 +268,7 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
               : {}),
             timeouts: args.timeouts,
             ...(seed.length > 0 ? { sandbox_seed: seed } : {}),
+            expects_edits: expectsEdits,
           },
           sinks,
         ),
@@ -269,6 +298,7 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
               : harnessResolveModel(refs, aiderModelString),
           env: harnessChildEnv(args.env, family, creds),
           timeouts: harnessTimeouts,
+          expects_edits: expectsEdits,
         },
         sinks,
       );
@@ -283,6 +313,7 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
               : harnessResolveModel(refs, opencodeModelString),
           env: harnessChildEnv(args.env, family, creds),
           timeouts: harnessTimeouts,
+          expects_edits: expectsEdits,
         },
         sinks,
       );
@@ -321,9 +352,7 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
     // harness CLI (an explicit `aider`/`opencode` pin) uses that harness for all
     // its spawns. Otherwise, on a raw family backend, a work-agent (agentic) gets
     // the configured default harness and a decision-agent a single model call.
-    const execution = await Promise.resolve(
-      (args.resolveAgentExecution ?? (() => "single-shot" as const))(intent.agent),
-    );
+    const execution = await resolveExecution(intent.agent);
     const harness = selectHarness(res.backend, execution);
     // Key by (harness, backend, family) for a CLI harness so a backend serving
     // both a work-agent and a decision-agent — or a mixed-family pin — builds the
@@ -352,9 +381,7 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
       const family = parsed.family;
       const res = resolveBackend({ configBackend, family, ccAvailable });
       if (!res.ok) return null;
-      const execution = await Promise.resolve(
-        (args.resolveAgentExecution ?? (() => "single-shot" as const))(intent.agent),
-      );
+      const execution = await resolveExecution(intent.agent);
       const harness = selectHarness(res.backend, execution);
       const modelPin: ModelPin = { family, model: parsed.model };
       const isHarnessCli = harness === "aider" || harness === "opencode";
@@ -422,9 +449,7 @@ export function buildDispatchExecutor(args: DispatchExecutorArgs): Executor {
   const resolveDirectExecutor = async (
     intent: ProviderShuttleIntent,
   ): Promise<Executor | null> => {
-    const execution = await Promise.resolve(
-      (args.resolveAgentExecution ?? (() => "single-shot" as const))(intent.agent),
-    );
+    const execution = await resolveExecution(intent.agent);
     return execution === "checks" ? checksExecutor() : null;
   };
 

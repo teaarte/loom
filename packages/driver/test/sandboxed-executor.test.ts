@@ -23,6 +23,7 @@ import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
 import {
   buildClaudeArgs,
+  createClaudeCodeExecutor,
   createSandboxedExecutor,
   defaultRateLimitDetector,
   parseClaudeResult,
@@ -458,8 +459,8 @@ describe("claude -p runner helpers", () => {
 // ============================================================================
 
 describe("createSandboxedExecutor — empty self-diff fail-fast", () => {
-  // A backend run that produces NO change to the worktree (the F1 "I'll read
-  // the plan first" → 0 edits class of no-op).
+  // A backend run that produces NO change to the worktree — a backend that
+  // reads the plan, edits nothing, and reports success.
   const runNoEdits = async (): Promise<string> => "I considered the task but wrote nothing.";
 
   it("throws EXECUTOR_EMPTY_DIFF when an edit-expecting agent's self-diff is empty", async () => {
@@ -525,6 +526,73 @@ describe("createSandboxedExecutor — empty self-diff fail-fast", () => {
       const executor = createSandboxedExecutor({ project_dir: projectDir, runSpawn: runNoEdits });
       const result = await executor.execute(intent());
       assert.equal(result.agent_output, "I considered the task but wrote nothing.");
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+});
+
+// ============================================================================
+// Production predicate wiring — the empty-diff guard threaded through the REAL
+// backend factory (createClaudeCodeExecutor), with the predicate DERIVED from a
+// bundle-declared agent-execution map exactly as the dispatch derives it
+// (agentic → edits, single-shot / checks → exempt). This guards the predicate
+// LOGIC end-to-end, not just the `() => true` seam the unit tests inject.
+// ============================================================================
+
+describe("createClaudeCodeExecutor — empty-diff guard fed by the production predicate", () => {
+  // The same map shape the dispatch reads per agent name; the predicate is the
+  // same derivation the dispatch builds once and hands to every backend factory.
+  const execution: Record<string, "agentic" | "single-shot" | "checks"> = {
+    "impl-1": "agentic",
+    classifier: "single-shot",
+    "checks-runner": "checks",
+  };
+  const expectsEdits = (i: ProviderShuttleIntent): boolean => execution[i.agent] === "agentic";
+  const runNoEdits = async (): Promise<string> => "I read the plan but wrote nothing.";
+
+  it("fails fast for an agentic agent that produced an empty diff", async () => {
+    const projectDir = freshGitProject();
+    try {
+      const executor = createClaudeCodeExecutor({
+        project_dir: projectDir,
+        runSpawn: runNoEdits,
+        expects_edits: expectsEdits,
+      });
+      await assert.rejects(
+        executor.execute(intent({ agent: "impl-1" })),
+        (err: unknown) => (err as { code?: string }).code === EXECUTOR_EMPTY_DIFF,
+      );
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  it("lets a single-shot agent through on an empty diff (exempt)", async () => {
+    const projectDir = freshGitProject();
+    try {
+      const executor = createClaudeCodeExecutor({
+        project_dir: projectDir,
+        runSpawn: runNoEdits,
+        expects_edits: expectsEdits,
+      });
+      const result = await executor.execute(intent({ agent: "classifier" }));
+      assert.equal(result.agent_output, "I read the plan but wrote nothing.");
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  it("lets a checks agent through on an empty diff (exempt)", async () => {
+    const projectDir = freshGitProject();
+    try {
+      const executor = createClaudeCodeExecutor({
+        project_dir: projectDir,
+        runSpawn: runNoEdits,
+        expects_edits: expectsEdits,
+      });
+      const result = await executor.execute(intent({ agent: "checks-runner" }));
+      assert.equal(result.agent_output, "I read the plan but wrote nothing.");
     } finally {
       cleanup(projectDir);
     }

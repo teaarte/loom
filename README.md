@@ -336,6 +336,18 @@ packages/
 **`v0.3.x` (current)** — configure once, any model, drive it from a browser or your phone, and
 run without Claude. Full notes: [loomfsm.dev/changelog](https://loomfsm.dev/changelog/).
 
+- **0.3.8** — per-round token economy (agent template bodies become provider-cacheable
+  **system prompts**, a cheap repo scout runs before planning in the simple flow, the
+  implementer **escalates its model tier** after two failed rounds, pathological diffs are
+  capped with a complete per-file stat list) and the **dashboard UX overhaul**: deep-linkable
+  routes, a responsive shell, a needs-you fleet view, and a state-driven project page with an
+  open-blockers gate panel and deterministic-checks chips.
+- **0.3.7** — rework-loop stability (**open blockers are delivered into the next spawn's
+  context**, an unparseable review blocks instead of silently passing, an empty implementer
+  diff fails fast, only blocking reviewers re-run on a rework round) and **deterministic
+  pre-review checks**: the project's typecheck / lint / test run before the review panel and
+  walk the task back on failure, with the full compiler output delivered to the implementer.
+  Plus control-plane hardening (CSRF / rebinding / allowlist) and per-drive cost accounting.
 - **0.3.6** — dashboard polish (tabbed archive browser, live log under the agent chain,
   Docker-on default) and a **hard total-spawn cap** per drive to bound runaway spend.
 - **0.3.5** — a reviewer blocker now **parks** the task instead of crashing it, guided

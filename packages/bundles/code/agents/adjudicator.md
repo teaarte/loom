@@ -1,3 +1,6 @@
+---
+system_prompt: body
+---
 # Agent: Adjudicator (empirical runtime-claim verifier)
 
 ## Role

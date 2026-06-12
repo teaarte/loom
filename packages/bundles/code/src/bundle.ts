@@ -74,6 +74,43 @@ function reworkAllowsReviewer(state: BundleStateView, agentName: string): boolea
   return blockedLastRound.includes(agentName);
 }
 
+// Implementer tier escalation: after TWO implementation rounds that ended with a
+// blocking finding, the third round runs a higher-tier implementer rather than
+// burning another identical round on a model that has already failed twice. A
+// cheap-but-weak implementer that needs several rework rounds costs MORE
+// end-to-end than a stronger one that lands the change first time — each round
+// re-runs the whole review fanout — so escalating once it has demonstrably
+// stalled is the cheaper path per task, not per token.
+//
+// The signal is the same per-agent verdict accounting `reworkAllowsReviewer`
+// reads: count the distinct implementation-review rounds (`iteration`) that
+// recorded a blocking verdict. The escalation is realized the same way the
+// planner tiers by complexity — a distinct higher-tier agent
+// (`implementer-escalated`, premium) the flow selects via `applies_to` — so it
+// needs no kernel change. Because it is a DIFFERENT agent name, a cheap per-agent
+// model override configured for `implementer` does NOT follow it, so the third
+// round reverts to the capable bundle tier. premium is the top tier, so an
+// already-premium implementer escalates to premium (a no-op for the default
+// config; the lever bites when a cheaper implementer was configured).
+function priorBlockingImplementationRounds(state: BundleStateView): number {
+  const blockingRounds = new Set<number>();
+  for (const v of state.agent_verdicts ?? []) {
+    if (v.phase === "implementation" && v.blocking_issues > 0) {
+      blockingRounds.add(v.iteration);
+    }
+  }
+  return blockingRounds.size;
+}
+
+// True once two prior implementation rounds blocked — i.e. the implementer is
+// entering its third round. Deterministic over the verdict accounting (no clock,
+// no randomness) so a replayed tick re-derives the same agent selection. Exactly
+// one escalation per task: there is no tier above premium, so once it fires the
+// escalated agent simply keeps running and the decision is recorded once.
+function implementerShouldEscalate(state: BundleStateView): boolean {
+  return priorBlockingImplementationRounds(state) >= 2;
+}
+
 // The complexity values the flow router understands. `trivial` is the fast-task
 // flow (one implementer spawn, no gates/review); the other three are the
 // classifier's own output range.
@@ -215,6 +252,22 @@ async function derivePreReview(
 // Documentation file extensions — a change confined to these is a doc-only
 // outcome with no source to run the code review panel against.
 const DOC_FILE = /\.(md|mdx|markdown|txt|rst|adoc|rdoc)$/i;
+
+// Record the implementer tier escalation as a decision the gate operator reads.
+// The agent SELECTION is driven directly by the verdict accounting (each
+// implementer variant's `applies_to`); this positional step is the
+// operator-facing note. Runs right after the implement spawns, before the
+// review fanout, so `agent_verdicts` still reflects the prior rounds. Only sets
+// the key when escalating (idempotent — once true it stays true), so a normal
+// run's decisions block is untouched.
+async function recordImplementerEscalation(
+  state: BundleStateView,
+  ctx: StageContext,
+): Promise<void> {
+  if (implementerShouldEscalate(state)) {
+    ctx.tx.set_decision?.("implementer_escalated", true);
+  }
+}
 
 // Snapshot the substrate's file accounting for the reviewer fanout to read.
 // This is a snapshot of what the run has touched, not a raw VCS diff — the
@@ -835,7 +888,16 @@ export default defineBundle({
     // default_model can't be tier-by-complexity — one agent name would span both).
     { name: "planner", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "balanced" },
     { name: "planner-deep", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "premium" },
-    { name: "implementer", template_path: "agents/implementer.md", output_kind: "nonreview", default_model: "premium" },
+    // The implementer runs every round UNTIL it has stalled (two prior
+    // implementation rounds blocked), at which point it self-skips and the
+    // premium `implementer-escalated` below takes the third round instead.
+    { name: "implementer", template_path: "agents/implementer.md", output_kind: "nonreview", default_model: "premium", applies_to: (s) => !implementerShouldEscalate(s) },
+    // Escalation-round implementer (same template, premium tier). Selected only
+    // when `implementerShouldEscalate` — and as a DISTINCT agent name a cheap
+    // per-agent override on `implementer` does not follow it, so a stalled cheap
+    // implementer reverts to the capable bundle tier. premium is the top, so an
+    // already-premium implementer escalates to premium (no-op for the default).
+    { name: "implementer-escalated", template_path: "agents/implementer.md", output_kind: "nonreview", default_model: "premium", applies_to: (s) => implementerShouldEscalate(s) },
     // The deterministic checks runner. Its spawn is routed (by the `checks`
     // execution capability) to a shell-out executor that runs typecheck / lint /
     // test and returns a JSON envelope — never a model call, so the declared
@@ -845,6 +907,13 @@ export default defineBundle({
     // `decisions.checks`, which the `apply-checks` Step reads back.
     { name: "checks-runner", template_path: "agents/checks-runner.md", output_kind: "classifier", default_model: "fast" },
     { name: "code-analyzer", template_path: "agents/code-analyzer.md", output_kind: "nonreview", default_model: "balanced" },
+    // Fast-tier scout for the lean `simple` flow (same code-analyzer template).
+    // The cheap tier produces a context doc the planner reads instead of cold-
+    // reading the whole repo — the planner is the run's costliest agent, so a
+    // cheap pre-read pays for itself. medium/complex keep the balanced
+    // `code-analyzer` (the `enrich` stage); the flow picks the tier, since a
+    // single static default_model cannot be tier-by-flow.
+    { name: "code-analyzer-light", template_path: "agents/code-analyzer.md", output_kind: "nonreview", default_model: "fast" },
     {
       name: "architect",
       template_path: "agents/architect.md",
@@ -1018,6 +1087,9 @@ export default defineBundle({
     },
     "gate-classify": { kind: "gate", name: "gate-classify", phase: "context", message: gateClassifyMsg, valid_answers: classifyGateAnswers },
     enrich: { kind: "spawn", name: "enrich", phase: "context", agent: "code-analyzer" },
+    // Fast-tier repo scout for the simple flow — runs the cheap code-analyzer so
+    // the planner reads a context doc instead of cold-reading the repo.
+    "enrich-light": { kind: "spawn", name: "enrich-light", phase: "context", agent: "code-analyzer-light" },
     "context-verify": { kind: "spawn", name: "context-verify", phase: "context", agent: "context-doc-verifier" },
     architect: { kind: "spawn", name: "architect", phase: "context", agent: "architect" },
     plan: { kind: "spawn", name: "plan", phase: "planning", agent: "planner" },
@@ -1052,6 +1124,23 @@ export default defineBundle({
     "test-first": { kind: "spawn", name: "test-first", phase: "test_first", agent: "test" },
     "git-stash": { kind: "step", name: "git-stash", phase: "implementation", position: "positional", effects: [] },
     implement: { kind: "spawn", name: "implement", phase: "implementation", agent: "implementer" },
+    // Escalation round: the premium implementer takes over once the base one has
+    // stalled (two prior rounds blocked). The two `implement*` stages sit back to
+    // back and self-gate on the SAME predicate, so exactly one fires per round —
+    // the same shape the planner uses (`plan` vs `plan-deep`), but selected by
+    // the rework round rather than the flow.
+    "implement-escalated": { kind: "spawn", name: "implement-escalated", phase: "implementation", agent: "implementer-escalated" },
+    // Record the escalation as a decision the gate operator sees. Positional,
+    // right after the implement spawns and before the diff/review, so it reads
+    // the prior rounds' verdicts. No-op until escalation fires.
+    "note-escalation": {
+      kind: "step",
+      name: "note-escalation",
+      phase: "implementation",
+      position: "positional",
+      effects: [{ kind: "decisions.set", key: "implementer_escalated" }],
+      run: recordImplementerEscalation,
+    },
     "git-diff": {
       kind: "step",
       name: "git-diff",
@@ -1221,21 +1310,24 @@ export default defineBundle({
       "initialize", "classify", "classify-agent", "stack-to-bundle-state",
       "implement", "git-diff", "run-checks", "apply-checks", "finalize",
     ],
-    // Lean path for routine work: one planner, one implementer, ONE
-    // reviewer (review-light), acceptance, the final gate, finalize. No
-    // gate-classify, no plan-review/review fanouts, no enrich/architect —
-    // ~5 agents vs medium's ~10+. Shares the [initialize, classify,
-    // classify-agent] prefix with the other flows so the complexity switch
-    // lands here without misaligning step_index.
+    // Lean path for routine work: a fast-tier scout (enrich-light), one planner,
+    // one implementer, ONE reviewer (review-light), acceptance, the final gate,
+    // finalize. No gate-classify, no plan-review/review fanouts, no balanced
+    // enrich/architect — ~5 agents vs medium's ~10+. The scout runs before plan
+    // so the planner reads a context doc instead of cold-reading the repo.
+    // Shares the [initialize, classify, classify-agent] prefix with the other
+    // flows so the complexity switch lands here without misaligning step_index.
     simple: [
       "initialize", "classify", "classify-agent", "stack-to-bundle-state",
-      "plan", "implement", "git-diff", "run-checks", "apply-checks", "pre-review",
+      "enrich-light", "plan", "implement", "implement-escalated", "note-escalation",
+      "git-diff", "run-checks", "apply-checks", "pre-review",
       "review-light", "final-checks", "gate-final", "finish-summary", "finalize",
     ],
     medium: [
       "initialize", "classify", "classify-agent", "stack-to-bundle-state", "gate-classify",
       "enrich", "plan", "plan-review", "gate-plan",
-      "git-stash", "implement", "git-diff", "run-checks", "apply-checks", "pre-review", "review",
+      "git-stash", "implement", "implement-escalated", "note-escalation",
+      "git-diff", "run-checks", "apply-checks", "pre-review", "review",
       "adjudicate", "reconcile", "iterate", "final-checks",
       "gate-final", "finish-summary", "finalize",
     ],
@@ -1243,7 +1335,8 @@ export default defineBundle({
       "initialize", "classify", "classify-agent", "stack-to-bundle-state", "gate-classify",
       "enrich", "context-verify", "architect",
       "plan-deep", "plan-review-deep", "gate-plan",
-      "test-first", "git-stash", "implement", "git-diff", "run-checks", "apply-checks", "pre-review", "review-deep",
+      "test-first", "git-stash", "implement", "implement-escalated", "note-escalation",
+      "git-diff", "run-checks", "apply-checks", "pre-review", "review-deep",
       "adjudicate", "reconcile", "iterate", "sacred-tests",
       "final-checks", "gate-final", "finish-summary", "finalize",
     ],

@@ -92,21 +92,26 @@ describe("@loomfsm/bundle-code — loadBundle", () => {
       now,
     });
 
-    // 26 canonical agents: the prior 25 plus the deterministic `checks-runner`
-    // (whose spawn is routed to the checks executor, not a model). The prompt map
-    // keys by agent NAME, so the variants that reuse a base template still get
-    // their own entry.
-    assert.equal(registry.agents.size, 26);
-    // Every agent's `.md` is read off disk into the prompt map at load.
-    assert.equal(registry.prompts?.size, 26);
-    assert.ok((registry.prompts?.get("classifier")?.body.length ?? 0) > 0);
+    // 28 canonical agents: the prior 26 plus the fast-tier `code-analyzer-light`
+    // (the simple-flow scout) and the premium `implementer-escalated` (the
+    // escalation-round implementer). The prompt map keys by agent NAME, so the
+    // variants that reuse a base template still get their own entry.
+    assert.equal(registry.agents.size, 28);
+    // Every agent's `.md` is read off disk into the prompt map at load. The
+    // templates ship `system_prompt: body`, so the static instructions land in
+    // the cacheable system prompt and the rendered body is empty — the user
+    // message becomes just the spawn context.
+    assert.equal(registry.prompts?.size, 28);
+    assert.ok((registry.prompts?.get("classifier")?.system_prompt?.length ?? 0) > 0);
+    assert.equal(registry.prompts?.get("classifier")?.body, "");
     assert.equal(registry.flows.size, 4);
     assert.deepEqual(
       registry.flows.get("medium"),
       [
         "initialize", "classify", "classify-agent", "stack-to-bundle-state", "gate-classify",
         "enrich", "plan", "plan-review", "gate-plan",
-        "git-stash", "implement", "git-diff", "run-checks", "apply-checks", "pre-review", "review",
+        "git-stash", "implement", "implement-escalated", "note-escalation",
+        "git-diff", "run-checks", "apply-checks", "pre-review", "review",
         "adjudicate", "reconcile", "iterate", "final-checks",
         "gate-final", "finish-summary", "finalize",
       ],
@@ -283,8 +288,8 @@ describe("@loomfsm/bundle-code — agent templates", () => {
     }
   });
 
-  it("declares exactly the 26 canonical agents", () => {
-    assert.equal(codeBundle.agents.length, 26);
+  it("declares exactly the 28 canonical agents", () => {
+    assert.equal(codeBundle.agents.length, 28);
     const names = codeBundle.agents.map((a) => a.name).sort();
     // The three CC-harness trigger agents are NOT bundle agents.
     for (const excluded of ["fe-test-all-agent", "runtime-debug-agent", "test-all-agent"]) {
@@ -293,6 +298,10 @@ describe("@loomfsm/bundle-code — agent templates", () => {
     // The deterministic checks runner is a bundle agent (routed to the checks
     // executor, not a model).
     assert.ok(names.includes("checks-runner"));
+    // The per-tier scout + escalation-round implementer variants reuse a base
+    // template but get their own agent entry.
+    assert.ok(names.includes("code-analyzer-light"));
+    assert.ok(names.includes("implementer-escalated"));
   });
 
   it("maps each gate to its intended kernel role", () => {
@@ -782,6 +791,159 @@ describe("@loomfsm/bundle-code — review model scales with complexity", () => {
     assert.ok(codeBundle.flows["complex"]?.includes("plan-deep"));
     assert.ok(codeBundle.flows["medium"]?.includes("plan"));
     assert.ok(codeBundle.flows["simple"]?.includes("plan"));
+  });
+});
+
+// ============================================================================
+// simple-flow repo scout — a fast-tier code-analyzer runs before plan so the
+// planner reads a context doc instead of cold-reading the repo
+// ============================================================================
+
+describe("@loomfsm/bundle-code — simple-flow scout (enrich-light)", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  it("runs enrich-light before plan in the simple flow only, on the fast tier", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, now);
+    const registry = await loadBundle({
+      bundle: codeBundle,
+      bundle_source_dir: PKG_ROOT,
+      project_dir: projectDir,
+      providers: [shuttleStub()],
+      now,
+    });
+
+    const simple = registry.flows.get("simple") ?? [];
+    assert.ok(simple.includes("enrich-light"), "simple flow gains the scout");
+    assert.ok(
+      simple.indexOf("enrich-light") < simple.indexOf("plan"),
+      "the scout runs before the planner",
+    );
+    // The scout is the simple flow's only enrich — medium/complex keep the
+    // balanced `enrich`, and never run the fast variant.
+    assert.ok(!simple.includes("enrich"), "simple does not run the balanced enrich");
+    const medium = registry.flows.get("medium") ?? [];
+    const complex = registry.flows.get("complex") ?? [];
+    assert.ok(medium.includes("enrich") && !medium.includes("enrich-light"));
+    assert.ok(complex.includes("enrich") && !complex.includes("enrich-light"));
+
+    // The whole point of the pin: the scout resolves to the FAST model (haiku)
+    // while the medium/complex code-analyzer stays balanced (sonnet).
+    const state = makeClassifyState();
+    assert.equal(resolveSpawnModel(registry, "code-analyzer-light", "context", state), "haiku");
+    assert.equal(resolveSpawnModel(registry, "code-analyzer", "context", state), "sonnet");
+  });
+});
+
+// ============================================================================
+// implementer tier escalation — after TWO blocking implementation rounds the
+// third round runs the premium `implementer-escalated`, recorded as a decision
+// ============================================================================
+
+describe("@loomfsm/bundle-code — implementer tier escalation", () => {
+  let projectDir: string;
+  beforeEach(() => {
+    projectDir = freshProject();
+  });
+  afterEach(() => cleanup(projectDir));
+
+  interface VerdictRow {
+    phase: string;
+    agent: string;
+    iteration: number;
+    blocking_issues: number;
+  }
+  function blockingRound(iteration: number): VerdictRow {
+    return { phase: "implementation", agent: "logic-reviewer", iteration, blocking_issues: 2 };
+  }
+  function cleanRound(iteration: number): VerdictRow {
+    return { phase: "implementation", agent: "logic-reviewer", iteration, blocking_issues: 0 };
+  }
+  // Whether an implementer variant's applies_to admits it for the given verdicts.
+  function implApplies(name: string, agent_verdicts: VerdictRow[]): boolean {
+    const a = codeBundle.agents.find((x) => x.name === name);
+    assert.ok(a?.applies_to !== undefined, `${name} must declare applies_to`);
+    return a.applies_to({ decisions: {}, agent_verdicts } as unknown as BundleStateView);
+  }
+
+  it("runs the base implementer until two rounds have blocked, then the escalated one", () => {
+    // Round 1 (no prior verdicts) and after one blocking round: base runs.
+    assert.equal(implApplies("implementer", []), true, "round 1 runs the base implementer");
+    assert.equal(implApplies("implementer-escalated", []), false);
+    assert.equal(implApplies("implementer", [blockingRound(1)]), true, "round 2 still the base");
+    assert.equal(implApplies("implementer-escalated", [blockingRound(1)]), false);
+
+    // After TWO blocking rounds, the third round escalates: base self-skips,
+    // the escalated implementer runs.
+    const twoBlocked = [blockingRound(1), blockingRound(2)];
+    assert.equal(implApplies("implementer", twoBlocked), false, "base self-skips on round 3");
+    assert.equal(implApplies("implementer-escalated", twoBlocked), true, "escalated runs on round 3");
+  });
+
+  it("escalates only on TWO blocking rounds — a non-blocking round does not count", () => {
+    // Round 1 blocked, round 2 was clean (e.g. an acceptance-only failure) →
+    // only ONE blocking round → no escalation yet.
+    const oneBlocked = [blockingRound(1), cleanRound(2)];
+    assert.equal(implApplies("implementer", oneBlocked), true);
+    assert.equal(implApplies("implementer-escalated", oneBlocked), false);
+  });
+
+  it("ignores planning-phase verdicts when counting blocking rounds", () => {
+    const plannerBlocks = [
+      { phase: "planning", agent: "logic-reviewer", iteration: 1, blocking_issues: 9 },
+      { phase: "planning", agent: "logic-reviewer", iteration: 2, blocking_issues: 9 },
+    ];
+    assert.equal(implApplies("implementer-escalated", plannerBlocks), false, "planning blockers don't escalate");
+  });
+
+  it("escalates to the premium tier (opus), saturating — and to a DISTINCT agent name", async () => {
+    const now = captureNow();
+    await installManifest(projectDir, now);
+    const registry = await loadBundle({
+      bundle: codeBundle,
+      bundle_source_dir: PKG_ROOT,
+      project_dir: projectDir,
+      providers: [shuttleStub()],
+      now,
+    });
+    const state = makeClassifyState();
+    // The escalated implementer is premium → opus. premium is the top tier, so
+    // an already-premium implementer escalates to premium (saturates).
+    assert.equal(resolveSpawnModel(registry, "implementer", "implementation", state), "opus");
+    assert.equal(resolveSpawnModel(registry, "implementer-escalated", "implementation", state), "opus");
+    // The two `implement*` stages sit back to back so exactly one fires per round.
+    for (const flow of ["simple", "medium", "complex"]) {
+      const steps = registry.flows.get(flow) ?? [];
+      const i = steps.indexOf("implement");
+      assert.ok(i >= 0 && steps[i + 1] === "implement-escalated", `${flow}: escalated implement follows base`);
+    }
+  });
+
+  it("records the escalation as a decision exactly once (the operator-facing note)", async () => {
+    const stage = codeBundle.stages["note-escalation"];
+    assert.ok(stage?.kind === "step" && stage.run !== undefined, "note-escalation is a step with a run body");
+    const run = stage.run;
+
+    // A round with two prior blocking rounds records implementer_escalated=true.
+    const set: Record<string, unknown> = {};
+    const ctx = { tx: { set_decision: (k: string, v: unknown) => { set[k] = v; } } } as unknown as StageContext;
+    const escalated = {
+      decisions: {},
+      agent_verdicts: [blockingRound(1), blockingRound(2)],
+    } as unknown as BundleStateView;
+    await run(escalated, ctx);
+    assert.equal(set["implementer_escalated"], true, "escalation recorded");
+
+    // A normal round does NOT touch the decision (keeps the block clean).
+    const set2: Record<string, unknown> = {};
+    const ctx2 = { tx: { set_decision: (k: string, v: unknown) => { set2[k] = v; } } } as unknown as StageContext;
+    const normal = { decisions: {}, agent_verdicts: [blockingRound(1)] } as unknown as BundleStateView;
+    await run(normal, ctx2);
+    assert.equal("implementer_escalated" in set2, false, "no decision set on a normal round");
   });
 });
 

@@ -1,3 +1,6 @@
+---
+system_prompt: body
+---
 # Agent: Planner
 
 ## Role

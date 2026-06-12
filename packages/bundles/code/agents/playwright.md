@@ -1,3 +1,6 @@
+---
+system_prompt: body
+---
 # Agent: Playwright E2E Test Agent
 
 ## Role

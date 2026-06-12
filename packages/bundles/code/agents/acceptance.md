@@ -1,3 +1,6 @@
+---
+system_prompt: body
+---
 # Agent: Acceptance Agent
 
 ## Role

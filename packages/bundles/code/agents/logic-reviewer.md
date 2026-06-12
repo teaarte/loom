@@ -1,3 +1,6 @@
+---
+system_prompt: body
+---
 # Agent: Logic Reviewer
 
 ## Role

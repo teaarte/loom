@@ -1,3 +1,6 @@
+---
+system_prompt: body
+---
 # Checks runner (deterministic — not a model)
 
 This agent is a placeholder template. Its spawn is **not** dispatched to a model:

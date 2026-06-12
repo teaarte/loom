@@ -23,5 +23,8 @@ export type AgentExecution = "single-shot" | "agentic" | "checks";
 
 export const CODE_BUNDLE_AGENT_EXECUTION: Readonly<Record<string, AgentExecution>> = {
   implementer: "agentic",
+  // The escalation-round implementer edits files exactly like the base one, so
+  // it needs the same worktree harness + empty-diff guard off Claude Code.
+  "implementer-escalated": "agentic",
   "checks-runner": "checks",
 };

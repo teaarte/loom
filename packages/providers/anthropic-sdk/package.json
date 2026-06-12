@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/provider-anthropic-sdk",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "type": "module",
   "description": "Direct Anthropic provider for loom — runs agents through the Anthropic SDK with prompt caching and idempotent spawns.",
   "license": "Apache-2.0",

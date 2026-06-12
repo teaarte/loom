@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/cli",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "type": "module",
   "description": "The loom command-line installer — register the MCP server and authorize projects.",
   "license": "Apache-2.0",

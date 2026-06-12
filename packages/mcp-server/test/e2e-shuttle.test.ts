@@ -686,10 +686,15 @@ async function drive(h: Harness, task: string, uuid: string, opts: DriveOpts): P
       if (review) out.reviewFanoutAgents = agents;
       input = {
         type: "agents-results",
-        results: resp.spawns.map((s, idx) => ({
+        results: resp.spawns.map((s) => ({
           agent_run_id: s.agent_run_id,
+          // Block the logic reviewer on EVERY round it runs (the first full
+          // panel AND the differentiated re-review that re-runs only the
+          // reviewer that blocked) so the blocker PERSISTS — a one-shot blocker
+          // would simply be cleared by the rework loop, which is the correct
+          // outcome, not the "surviving blocker" this test means to exercise.
           agent_output:
-            opts.blockReviewFanout === true && review && idx === 0
+            opts.blockReviewFanout === true && s.agent === "logic-reviewer"
               ? blockerOutput(s.agent)
               : CANONICAL_AGENT_OUTPUT,
         })),
@@ -886,15 +891,17 @@ describe("first-run hardening — end to end", () => {
 });
 
 // ============================================================================
-// Safety floor is LIVE — a real full-autonomous drive is vetoed end-to-end.
+// Safety floor is LIVE — a failing deterministic check refuses a silent
+// full-autonomous accept, end-to-end.
 //
-// Before bundle invariants were threaded into the commit check, the floor was
-// dormant: a `final: auto` gate auto-approved with no lint/test/typecheck veto.
-// Now the FSM tick runs the active bundle's invariants, so a real drive under
-// full-autonomy is REFUSED at the final gate (the code bundle ships the floor
-// but no deterministic writer for its status fields, so the floor finds them
-// missing and rolls the auto-approve back). The honest-baseline flows above
-// stay green — proving the wiring vetoes only where it should.
+// The FSM tick runs the active bundle's invariants, and the bundle now ships a
+// deterministic writer for the floor's status fields (the checks runner +
+// apply-checks). A FAILED check writes a `fail` status AND raises a blocking
+// finding, so a `final: auto` drive cannot silently auto-approve past it — it is
+// refused with INVARIANT_VIOLATION instead of reaching an accepted verdict. The
+// honest-baseline flows above (clean / skipped checks) stay green, proving the
+// floor refuses only where it should and never blocks a project that configured
+// no checks.
 // ============================================================================
 
 interface TerminalOut {
@@ -910,7 +917,7 @@ async function driveCapturingTerminal(
   h: Harness,
   task: string,
   uuid: string,
-  opts: { policyPreset?: string; gatePolicies?: Record<string, string>; implementerFiles?: string[] },
+  opts: { policyPreset?: string; gatePolicies?: Record<string, string>; implementerFiles?: string[]; failCheck?: boolean },
 ): Promise<TerminalOut> {
   const deps = { resolveRegistry: assembleRegistry, allowlistPath: h.allowlistPath };
   const run = createRunTaskTool(deps);
@@ -933,10 +940,20 @@ async function driveCapturingTerminal(
     let input: Parameters<ReturnType<typeof createContinueTaskTool>>[0]["input"];
     if (resp.status === "spawn-agent") {
       const wantFiles = resp.agent === "implementer" && opts.implementerFiles !== undefined;
+      // A failing deterministic-check envelope, echoed for the checks runner so
+      // apply-checks records a real `fail` status + a blocking finding (the
+      // executor's envelope shape the structured-output merge lands in
+      // `decisions.checks`).
+      const failOutput =
+        opts.failCheck === true && resp.agent === "checks-runner"
+          ? JSON.stringify({
+              checks: [{ name: "test", status: "fail", exit_code: 1, output_head: "1 failing test", command: "node --test" }],
+            })
+          : undefined;
       input = {
         type: "agent-result",
         agent_run_id: resp.agent_run_id,
-        agent_output: CANONICAL_AGENT_OUTPUT,
+        agent_output: failOutput ?? CANONICAL_AGENT_OUTPUT,
         ...(wantFiles ? { files_modified: opts.implementerFiles } : {}),
       };
     } else if (resp.status === "spawn-agents-parallel") {
@@ -956,34 +973,41 @@ async function driveCapturingTerminal(
 }
 
 describe("safety floor — live end to end", () => {
-  it("a full-autonomous drive is VETOED at the final gate (the floor now runs)", async () => {
+  it("a full-autonomous drive is VETOED when a deterministic check fails (the floor now runs)", async () => {
     _resetRegistryCacheForTest();
     const h = freshHarness("floor-auto");
     try {
-      // Real source change so the empty-diff no-op park (INV_CODE_105) does not
-      // also fire — the refusal below is specifically the deterministic floor
-      // finding lint/test/typecheck unproven.
+      // The implementer reports a real file (so the empty-diff no-op park does
+      // not pre-empt this), and the checks runner reports a FAILING check —
+      // which writes a `fail` floor status and raises a blocking finding. Under
+      // full autonomy the run must refuse to silently accept it.
       const out = await driveCapturingTerminal(h, "implement the feature", "floor-auto-1", {
         policyPreset: "full-autonomous",
         implementerFiles: ["src/feature.ts"],
+        failCheck: true,
       });
-      assert.equal(out.status, "error", "full-autonomy must not silently complete past the floor");
-      assert.equal(out.code, "INVARIANT_VIOLATION", "the safety floor rolls the auto-approve back");
+      assert.equal(out.status, "error", "full-autonomy must not silently complete past a failed check");
+      assert.equal(out.code, "INVARIANT_VIOLATION", "the safety floor / blocker rolls the auto-approve back");
       assert.notEqual(out.verdict, "accepted", "the run must not reach an accepted verdict");
     } finally {
       h.dispose();
     }
   });
 
-  it("the same task under on-blockers completes accepted (the floor stays dormant)", async () => {
+  it("the same full-autonomous task completes when the checks are clean (the floor passes skipped checks)", async () => {
     _resetRegistryCacheForTest();
-    const h = freshHarness("floor-onblockers");
+    const h = freshHarness("floor-clean");
     try {
-      const out = await driveCapturingTerminal(h, "implement the feature", "floor-ob-1", {
-        gatePolicies: { classify: "on-blockers", plan: "on-blockers", final: "on-blockers" },
+      // Same full-autonomy posture, but NO failing check — the checks come back
+      // skipped (nothing configured in the harness), which the floor treats as
+      // passing, so the run completes. This is the crisp contrast to the veto
+      // above: only the check outcome differs, proving the floor refuses a
+      // failure without blocking a project that asked for no checks.
+      const out = await driveCapturingTerminal(h, "implement the feature", "floor-clean-1", {
+        policyPreset: "full-autonomous",
         implementerFiles: ["src/feature.ts"],
       });
-      assert.equal(out.status, "complete", "the honest baseline completes a clean run");
+      assert.equal(out.status, "complete", "a clean full-autonomous run completes");
       assert.equal(out.verdict, "accepted");
     } finally {
       h.dispose();

@@ -20,6 +20,13 @@ SQLite file you own.
 
 [**loomfsm.dev**](https://loomfsm.dev) · [Quickstart](https://loomfsm.dev/docs/) · [Why loom](https://loomfsm.dev/why/) · [Blog](https://loomfsm.dev/blog/) · [Architecture](ARCHITECTURE.md) · [Whitepaper](WHITEPAPER.md)
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/dashboard-dark.png">
+  <img src="assets/dashboard-light.png" alt="The loom dashboard: a task parked on its final gate — one open security blocker with file:line, Accept / Reject / Auto-apply controls, and the exact agent output being approved" width="840">
+</picture>
+
+*A task parked on its final gate: the security reviewer found a blocker — the run waits for **you**.*
+
 </div>
 
 ---

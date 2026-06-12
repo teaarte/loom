@@ -190,6 +190,31 @@ describe("materializeTemplates", () => {
     });
   });
 
+  it("promotes the body to system_prompt and blanks the body for `system_prompt: body`", () => {
+    const body = "# Agent: Reviewer\n\nReview for logic. Be precise. Use {{not-a-runtime-token}} verbatim.\n";
+    writeTemplate(bundleDir, "reviewer", `---\nsystem_prompt: body\n---\n${body}`);
+
+    const reviewer = agent("reviewer");
+    const t = materializeTemplates(makeBundle([reviewer]), bundleDir).get("reviewer");
+
+    assert.ok(t !== undefined);
+    // The whole body becomes the (cacheable) system prefix, byte-identical.
+    assert.equal(t.system_prompt, body);
+    // The rendered body is empty — the user message will be just the context.
+    assert.equal(t.body, "");
+    // The agent is back-filled so every spawn path carries the system prompt
+    // without re-reading the file.
+    assert.equal(reviewer.system_prompt, body);
+  });
+
+  it("does NOT clobber an agent's inline system_prompt with the back-fill", () => {
+    writeTemplate(bundleDir, "x", "# X\nplain body\n");
+    const x: Agent = { name: "x", template_path: "agents/x.md", output_kind: "nonreview", system_prompt: "declared inline" };
+    materializeTemplates(makeBundle([x]), bundleDir);
+    // A plain body declares no system prompt → the inline one stands.
+    assert.equal(x.system_prompt, "declared inline");
+  });
+
   it("throws TEMPLATE_NOT_FOUND when an agent template file is missing", () => {
     // No file written for 'ghost'.
     assert.throws(
@@ -267,6 +292,28 @@ describe("buildPrompt — pure render", () => {
       registryWith(new Map([["x", { agent: "x", body: "[{{task_short}}]" }]])),
     );
     assert.ok(out.startsWith("[]"));
+  });
+
+  it("renders a split template's user message as just the spawn context (deterministic system+user pair)", () => {
+    // The split: the static body rides the system_prompt; the user message is
+    // only the spawn context. Built off a materialized `system_prompt: body`
+    // template so the (system, user) pair is exactly what a real spawn carries.
+    const body = "# Agent\n\nDo the static thing. Follow the rules.\n";
+    const template: RenderedTemplate = { agent: "x", body: "", system_prompt: body };
+    const reg = registryWith(new Map([["x", template]]));
+    const state = stateStub({ task: "ship X" });
+
+    const userA = buildPrompt(state, agent("x"), reg);
+    const userB = buildPrompt(state, agent("x"), reg);
+    // Same inputs → byte-identical user message AND the system half is the
+    // stable body, so the (system, user) pair is deterministic.
+    assert.equal(userA, userB);
+    assert.equal(template.system_prompt, body);
+    // The user message leads with the spawn context (no leading blank lines),
+    // carries the task, and does NOT repeat the static body.
+    assert.ok(userA.startsWith("## Spawn context"), "user message is just the spawn context");
+    assert.ok(userA.includes("ship X"));
+    assert.ok(!userA.includes("Do the static thing."), "the body rode the system prompt, not the user turn");
   });
 
   it("falls back to the deterministic stub when no materialized template exists", () => {

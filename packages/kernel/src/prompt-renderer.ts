@@ -21,7 +21,11 @@
 //
 // `system_prompt` is NOT inlined into the rendered body: the spawn
 // intent carries it as a separate, provider-cacheable prefix, so
-// inlining it here would double it.
+// inlining it here would double it. A template can move its WHOLE static
+// body into that prefix with the `system_prompt: body` frontmatter
+// directive — then the body renders empty and the user message is just
+// the spawn context, so the static instructions a spawn re-reads every
+// time stop being re-sent on the (uncacheable) per-turn user content.
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -77,14 +81,41 @@ function materializeOne(agent: Agent, bundleSourceDir: string): RenderedTemplate
   const template: RenderedTemplate = { agent: agent.name, body };
   if (frontmatter !== null) {
     if (frontmatter.system_prompt !== undefined) {
-      template.system_prompt = frontmatter.system_prompt;
+      if (frontmatter.system_prompt === SYSTEM_PROMPT_FROM_BODY) {
+        // `system_prompt: body` — the whole template body IS the (static,
+        // provider-cacheable) system prefix; the user message is then just the
+        // rendered spawn context. The body stays byte-identical in the file
+        // (only a frontmatter header was added) so this is a content MOVE, not a
+        // rewrite. A multi-line body can't ride a single-line scalar, so the
+        // directive is how a template opts the body in.
+        template.system_prompt = body;
+        template.body = "";
+      } else {
+        // An explicit inline string is used verbatim.
+        template.system_prompt = frontmatter.system_prompt;
+      }
     }
     if (frontmatter.context_budget !== undefined) {
       template.context_budget = frontmatter.context_budget;
     }
   }
+  // Back-fill the agent's system prompt from its template so every spawn path
+  // (the SpawnStage/FanoutStage interpreters, the resume re-shuttle, the
+  // recover path — all of which shape the intent from `Agent.system_prompt`)
+  // carries it without re-reading the file. Only set it when the template
+  // declared one AND the agent did not inline its own: a plain-body template —
+  // every other bundle's templates today — leaves `Agent.system_prompt`
+  // exactly as it was, so the rendered prompt is unchanged for them.
+  if (template.system_prompt !== undefined && agent.system_prompt === undefined) {
+    agent.system_prompt = template.system_prompt;
+  }
   return template;
 }
+
+// The reserved `system_prompt` frontmatter value that promotes a template's
+// body to its system prompt (see materializeOne). A real inline system prompt
+// is never this single word, so the sentinel cannot collide with a literal one.
+const SYSTEM_PROMPT_FROM_BODY = "body";
 
 interface ParsedFrontmatter {
   system_prompt?: string;
@@ -93,8 +124,7 @@ interface ParsedFrontmatter {
 
 // A frontmatter block is a leading `---` line, a block of declarations,
 // and a closing `---` line. A file without that exact lead-in is treated
-// as a plain body and passes through byte-for-byte (every shipped
-// template today is a plain body).
+// as a plain body and passes through byte-for-byte.
 function splitFrontmatter(raw: string): {
   frontmatter: ParsedFrontmatter | null;
   body: string;
@@ -303,10 +333,17 @@ function appendSpawnContext(
   agent: Agent,
   registry: Registry,
 ): string {
+  const block = buildSpawnContext(state, agent, registry);
+  // A template whose body moved to the system prompt (`system_prompt: body`)
+  // renders an empty body — the user message IS the spawn context, with no
+  // leading blank lines.
+  if (body === "") {
+    return block;
+  }
   if (/^##[ \t]+Spawn context\b/m.test(body)) {
     return body;
   }
-  return `${body}\n\n${buildSpawnContext(state, agent, registry)}`;
+  return `${body}\n\n${block}`;
 }
 
 // Assemble the `## Spawn context` block. Pure, synchronous, and byte-stable

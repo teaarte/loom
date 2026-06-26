@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/repo-memory",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "type": "module",
   "description": "Persistent, model-agnostic structural memory of a code repository — a delta-refreshed markdown brief (with file:line anchors) that warm-starts planning agents so they cite structure instead of re-reading the whole tree each run. Ambient transport, outside the kernel's replay graph; the kernel never depends on it.",
   "license": "Apache-2.0",

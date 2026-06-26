@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/provider-openrouter",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "type": "module",
   "description": "Multi-model routing provider for loom — runs agents through OpenRouter's OpenAI-compatible API.",
   "license": "Apache-2.0",

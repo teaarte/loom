@@ -1,6 +1,6 @@
 {
   "name": "@loomfsm/kernel",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "type": "module",
   "description": "Generic finite-state-machine kernel for multi-agent LLM workflows — atomic state, replay-deterministic, zero runtime dependencies.",
   "license": "Apache-2.0",

@@ -46,6 +46,7 @@ const PUBLISHABLE = [
   "packages/kernel",
   "packages/loader",
   "packages/transport-types",
+  "packages/repo-memory",
   "packages/driver",
   "packages/bundles/code",
   "packages/config",

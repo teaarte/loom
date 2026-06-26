@@ -322,6 +322,29 @@ describe("createSandboxedExecutor — seeds static files into the sandbox", () =
     }
   });
 
+  it("copies a single FILE seed to its destination path (not as a directory)", async () => {
+    const projectDir = freshGitProject();
+    const briefSrc = mkdtempSync(join(tmpdir(), "loom-brief-src-"));
+    writeFileSync(join(briefSrc, "repo-brief.md"), "# brief\n- Foo — src/a.ts:1\n", "utf8");
+    try {
+      let sawBrief = "";
+      const executor = createSandboxedExecutor({
+        project_dir: projectDir,
+        sandbox_seed: [{ src: join(briefSrc, "repo-brief.md"), rel: ".loom/work/repo-brief.md" }],
+        runSpawn: async (_i, dir) => {
+          // The brief lands as a FILE at the destination path, readable by the spawn.
+          sawBrief = readFileSync(join(dir, ".loom", "work", "repo-brief.md"), "utf8");
+          return "ok";
+        },
+      });
+      await executor.execute(intent());
+      assert.equal(sawBrief, "# brief\n- Foo — src/a.ts:1\n");
+    } finally {
+      cleanup(projectDir);
+      rmSync(briefSrc, { recursive: true, force: true });
+    }
+  });
+
   it("does not seed an un-isolated (non-git) project — never writes into the real tree", async () => {
     const projectDir = mkdtempSync(join(tmpdir(), "loom-wt-nogit-seed-"));
     const refsSrc = mkdtempSync(join(tmpdir(), "loom-refs-src2-"));

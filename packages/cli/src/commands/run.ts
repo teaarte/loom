@@ -41,6 +41,7 @@ import {
 } from "../lib/container.js";
 import { buildDispatchExecutor, preflightDispatch } from "../lib/dispatch.js";
 import { claudeAvailable, dockerAvailableDefault } from "../lib/probes.js";
+import { repoBriefSeeds } from "../lib/repo-brief-seed.js";
 import { resolveSpawnCap, resolveSpawnTimeouts } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
 
@@ -272,7 +273,14 @@ async function drive_(
         timeouts: resolveSpawnTimeouts(cfgEnv),
         claudeAvailable: () => available(bin),
         resolveAgentExecution: (agent) => execMap[agent] ?? "single-shot",
-        ...(refsDir !== undefined ? { sandbox_seed: () => [{ src: refsDir, rel: ".loom/work/refs" }] } : {}),
+        // Seed the bundle's knowledge refs (when present) AND the persistent
+        // repo-brief (when `LOOM_REPO_BRIEF` is on) into the sandbox. The brief
+        // is built/delta-refreshed against the real project root ONCE here per
+        // drive; both degrade to nothing when unavailable.
+        sandbox_seed: async () => [
+          ...(refsDir !== undefined ? [{ src: refsDir, rel: ".loom/work/refs" }] : []),
+          ...(await repoBriefSeeds(target, cfgEnv, (message) => env.err(`loom run: ${message}`))),
+        ],
         onNotice: (message) => env.err(`loom run: ${message}`),
         onUsage: (usage) => env.err(`loom run: ${formatUsage(usage)}`),
         // The cancel signal reaches each backend so a Ctrl-C / stop tears down

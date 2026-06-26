@@ -32,6 +32,7 @@ import { effectiveEnv } from "../lib/config.js";
 import { containerModeFrom, resolveContainerPlan, type ContainerMode, type ContainerPlan } from "../lib/container.js";
 import { buildDispatchExecutor } from "../lib/dispatch.js";
 import { reloadableNotifier, resolveNotifier } from "../lib/notify.js";
+import { repoBriefSeeds } from "../lib/repo-brief-seed.js";
 import { claudeAvailable, dockerAvailableDefault } from "../lib/probes.js";
 import { resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
@@ -410,7 +411,13 @@ async function defaultServeFactory(
         resolveAgentExecution: async (agent) => agentExecutionFor(await bundleNameP)[agent] ?? "single-shot",
         sandbox_seed: async () => {
           const dir = bundleKnowledgeRefsDir(await bundleNameP);
-          return dir !== undefined ? [{ src: dir, rel: ".loom/work/refs" }] : [];
+          // Bundle knowledge refs (when present) + the persistent repo-brief
+          // (when `LOOM_REPO_BRIEF` is on), refreshed once per drive against the
+          // real project root; both degrade to nothing when unavailable.
+          return [
+            ...(dir !== undefined ? [{ src: dir, rel: ".loom/work/refs" }] : []),
+            ...(await repoBriefSeeds(projectDir, cfgEnv, ctx.onNotice)),
+          ];
         },
         onNotice: ctx.onNotice,
         onUsage: ctx.onUsage,

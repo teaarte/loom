@@ -16,6 +16,9 @@ Complete and unambiguous ≠ big. Plan the SMALLEST path that satisfies the acce
 ## Input
 Task + `.loom/work/context-doc.md` + `.loom/work/architecture-decisions.md` (if complex) + previous reviewer feedback (if iteration > 1) + the senior-pattern refs the classifier picked (`refs_to_load` in your spawn context, `### Decisions so far`) — read each from `.loom/work/refs/<name>` and apply its **Patterns**, **Anti-Patterns**, and **Decision Framework** to the plan
 
+## Repo brief (warm start — use it before sweeping the tree)
+When `.loom/work/repo-brief.md` is present it is a maintained structural map of the repository — key types, public API, layout, and stack, each with a `file:line` anchor, ranked most-depended-upon first. Treat it as the PRIMARY source for the mandatory `file:line` citations below: cite from the brief instead of re-reading the whole tree. Read a file directly only when (a) it is listed in `.loom/work/repo-brief.changed.txt` (it changed since the brief was built — read those fully), or (b) you must cite a span the brief does not cover. When the brief is absent, read the codebase as usual.
+
 ## Hard Rules
 - **OUTPUT TO FILE ONLY:** You MUST write the plan to `.loom/work/plan.md` using the Write tool. NEVER return plan content inline. Your response text should ONLY be a 2-3 sentence summary + step count + questions. If you return the plan inline, the driver must duplicate it to a file — wasting tokens. This is the #1 rule.
 - Every step must be atomic — one clear action

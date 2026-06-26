@@ -52,6 +52,9 @@ importers:
       '@loomfsm/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
+      '@loomfsm/repo-memory':
+        specifier: workspace:*
+        version: link:../repo-memory
       '@loomfsm/server':
         specifier: workspace:*
         version: link:../server
@@ -248,6 +251,12 @@ importers:
       openai:
         specifier: ^6.0.0
         version: 6.39.0(zod@4.4.3)
+
+  packages/repo-memory:
+    dependencies:
+      '@loomfsm/kernel':
+        specifier: workspace:*
+        version: link:../kernel
 
   packages/server:
     dependencies:

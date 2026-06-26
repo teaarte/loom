@@ -1,14 +1,11 @@
 {
-  "name": "@loomfsm/cli",
+  "name": "@loomfsm/repo-memory",
   "version": "0.3.8",
   "type": "module",
-  "description": "The loom command-line installer — register the MCP server and authorize projects.",
+  "description": "Persistent, model-agnostic structural memory of a code repository — a delta-refreshed markdown brief (with file:line anchors) that warm-starts planning agents so they cite structure instead of re-reading the whole tree each run. Ambient transport, outside the kernel's replay graph; the kernel never depends on it.",
   "license": "Apache-2.0",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
-  "bin": {
-    "loom": "./dist/src/bin/loom.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
@@ -26,21 +23,7 @@
     "test": "tsc && node --experimental-sqlite --no-warnings --test dist/test/*.js"
   },
   "dependencies": {
-    "@loomfsm/config": "workspace:*",
-    "@loomfsm/daemon": "workspace:*",
-    "@loomfsm/driver": "workspace:*",
-    "@loomfsm/kernel": "workspace:*",
-    "@loomfsm/mcp-server": "workspace:*",
-    "@loomfsm/repo-memory": "workspace:*",
-    "@loomfsm/server": "workspace:*"
-  },
-  "devDependencies": {
-    "@loomfsm/loader": "workspace:*"
-  },
-  "optionalDependencies": {
-    "@loomfsm/provider-anthropic-sdk": "workspace:*",
-    "@loomfsm/provider-ollama": "workspace:*",
-    "@loomfsm/provider-openrouter": "workspace:*"
+    "@loomfsm/kernel": "workspace:*"
   },
   "publishConfig": {
     "access": "public"
@@ -49,7 +32,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/teaarte/loom.git",
-    "directory": "packages/cli"
+    "directory": "packages/repo-memory"
   },
   "bugs": {
     "url": "https://github.com/teaarte/loom/issues"
@@ -59,12 +42,11 @@
     "agents",
     "ai-agents",
     "orchestration",
-    "human-in-the-loop",
-    "audit-trail",
-    "state-machine",
-    "durable-execution",
-    "cli",
-    "mcp"
+    "code-analysis",
+    "repository-map",
+    "context",
+    "prompt-engineering",
+    "token-optimization"
   ],
   "engines": {
     "node": ">=22"

@@ -20,8 +20,8 @@
 //
 // Ambient runtime: this is transport OUTSIDE the kernel's replay graph.
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import type { ProviderShuttleIntent } from "@loomfsm/kernel";
 
@@ -54,7 +54,15 @@ function seedSandbox(
     try {
       if (!existsSync(src)) continue;
       const dest = join(dir, rel);
-      mkdirSync(dest, { recursive: true });
+      // A directory source seeds a tree (the bundle's knowledge refs); a FILE
+      // source seeds a single file (e.g. the per-project repo-brief). For a
+      // file, `dest` is the file path — create its PARENT, not `dest` itself, or
+      // the file path would be made a directory and the copy nest beneath it.
+      if (statSync(src).isDirectory()) {
+        mkdirSync(dest, { recursive: true });
+      } else {
+        mkdirSync(dirname(dest), { recursive: true });
+      }
       cpSync(src, dest, { recursive: true });
     } catch (e) {
       onNotice?.(`could not seed '${rel}' into the sandbox: ${e instanceof Error ? e.message : String(e)}`);

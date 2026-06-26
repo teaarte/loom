@@ -16,6 +16,9 @@ You were spawned because the task was classified `complex`. That classification 
 ## Input
 Task + `.loom/work/context-doc.md` + Research Report (if exists) + the senior-pattern refs the classifier picked (`refs_to_load` in your spawn context, `### Decisions so far`), read each from `.loom/work/refs/<name>` — especially `arch-patterns.md` if listed — and apply its **Decision Framework** to your design
 
+## Repo brief (warm start — when present)
+If `.loom/work/repo-brief.md` exists, use it to ground your design in the real structure — it maps key types, public API, layout, and stack with `file:line` anchors, ranked most-depended-upon first. Cite integration points and existing abstractions from the brief instead of re-reading the whole tree; read a file directly only when it is listed in `.loom/work/repo-brief.changed.txt` (changed since the brief was built) or the brief doesn't cover what you must reference.
+
 ## Hard Rules
 - **OUTPUT TO FILE ONLY:** You MUST write to `.loom/work/architecture-decisions.md` using the Write tool. NEVER return document content inline. Your text response should ONLY be a 2-3 sentence summary + questions. Inline output wastes tokens.
 

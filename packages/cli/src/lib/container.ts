@@ -128,11 +128,20 @@ export function resolveContainerPlan(args: ResolvePlanArgs): ContainerPlan {
 // Per-spawn usage → a one-line audit string. Shared so the cost figure reads
 // identically across `run` / `daemon` / `serve` log sinks.
 export function formatUsage(usage: {
+  agent?: string;
+  model?: string;
   tokens?: { in: number; out: number; cached?: number; cache_write?: number };
   cost_usd?: number;
   num_turns?: number;
 }): string {
   const parts: string[] = [];
+  // Lead with the agent (+model) so a per-spawn line is attributable — e.g. the
+  // dogfood can isolate the PLANNER's cache-write / turns / output, the metrics
+  // that actually move spend, rather than reading an anonymous total.
+  const who =
+    usage.agent !== undefined
+      ? `${usage.agent}${usage.model !== undefined ? ` (${usage.model})` : ""} — `
+      : "";
   if (usage.cost_usd !== undefined) parts.push(`cost $${usage.cost_usd.toFixed(4)}`);
   if (usage.tokens !== undefined) {
     const { in: i, out, cached, cache_write } = usage.tokens;
@@ -143,7 +152,7 @@ export function formatUsage(usage: {
     );
   }
   if (usage.num_turns !== undefined) parts.push(`${usage.num_turns} turns`);
-  return parts.length > 0 ? `spawn usage — ${parts.join(", ")}` : "spawn usage — (none reported)";
+  return parts.length > 0 ? `spawn usage — ${who}${parts.join(", ")}` : "spawn usage — (none reported)";
 }
 
 // Drive-level usage roll-up → a one-line summary. The whole-task counterpart of

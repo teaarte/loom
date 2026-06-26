@@ -34,6 +34,7 @@ import { effectiveEnv } from "../lib/config.js";
 import { containerModeFrom, resolveContainerPlan, type ContainerMode } from "../lib/container.js";
 import { buildDispatchExecutor, preflightDispatch } from "../lib/dispatch.js";
 import { resolveNotifier } from "../lib/notify.js";
+import { repoBriefSeeds } from "../lib/repo-brief-seed.js";
 import { claudeAvailable, dockerAvailableDefault } from "../lib/probes.js";
 import { resolveSpawnCap, resolveSpawnTimeouts, resolveSupervisionKnobs } from "../lib/resilience.js";
 import type { CliEnv } from "../lib/env.js";
@@ -352,7 +353,13 @@ async function defaultDriveFactory(
         timeouts,
         claudeAvailable: () => available(bin),
         resolveAgentExecution: (agent) => execMap[agent] ?? "single-shot",
-        ...(refsDir !== undefined ? { sandbox_seed: () => [{ src: refsDir, rel: ".loom/work/refs" }] } : {}),
+        // Bundle knowledge refs (when present) + the persistent repo-brief (when
+        // `LOOM_REPO_BRIEF` is on), built/delta-refreshed once per drive against
+        // the real project root; both degrade to nothing when unavailable.
+        sandbox_seed: async () => [
+          ...(refsDir !== undefined ? [{ src: refsDir, rel: ".loom/work/refs" }] : []),
+          ...(await repoBriefSeeds(projectDir, cfgEnv, ctx.onNotice)),
+        ],
         onNotice: ctx.onNotice,
         onUsage: ctx.onUsage,
         signal: ctx.signal,

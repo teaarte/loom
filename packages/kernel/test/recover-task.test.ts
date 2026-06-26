@@ -129,6 +129,45 @@ describe("recoverTask", () => {
       assert.equal(phase.status, "skipped");
       assert.equal(phase.skipped_reason, "force-closed");
     }
+    // No open code blockers ⇒ the WORK was clean even though the
+    // orchestration was force-closed (the verdict/work split).
+    assert.equal(state.work_result, "clean");
+  });
+
+  it("force-close: a harness-only blocker still records work_result='clean'", async () => {
+    dir = await freshProject();
+    const dsid = await seedTask(dir, ["work"]);
+    await withStateTransaction(dir, LATER, async (tx) => {
+      await tx.exec(
+        "INSERT INTO findings (id, agent, iteration, phase, severity, category, " +
+          "summary, status, origin, recorded_at) VALUES " +
+          "('f-harness', 'rev', 1, 'work', 'blocking', 'unparseable-output', " +
+          "'could not parse', 'open', 'harness', ?)",
+        [LATER],
+      );
+      await recoverTask(tx, { driver_state_id: dsid, choice: "force-close", recovery_id: makeRecoveryId() });
+    });
+    const state = await read(dir, loadState);
+    assert.equal(state.verdict, "failed_force_closed");
+    assert.equal(state.work_result, "clean", "a harness-only blocker must not mark the work blocked");
+  });
+
+  it("force-close: an open code blocker records work_result='blocked'", async () => {
+    dir = await freshProject();
+    const dsid = await seedTask(dir, ["work"]);
+    await withStateTransaction(dir, LATER, async (tx) => {
+      await tx.exec(
+        "INSERT INTO findings (id, agent, iteration, phase, severity, category, " +
+          "summary, status, origin, recorded_at) VALUES " +
+          "('f-code', 'rev', 1, 'work', 'blocking', 'correctness', " +
+          "'real bug', 'open', 'code', ?)",
+        [LATER],
+      );
+      await recoverTask(tx, { driver_state_id: dsid, choice: "force-close", recovery_id: makeRecoveryId() });
+    });
+    const state = await read(dir, loadState);
+    assert.equal(state.verdict, "failed_force_closed");
+    assert.equal(state.work_result, "blocked");
   });
 
   it("retry on clean state is reenter=true with no mutation", async () => {

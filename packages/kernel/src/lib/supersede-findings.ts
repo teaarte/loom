@@ -175,10 +175,14 @@ export async function snapshotOpenBlockers(
   tx: Transaction,
   scratch: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // Only CODE blockers are handed to the fixer: a harness blocker (an
+  // unparseable agent output) is not something the implementer can act on,
+  // so listing it under "### Open blockers" would be noise. Harness blockers
+  // route to a human at the gate instead.
   const rows = await tx.queryAll<OpenBlockerRow>(
     "SELECT file, line_start, category, summary, suggested_fix, agent " +
       "FROM findings WHERE severity = 'blocking' AND status = 'open' " +
-      "AND superseded_by_iteration IS NULL ORDER BY id ASC",
+      "AND superseded_by_iteration IS NULL AND origin = 'code' ORDER BY id ASC",
   );
   const blockers: OpenBlocker[] = rows.map((r) => ({
     file: r.file === null ? null : String(r.file),

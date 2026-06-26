@@ -63,6 +63,7 @@ function fixtureState(bundle_state: Record<string, unknown> | null = null): Pipe
     owner_id: null,
     status: "in_progress",
     verdict: null,
+    work_result: null,
     started_at: "2026-05-28T00:00:00.000Z" as PipelineState["started_at"],
     ended_at: null,
     gate_policies: {} as Record<GateRole, PolicyName>,

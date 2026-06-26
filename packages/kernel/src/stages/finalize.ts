@@ -33,13 +33,14 @@ export async function interpretFinalize(
 
   // Sweep non-terminal phases + write the verdict in one tx so the
   // `verdict != null → every phase terminal` invariant holds on commit.
-  await completeTask(tx, state.phases, verdict, ctx.now, "swept by finalize");
+  const workResult = await completeTask(tx, state.phases, verdict, ctx.now, "swept by finalize");
 
   // Mutate the in-memory state so the outer loop sees the terminal
   // status immediately — the runFSM caller treats the `complete`
   // directive as the exit signal regardless.
   state.status = "completed";
   state.verdict = verdict;
+  state.work_result = workResult;
   state.ended_at = ctx.now;
 
   return {
@@ -63,7 +64,15 @@ function buildCompletionSummary(
   state: PipelineState,
   verdict: string,
 ): string {
-  const base = `task complete (verdict=${verdict})`;
+  // Surface the work signal next to the verdict so a human reads BOTH the
+  // orchestration outcome and whether the work was clean. `completeTask`
+  // wrote work_result into the same tx that set the verdict, so the
+  // in-memory state the finalize stage mutated below carries it.
+  const work = state.work_result;
+  const base =
+    work === null || work === undefined
+      ? `task complete (verdict=${verdict})`
+      : `task complete (verdict=${verdict}, work=${work})`;
   const note = state.bundle_state?.["completion_summary"];
   if (typeof note === "string" && note.length > 0) {
     return `${base} — ${note}`;

@@ -37,7 +37,7 @@ export async function materializeAccessSnapshot(
     "SELECT id, task_id, agent, iteration, phase, file, line_start, " +
       "line_end, severity, category, proposed_new_category, pattern_id, " +
       "summary, evidence_excerpt, suggested_fix, status, ref_rule_id, " +
-      "superseded_by_iteration, recorded_at FROM findings ORDER BY id ASC",
+      "origin, superseded_by_iteration, recorded_at FROM findings ORDER BY id ASC",
   );
   const auditRows = await tx.queryAll<AuditRow>(
     "SELECT id, ts, type, task_id, driver_state_id, payload, verdict, " +
@@ -72,6 +72,9 @@ export async function materializeAccessSnapshot(
         r.suggested_fix === null ? null : String(r.suggested_fix),
       status: r.status as Finding["status"],
       ref_rule_id: r.ref_rule_id === null ? null : String(r.ref_rule_id),
+      origin: (r.origin === null || r.origin === undefined
+        ? "code"
+        : String(r.origin)) as Finding["origin"],
     },
   }));
 
@@ -153,9 +156,20 @@ function buildFindingsAccess(stored: StoredFinding[]): FindingsAccess {
       // dismissed / marked fixed, or one a walk-back retired, is resolved
       // — counting it would re-gate work that was already settled and let
       // a stale round's blocker haunt the store after a replan.
+      //
+      // The optional `origin` filter lets a gate separate code blockers
+      // (which drive the rework loop) from harness blockers (which route to
+      // a human). Absent ⇒ count both. A row with no stored origin reads as
+      // `code` (the column default).
       let n = 0;
       for (const sf of stored) {
         if (filter?.phase !== undefined && sf.phase !== filter.phase) continue;
+        if (
+          filter?.origin !== undefined &&
+          (sf.finding.origin ?? "code") !== filter.origin
+        ) {
+          continue;
+        }
         if (sf.finding.severity !== "blocking") continue;
         if (sf.finding.status !== "open") continue;
         if (sf.superseded_by_iteration !== null) continue;
@@ -248,6 +262,7 @@ interface FindingRow {
   suggested_fix: unknown;
   status: unknown;
   ref_rule_id: unknown;
+  origin: unknown;
   superseded_by_iteration: unknown;
   recorded_at: unknown;
 }

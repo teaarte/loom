@@ -136,6 +136,7 @@ function buildInMemoryState(
     owner_id: null,
     status: "in_progress",
     verdict: opts.verdict ?? null,
+    work_result: null,
     started_at: now,
     ended_at: null,
     gate_policies: {} as Record<GateRole, PolicyName>,

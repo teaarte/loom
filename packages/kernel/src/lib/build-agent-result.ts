@@ -1,16 +1,34 @@
 // Lift a provider-raw payload + the agent's `output_kind` into a
-// fully-typed `AgentResult`. Schema validation is minimal in this
-// revision — shape + required-field checks for the four kernel-default
-// kinds; the ajv-driven validator that consumes registered JSON
-// Schemas lands with the findings-schema work and supersedes the
-// inline checks below without changing the call surface.
+// fully-typed `AgentResult`. Schema validation is shape + required-field
+// checks for the kernel-default kinds; the ajv-driven validator that
+// consumes registered JSON Schemas lands with the findings-schema work
+// and supersedes the inline checks below without changing the call surface.
+//
+// Two design properties this revision is built around:
+//
+//   1. TOLERANT ingestion. An agent's JSON header is accepted whether it
+//      arrives in a ```json fence (any language tag, indentation, or blank
+//      lines around it), as a bare top-level object, or as a balanced
+//      `{…}` embedded in surrounding prose. The header is the
+//      machine-parseable surface; we do not also dictate the exact
+//      whitespace it is wrapped in. (A strict fence regex previously
+//      rejected schema-valid output that an agent merely formatted
+//      differently.)
+//
+//   2. SCHEMA-AWARE + DIAGNOSABLE rejection. Validation branches on
+//      `output_kind`: reviewers MUST carry a `findings` array; validators
+//      legitimately omit it (their schema makes it optional). A rejection
+//      surfaces a machine-readable `detail` — which kind of failure, which
+//      field, expected-vs-got, and a bounded excerpt — so a caller can
+//      correct and re-deliver instead of guessing. `reason` stays the
+//      human one-liner every prior reader consumed.
 //
 // Lenient parsing: a malformed JSON header surfaces as
-// `schema_validation: { ok: false, reason }` on the returned result —
-// the caller still persists the row for forensics, so a single bad
-// agent never destroys good siblings' work.
+// `schema_validation: { ok: false, reason, detail }` on the returned
+// result — the caller still persists the row for forensics, so a single
+// bad agent never destroys good siblings' work.
 
-import type { AgentResult } from "../types/agent-result.js";
+import type { AgentResult, SchemaValidationDetail } from "../types/agent-result.js";
 import type { Finding, FindingSeverity, FindingStatus } from "../types/findings.js";
 import type { AgentOutputKind } from "../types/plugins.js";
 
@@ -24,7 +42,10 @@ export interface BuildAgentResultArgs {
 }
 
 export function buildAgentResult(args: BuildAgentResultArgs): AgentResult {
-  const header = args.parsed_header ?? tryParseJsonHeader(args.raw_output);
+  const parse: HeaderParse =
+    args.parsed_header !== undefined
+      ? { ok: true, header: args.parsed_header }
+      : tryParseJsonHeader(args.raw_output);
   const base: AgentResult = {
     agent: args.agent,
     agent_run_id: args.agent_run_id,
@@ -36,67 +57,158 @@ export function buildAgentResult(args: BuildAgentResultArgs): AgentResult {
   switch (args.output_kind) {
     case "reviewer":
     case "validator": {
-      if (header === null) {
+      if (parse.ok === false) {
         return {
           ...base,
-          schema_validation: {
-            ok: false,
-            reason: "no-json-fence: agent output does not contain a parseable JSON header",
-          },
+          schema_validation: parseFailure(parse, args.output_kind, args.raw_output),
         };
       }
-      const verdictReason = validateVerdictHeader(header);
-      if (verdictReason !== null) {
-        return { ...base, parsed_header: header, schema_validation: { ok: false, reason: verdictReason } };
-      }
-      const findingsResult = extractFindings(header, args.agent);
-      if (findingsResult.reason !== null) {
+      const reviewKind: "reviewer" | "validator" =
+        args.output_kind === "reviewer" ? "reviewer" : "validator";
+      const verdictDetail = validateVerdictHeader(parse.header, reviewKind);
+      if (verdictDetail !== null) {
         return {
           ...base,
-          parsed_header: header,
-          schema_validation: { ok: false, reason: findingsResult.reason },
+          parsed_header: parse.header,
+          schema_validation: schemaFieldFailure(verdictDetail),
         };
       }
-      return { ...base, parsed_header: header, findings: findingsResult.findings };
+      const findingsResult = extractFindings(parse.header, args.agent);
+      if (findingsResult.detail !== null) {
+        return {
+          ...base,
+          parsed_header: parse.header,
+          schema_validation: schemaFieldFailure(findingsResult.detail),
+        };
+      }
+      return { ...base, parsed_header: parse.header, findings: findingsResult.findings };
     }
     case "classifier": {
-      if (header === null) {
+      if (parse.ok === false) {
         return {
           ...base,
-          schema_validation: {
-            ok: false,
-            reason: "no-json-fence: classifier output does not contain a parseable JSON header",
-          },
+          schema_validation: parseFailure(parse, args.output_kind, args.raw_output),
         };
       }
-      return { ...base, parsed_header: header };
+      return { ...base, parsed_header: parse.header };
     }
     case "nonreview":
       return base;
     default:
       // Bundle-extended output_kinds: kernel-default schema set has no
       // opinion; the bundle owns persistence for the kind it introduced.
-      // Still attach `parsed_header` if a JSON fence was present so the
+      // Still attach `parsed_header` if a JSON object was present so the
       // bundle-side persistor doesn't re-parse.
-      if (header !== null) return { ...base, parsed_header: header };
+      if (parse.ok === true) return { ...base, parsed_header: parse.header };
       return base;
   }
 }
 
-// Look for a `{...}` JSON object at the top of the output OR within a
-// ```json ... ``` fenced block. Returns null if neither parses.
-function tryParseJsonHeader(raw: string): Record<string, unknown> | null {
-  const fenced = raw.match(/```json\s*\n([\s\S]*?)\n```/);
-  if (fenced && fenced[1] !== undefined) {
-    const parsed = safeParse(fenced[1]);
-    if (parsed !== null) return parsed;
+// ============================================================================
+// Tolerant JSON-header extraction
+// ============================================================================
+
+type HeaderParse =
+  | { ok: true; header: Record<string, unknown> }
+  | { ok: false; kind: "no-json" }
+  | { ok: false; kind: "json-parse"; excerpt: string };
+
+// Try every plausible JSON-object candidate in priority order — a fenced
+// block first (the documented convention), then the whole output if it is
+// itself an object, then any balanced `{…}` embedded in prose. The first
+// candidate that parses to an object wins. Distinguishes "a block was
+// present but unparseable" (`json-parse`) from "nothing JSON-shaped at all"
+// (`no-json`) so the caller can report the real cause.
+function tryParseJsonHeader(raw: string): HeaderParse {
+  const candidates = collectJsonCandidates(raw);
+  for (const candidate of candidates) {
+    const parsed = safeParse(candidate);
+    if (parsed !== null) return { ok: true, header: parsed };
   }
+  if (candidates.length > 0) {
+    return { ok: false, kind: "json-parse", excerpt: clip(candidates[0] ?? raw) };
+  }
+  return { ok: false, kind: "no-json" };
+}
+
+// Candidate JSON-object strings, most-explicit first. Order matters: a
+// fenced block is the agent's declared header, so it is tried before a
+// looser balanced-brace scan that could pick up an unrelated `{…}`.
+function collectJsonCandidates(raw: string): string[] {
+  const out: string[] = [];
+
+  // 1. Fenced code blocks — tolerant of the language tag (```json, ```JSON,
+  //    or none), indentation, and blank lines around the content. We trim
+  //    the captured inner text before parsing, so trailing whitespace or a
+  //    final newline before the closing fence no longer matters.
+  const fenceRe = /```[^\n`]*\r?\n([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = fenceRe.exec(raw)) !== null) {
+    const inner = m[1];
+    if (inner !== undefined) {
+      const trimmed = inner.trim();
+      if (trimmed.startsWith("{")) out.push(trimmed);
+    }
+  }
+
+  // 2. The whole output, when it is itself a JSON object.
   const trimmed = raw.trim();
-  if (trimmed.startsWith("{")) {
-    const parsed = safeParse(trimmed);
-    if (parsed !== null) return parsed;
+  if (trimmed.startsWith("{")) out.push(trimmed);
+
+  // 3. Balanced `{…}` regions anywhere in the output — catches a header an
+  //    agent emitted inline (no fence) or wrapped in a fence shape the
+  //    regex above did not recognize.
+  for (const region of balancedObjects(raw)) out.push(region);
+
+  return out;
+}
+
+// Scan for top-level balanced `{…}` substrings, respecting string literals
+// and escapes so a brace inside a quoted value never throws off the depth
+// count. Bounded to a handful of regions — a header is near the top, and an
+// unbounded scan over a huge prose body buys nothing.
+function balancedObjects(raw: string, max = 5): string[] {
+  const out: string[] = [];
+  const n = raw.length;
+  let i = 0;
+  while (i < n && out.length < max) {
+    if (raw[i] !== "{") {
+      i += 1;
+      continue;
+    }
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    let j = i;
+    for (; j < n; j += 1) {
+      const ch = raw[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') {
+        inStr = true;
+      } else if (ch === "{") {
+        depth += 1;
+      } else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          j += 1;
+          break;
+        }
+      }
+    }
+    if (depth === 0 && j > i) {
+      out.push(raw.slice(i, j));
+      i = j;
+    } else {
+      // Unbalanced from here to EOF — no complete object remains.
+      break;
+    }
   }
-  return null;
+  return out;
 }
 
 function safeParse(input: string): Record<string, unknown> | null {
@@ -111,16 +223,46 @@ function safeParse(input: string): Record<string, unknown> | null {
   }
 }
 
-// Reviewer / validator headers MUST carry a `verdict` plus a
-// `findings` array (empty array allowed). Anything else surfaces as
-// schema-validation failure.
-function validateVerdictHeader(header: Record<string, unknown>): string | null {
+// ============================================================================
+// Schema-aware header validation
+// ============================================================================
+
+// Reviewer / validator headers MUST carry a non-empty `verdict`. A
+// reviewer MUST also carry a `findings` array (its schema requires it); a
+// validator MAY omit `findings` (its schema makes it optional) but, when
+// present, it must be an array. Returns a structured detail on failure,
+// null on success.
+function validateVerdictHeader(
+  header: Record<string, unknown>,
+  kind: "reviewer" | "validator",
+): SchemaValidationDetail | null {
   const verdict = header["verdict"];
   if (typeof verdict !== "string" || verdict.length === 0) {
-    return "schema: verdict missing or not a string";
+    return {
+      kind: "schema-field",
+      field: "verdict",
+      expected: "a non-empty string",
+      got: describe(verdict),
+    };
   }
-  if (!Array.isArray(header["findings"])) {
-    return "schema: findings array missing";
+  const findings = header["findings"];
+  if (kind === "reviewer") {
+    if (!Array.isArray(findings)) {
+      return {
+        kind: "schema-field",
+        field: "findings",
+        expected: "an array",
+        got: describe(findings),
+      };
+    }
+  } else if (findings !== undefined && !Array.isArray(findings)) {
+    // Validator: findings is optional, but an ill-typed one is still wrong.
+    return {
+      kind: "schema-field",
+      field: "findings",
+      expected: "an array when present (optional for validators)",
+      got: describe(findings),
+    };
   }
   return null;
 }
@@ -128,21 +270,34 @@ function validateVerdictHeader(header: Record<string, unknown>): string | null {
 function extractFindings(
   header: Record<string, unknown>,
   agent: string,
-): { findings: Finding[]; reason: string | null } {
+): { findings: Finding[]; detail: SchemaValidationDetail | null } {
   const raw = header["findings"];
-  if (!Array.isArray(raw)) return { findings: [], reason: null };
+  if (!Array.isArray(raw)) return { findings: [], detail: null };
   const out: Finding[] = [];
   for (let i = 0; i < raw.length; i++) {
     const candidate = raw[i];
     if (candidate === null || typeof candidate !== "object") {
-      return { findings: [], reason: `schema: findings[${i}] is not an object` };
+      return {
+        findings: [],
+        detail: {
+          kind: "schema-field",
+          field: `findings[${i}]`,
+          expected: "an object",
+          got: describe(candidate),
+        },
+      };
     }
     const f = candidate as Record<string, unknown>;
     const severity = severityField(f);
     if (severity === null) {
       return {
         findings: [],
-        reason: `schema: findings[${i}].severity must be blocking|warn|info`,
+        detail: {
+          kind: "schema-field",
+          field: `findings[${i}].severity`,
+          expected: "blocking|warn|info (or a known synonym, e.g. high/medium/low)",
+          got: describe(f["severity"]),
+        },
       };
     }
     out.push({
@@ -165,8 +320,59 @@ function extractFindings(
       ref_rule_id: nullableStringField(f, "ref_rule_id"),
     });
   }
-  return { findings: out, reason: null };
+  return { findings: out, detail: null };
 }
+
+// ============================================================================
+// Failure → schema_validation envelope
+// ============================================================================
+
+const EXCERPT_MAX = 400;
+
+// Bounded slice of raw output for forensics — never the whole blob.
+function clip(raw: string): string {
+  const t = raw.trim();
+  return t.length <= EXCERPT_MAX ? t : `${t.slice(0, EXCERPT_MAX)}…`;
+}
+
+function describe(v: unknown): string {
+  if (v === undefined) return "undefined";
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "array";
+  return typeof v;
+}
+
+function parseFailure(
+  parse: { ok: false; kind: "no-json" } | { ok: false; kind: "json-parse"; excerpt: string },
+  kind: AgentOutputKind,
+  raw: string,
+): { ok: false; reason: string; detail: SchemaValidationDetail } {
+  if (parse.kind === "no-json") {
+    return {
+      ok: false,
+      reason: `no-json: ${kind} output contained no parseable JSON object`,
+      detail: { kind: "no-json", excerpt: clip(raw) },
+    };
+  }
+  return {
+    ok: false,
+    reason: `json-parse: a JSON block was found in ${kind} output but did not parse`,
+    detail: { kind: "json-parse", excerpt: parse.excerpt },
+  };
+}
+
+function schemaFieldFailure(
+  detail: SchemaValidationDetail,
+): { ok: false; reason: string; detail: SchemaValidationDetail } {
+  const field = detail.field !== undefined ? ` ${detail.field}` : "";
+  const expected = detail.expected !== undefined ? ` expected ${detail.expected}` : "";
+  const got = detail.got !== undefined ? `, got ${detail.got}` : "";
+  return { ok: false, reason: `schema:${field}${expected}${got}`, detail };
+}
+
+// ============================================================================
+// Field coercion
+// ============================================================================
 
 function stringField(
   src: Record<string, unknown>,
@@ -202,13 +408,39 @@ function nullableNumberField(
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-const SEVERITY_VALUES = new Set<FindingSeverity>(["blocking", "warn", "info"]);
+// Accept the canonical {blocking,warn,info} plus the common synonyms agents
+// reach for (high/medium/low, critical/major/minor, warning/note/nit, …) so
+// a schema-valid finding is not rejected over a vocabulary mismatch. Maps
+// case-insensitively; an unknown token still returns null (a genuine schema
+// failure, not a synonym we silently swallow).
+const SEVERITY_SYNONYMS = new Map<string, FindingSeverity>([
+  ["blocking", "blocking"],
+  ["blocker", "blocking"],
+  ["block", "blocking"],
+  ["critical", "blocking"],
+  ["high", "blocking"],
+  ["error", "blocking"],
+  ["fatal", "blocking"],
+  ["severe", "blocking"],
+  ["warn", "warn"],
+  ["warning", "warn"],
+  ["medium", "warn"],
+  ["moderate", "warn"],
+  ["major", "warn"],
+  ["info", "info"],
+  ["informational", "info"],
+  ["low", "info"],
+  ["minor", "info"],
+  ["note", "info"],
+  ["nit", "info"],
+  ["suggestion", "info"],
+  ["trivial", "info"],
+]);
+
 function severityField(src: Record<string, unknown>): FindingSeverity | null {
   const v = src["severity"];
-  if (typeof v === "string" && (SEVERITY_VALUES as Set<string>).has(v)) {
-    return v as FindingSeverity;
-  }
-  return null;
+  if (typeof v !== "string") return null;
+  return SEVERITY_SYNONYMS.get(v.trim().toLowerCase()) ?? null;
 }
 
 const STATUS_VALUES = new Set<FindingStatus>([

@@ -22,6 +22,7 @@ function fullPipelineState(): PipelineState {
     owner_id: "alice",
     status: "in_progress",
     verdict: null,
+    work_result: null,
     started_at: "2026-05-28T11:00:00.000Z" as NowToken,
     ended_at: null,
     gate_policies: {} as Record<GateRole, PolicyName>,

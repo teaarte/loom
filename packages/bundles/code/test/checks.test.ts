@@ -231,7 +231,14 @@ describe("@loomfsm/bundle-code — floor treats skipped as passing", () => {
 describe("@loomfsm/bundle-code — failed check walks back at the final gate", () => {
   function policyCtx(openBlockers: number): PolicyContext {
     return {
-      findings: { countBlocking: () => openBlockers, query: () => [], queryByPhase: () => [] },
+      findings: {
+        // A failed check is a CODE blocker: it counts for the code / unfiltered
+        // queries but never as a harness blocker (which would route to human).
+        countBlocking: (f?: { origin?: string }) =>
+          f?.origin === "harness" ? 0 : openBlockers,
+        query: () => [],
+        queryByPhase: () => [],
+      },
       latest_verdict: () => null,
       agents_query: { query: () => [] },
       rolePhase: () => null,

@@ -228,14 +228,17 @@ async function recordUnparseableBlocker(
   },
 ): Promise<void> {
   const id = makeFindingId(tx.now);
-  const summary = `Agent '${opts.agent}' returned output that could not be parsed as a review (${opts.reason}). Treated as a blocker so the result is not silently approved; re-run or review manually.`;
+  const summary = `Agent '${opts.agent}' returned output that could not be parsed as a review (${opts.reason}). Treated as a blocker so the result is not silently approved; re-run the agent or inspect manually — the implementer cannot fix this.`;
+  // origin = 'harness': this is a plumbing failure, not a fact about the
+  // code. A gate routes it to a human instead of the implement→review
+  // rework loop (which cannot resolve a parse error).
   await tx.exec(
     "INSERT INTO findings (id, task_id, agent, iteration, phase, file, " +
       "line_start, line_end, severity, category, proposed_new_category, " +
       "pattern_id, summary, evidence_excerpt, suggested_fix, status, " +
-      "ref_rule_id, recorded_at) " +
+      "ref_rule_id, origin, recorded_at) " +
       "VALUES (?, NULL, ?, ?, ?, NULL, NULL, NULL, 'blocking', " +
-      "'unparseable-output', NULL, NULL, ?, NULL, NULL, 'open', NULL, ?)",
+      "'unparseable-output', NULL, NULL, ?, NULL, NULL, 'open', NULL, 'harness', ?)",
     [id, opts.agent, opts.iteration, opts.phase, summary, tx.now],
   );
   // A reviewer's contradicting verdict normalizes to REQUEST_CHANGES; a
@@ -339,8 +342,8 @@ async function persistFindingsAndVerdict(
       "INSERT INTO findings (id, task_id, agent, iteration, phase, file, " +
         "line_start, line_end, severity, category, proposed_new_category, " +
         "pattern_id, summary, evidence_excerpt, suggested_fix, status, " +
-        "ref_rule_id, recorded_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "ref_rule_id, origin, recorded_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         nullIfEmpty(finding.task_id),
@@ -359,6 +362,9 @@ async function persistFindingsAndVerdict(
         finding.suggested_fix,
         finding.status,
         finding.ref_rule_id,
+        // Agent-reported findings are facts about the code. Only the
+        // kernel mints `harness` (the unparseable-output blocker above).
+        finding.origin ?? "code",
         tx.now,
       ],
     );

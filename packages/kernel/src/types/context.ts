@@ -9,7 +9,7 @@
 
 import type { AgentRecord } from "./agent-result.js";
 import type { Bundle } from "./bundle.js";
-import type { Finding, FindingSeverity, FindingStatus } from "./findings.js";
+import type { Finding, FindingOrigin, FindingSeverity, FindingStatus } from "./findings.js";
 import type { LLMProvider } from "./provider.js";
 import type { ModelName, Phase } from "./row-types.js";
 import type { NowToken } from "./now.js";
@@ -94,7 +94,7 @@ export interface FindingsAccess {
     severity?: FindingSeverity[];
     status?: FindingStatus[];
   }): Finding[];
-  countBlocking(filter?: { phase?: Phase }): number;
+  countBlocking(filter?: { phase?: Phase; origin?: FindingOrigin }): number;
   queryByPhase(phase: Phase): Finding[];
 }
 

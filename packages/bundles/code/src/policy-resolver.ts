@@ -9,14 +9,22 @@
 //
 // Three roles, three postures:
 //   - classify: trust the classifier; auto-approve.
-//   - plan:     auto-reject (revise) while planning carries open blockers,
-//               else auto-approve.
+//   - plan:     auto-reject (revise) while planning carries open CODE
+//               blockers, else auto-approve.
 //   - final:    auto-reject (revise) if acceptance failed or any blocking
-//               finding is still open, else auto-approve.
+//               CODE finding is still open, else auto-approve.
 //
 // `counts_against_replan_cap` is set on the auto-reject paths so a stuck
 // revise loop is bounded by the substrate's replan budget rather than
 // spinning forever.
+//
+// Harness blockers route to a HUMAN, never the rework loop. A harness
+// blocker (e.g. an agent output the kernel could not parse) is not a fact
+// about the code — re-running the implementer cannot resolve it, so
+// auto-rejecting on it would spin implement → review until the replan cap
+// escalated. Splitting the count by origin sends a harness blocker straight
+// to a human (who can re-run the agent or force-close) while a code blocker
+// still drives the bounded revise loop.
 
 import type {
   BundleStateView,
@@ -40,6 +48,15 @@ function renderFinalFeedback(
   return `Final checks did not clear: ${parts.join("; ")}. Address these and resubmit.`;
 }
 
+function renderHarnessFeedback(role: string, harnessBlockers: number): string {
+  return (
+    `${harnessBlockers} open harness blocker(s) at the ${role} gate — an agent's ` +
+    `output could not be parsed/validated. This is an orchestration failure, ` +
+    `not a code defect, so the implementer cannot resolve it. Re-run the affected ` +
+    `agent (recovery: retry-failed) or force-close after inspecting the forensic row.`
+  );
+}
+
 export const codePolicyResolver: GatePolicyResolver = (
   state: BundleStateView,
   role: GateRole,
@@ -50,7 +67,23 @@ export const codePolicyResolver: GatePolicyResolver = (
   }
 
   if (role === "plan") {
-    const planBlockers = ctx.findings.countBlocking({ phase: "planning" });
+    // A harness blocker in planning routes to a human first — re-driving the
+    // planner cannot fix an unparseable agent output.
+    const harnessBlockers = ctx.findings.countBlocking({
+      phase: "planning",
+      origin: "harness",
+    });
+    if (harnessBlockers > 0) {
+      return {
+        type: "human-required",
+        reason: `code: ${harnessBlockers} harness blocker(s) in planning`,
+        feedback: renderHarnessFeedback("plan", harnessBlockers),
+      };
+    }
+    const planBlockers = ctx.findings.countBlocking({
+      phase: "planning",
+      origin: "code",
+    });
     if (planBlockers > 0) {
       return {
         type: "auto-reject",
@@ -64,9 +97,20 @@ export const codePolicyResolver: GatePolicyResolver = (
   }
 
   if (role === "final") {
+    // Harness blockers (unparseable agent output, transport faults) cannot be
+    // fixed by the rework loop — route them to a human instead of spinning
+    // implement → review until the replan cap escalates.
+    const harnessBlockers = ctx.findings.countBlocking({ origin: "harness" });
+    if (harnessBlockers > 0) {
+      return {
+        type: "human-required",
+        reason: `code: ${harnessBlockers} harness blocker(s) at final`,
+        feedback: renderHarnessFeedback("final", harnessBlockers),
+      };
+    }
     const verdict = ctx.latest_verdict(state, "acceptance");
     const acceptanceFailed = verdict?.verdict === "FAIL";
-    const openBlockers = ctx.findings.countBlocking({});
+    const openBlockers = ctx.findings.countBlocking({ origin: "code" });
     if (acceptanceFailed || openBlockers > 0) {
       return {
         type: "auto-reject",

@@ -142,6 +142,10 @@ export async function loadState(tx: Transaction): Promise<PipelineState> {
     owner_id: ps.owner_id === null ? null : String(ps.owner_id),
     status: ps.status as PipelineState["status"],
     verdict: ps.verdict === null ? null : (ps.verdict as PipelineState["verdict"]),
+    work_result:
+      ps.work_result === null || ps.work_result === undefined
+        ? null
+        : (String(ps.work_result) as PipelineState["work_result"]),
     started_at: String(ps.started_at) as NowToken,
     ended_at: ps.ended_at === null ? null : (String(ps.ended_at) as NowToken),
     gate_policies: parseJsonField<Partial<Record<GateRole, PolicyName>>>(
@@ -194,6 +198,7 @@ interface PipelineStateRow {
   owner_id: unknown;
   status: unknown;
   verdict: unknown;
+  work_result: unknown;
   started_at: unknown;
   ended_at: unknown;
   gate_policies: unknown;

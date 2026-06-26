@@ -122,8 +122,8 @@ async function insertFinding(
     "INSERT INTO findings (id, task_id, agent, iteration, phase, file, " +
       "line_start, line_end, severity, category, proposed_new_category, " +
       "pattern_id, summary, evidence_excerpt, suggested_fix, status, " +
-      "ref_rule_id, recorded_at) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+      "ref_rule_id, origin, recorded_at) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
       "ON CONFLICT(id) DO NOTHING",
     [
       f.id,
@@ -143,6 +143,9 @@ async function insertFinding(
       f.suggested_fix,
       f.status,
       f.ref_rule_id,
+      // Absent ⇒ a code finding (the default); a bundle Step never mints
+      // harness provenance — that is the kernel's alone.
+      f.origin ?? "code",
       tx.now,
     ],
   );

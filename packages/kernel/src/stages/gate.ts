@@ -17,6 +17,7 @@
 import { getKernelTx } from "../fsm.js";
 import { resolveGatePolicy } from "../gate-policy.js";
 import { makeGateEventId } from "../ids.js";
+import { clearBlockerStall, evaluateBlockerStall } from "../lib/blocker-stall.js";
 import {
   clearOpenBlockers,
   snapshotOpenBlockers,
@@ -37,12 +38,32 @@ export async function interpretGate(
   ctx: StageContext,
 ): Promise<StageResult> {
   const policyCtx = buildPolicyContext(ctx);
-  const decision: GatePolicyResult = await resolveGatePolicy(
+  let decision: GatePolicyResult = await resolveGatePolicy(
     state,
     stage.name,
     policyCtx,
     ctx.registry,
   );
+
+  // Per-blocker stall breaker. An auto-reject that would walk back gets its
+  // live code-blocker set fingerprinted; when the SAME set recurs unchanged
+  // for STALL_THRESHOLD rounds the loop is not converging, so escalate to a
+  // human rather than re-driving the implementer against a blocker it cannot
+  // clear. Fires earlier than the global replan cap (the tighter, more
+  // specific guard) and composes with it: a stall converts the decision to
+  // human-required BEFORE the cap-counting bump below, so a stalled round is
+  // not also charged against the replan budget.
+  if (decision.type === "auto-reject" && decision.counts_against_replan_cap === true) {
+    const stall = await evaluateBlockerStall(getKernelTx(ctx), state.driver.scratch);
+    state.driver.scratch = stall.scratch;
+    if (stall.stalled) {
+      decision = {
+        type: "human-required",
+        reason: `stall-breaker: blocker set unchanged across ${stall.count} consecutive rework rounds`,
+        feedback: stall.feedback,
+      };
+    }
+  }
 
   // An auto-reject that asked to count against the replan cap must record
   // itself, or the cap (read from pipeline_gate_counters.auto_rejections)
@@ -136,8 +157,10 @@ export async function interpretGate(
     }
   } else if (result.type === "advance") {
     // A gate approval settles the blockers the last rejection handed off —
-    // drop the snapshot so a downstream spawn does not list resolved blockers.
+    // drop the snapshot so a downstream spawn does not list resolved blockers,
+    // and reset the stall counter so a later unrelated reject starts fresh.
     state.driver.scratch = await clearOpenBlockers(getKernelTx(ctx), state.driver.scratch);
+    state.driver.scratch = await clearBlockerStall(getKernelTx(ctx), state.driver.scratch);
   }
   return result;
 }

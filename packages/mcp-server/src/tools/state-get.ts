@@ -84,7 +84,12 @@ async function renderSummary(tx: Transaction): Promise<PipelineStateView> {
     task_id: string | null;
     status: string;
     owner_id: string | null;
-  }>("SELECT task_id, status, owner_id FROM pipeline_state WHERE id = 1");
+    verdict: string | null;
+    work_result: string | null;
+  }>(
+    "SELECT task_id, status, owner_id, verdict, work_result " +
+      "FROM pipeline_state WHERE id = 1",
+  );
 
   const pendingRow = await tx.queryRow<{ c: number }>(
     "SELECT COUNT(*) AS c FROM pending_agents",
@@ -98,6 +103,10 @@ async function renderSummary(tx: Transaction): Promise<PipelineStateView> {
     summary: {
       task_id: ps?.task_id ?? null,
       status: ps?.status ?? null,
+      // Orchestration outcome vs. the orthogonal work signal — surfaced
+      // together so a force-closed-but-green task does not read as failed.
+      verdict: ps?.verdict ?? null,
+      work_result: ps?.work_result ?? null,
       owner_id: ps?.owner_id ?? null,
       pending_agent_count: Number(pendingRow?.c ?? 0),
       gate_count: Number(gatesRow?.c ?? 0),

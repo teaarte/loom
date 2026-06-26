@@ -17,8 +17,33 @@ export interface AgentResult {
   output: string;
   parsed_header?: Record<string, unknown>;
   findings?: Finding[];
-  schema_validation: { ok: true } | { ok: false; reason: string };
+  schema_validation:
+    | { ok: true }
+    | { ok: false; reason: string; detail?: SchemaValidationDetail };
   tokens?: { in: number; out: number; cached?: number };
+}
+
+// Machine-readable shape of a parse / schema failure. `reason` stays the
+// human one-liner every prior reader used; `detail` is the structured
+// companion a driver (or an operator) reads to know WHAT to fix instead of
+// guessing the envelope. The three kinds separate the failure modes that
+// the old single `no-json-fence` label collapsed: nothing JSON-shaped was
+// present at all (`no-json`), a candidate block was found but did not parse
+// (`json-parse`), or it parsed but a required field was missing / ill-typed
+// (`schema-field`).
+export type SchemaValidationFailureKind = "no-json" | "json-parse" | "schema-field";
+
+export interface SchemaValidationDetail {
+  kind: SchemaValidationFailureKind;
+  // The offending field (schema-field failures) — e.g. "verdict",
+  // "findings", "findings[0].severity".
+  field?: string;
+  // Human-readable expectation, e.g. "a non-empty string".
+  expected?: string;
+  // What was actually seen, e.g. "array", "undefined", "number".
+  got?: string;
+  // Bounded slice of the raw output for forensics — never the whole blob.
+  excerpt?: string;
 }
 
 export interface BatchAgentResult {

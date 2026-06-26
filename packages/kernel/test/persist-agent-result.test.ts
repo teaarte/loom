@@ -129,7 +129,8 @@ describe("buildAgentResult", () => {
     });
     assert.equal(r.schema_validation.ok, false);
     if (r.schema_validation.ok === false) {
-      assert.match(r.schema_validation.reason, /no-json-fence/);
+      assert.match(r.schema_validation.reason, /no-json/);
+      assert.equal(r.schema_validation.detail?.kind, "no-json");
     }
   });
 
@@ -145,6 +146,119 @@ describe("buildAgentResult", () => {
       raw_output: raw,
     });
     assert.equal(r.schema_validation.ok, false);
+    if (r.schema_validation.ok === false) {
+      assert.equal(r.schema_validation.detail?.kind, "schema-field");
+      assert.match(r.schema_validation.detail?.field ?? "", /severity/);
+    }
+  });
+
+  // The validator output kind makes `findings` optional. A correct
+  // validator header that omits it must NOT be rejected (the conflation
+  // that previously turned findings-free validator output into a synthetic
+  // blocker).
+  it("validator: accepts a header with no findings array", () => {
+    const raw = "```json\n" + JSON.stringify({
+      schema_version: "1.0",
+      agent: "validator-1",
+      task_id: "t-1",
+      verdict: "PASS",
+      summary_line: "consistent",
+    }) + "\n```";
+    const r = buildAgentResult({
+      agent: "validator-1",
+      agent_run_id: "ar-val",
+      output_kind: "validator",
+      raw_output: raw,
+    });
+    assert.equal(r.schema_validation.ok, true);
+    assert.deepEqual(r.parsed_header?.["verdict"], "PASS");
+    assert.equal(r.findings?.length, 0);
+  });
+
+  it("validator: rejects an ill-typed findings field", () => {
+    const raw = "```json\n" + JSON.stringify({
+      verdict: "FAIL",
+      findings: "not-an-array",
+    }) + "\n```";
+    const r = buildAgentResult({
+      agent: "validator-2",
+      agent_run_id: "ar-val2",
+      output_kind: "validator",
+      raw_output: raw,
+    });
+    assert.equal(r.schema_validation.ok, false);
+  });
+
+  // Tolerant fence: indentation + a blank line + trailing whitespace inside
+  // the fence is schema-valid JSON an agent merely formatted differently.
+  it("parses a fenced header with indentation, blank lines and trailing space", () => {
+    const raw =
+      "Here is my review:\n\n```JSON\n\n  " +
+      JSON.stringify({ verdict: "APPROVE", findings: [] }) +
+      "   \n\n```\nthanks";
+    const r = buildAgentResult({
+      agent: "style-reviewer",
+      agent_run_id: "ar-fmt",
+      output_kind: "reviewer",
+      raw_output: raw,
+    });
+    assert.equal(r.schema_validation.ok, true);
+    assert.deepEqual(r.parsed_header?.["verdict"], "APPROVE");
+  });
+
+  // Tolerant fallback: a balanced object embedded in prose with no fence.
+  it("parses a balanced JSON object embedded in prose without a fence", () => {
+    const raw =
+      'My verdict is { "verdict": "REQUEST_CHANGES", "findings": ' +
+      '[{ "severity": "blocking", "category": "bug", "summary": "x" }] } overall.';
+    const r = buildAgentResult({
+      agent: "logic-reviewer",
+      agent_run_id: "ar-prose",
+      output_kind: "reviewer",
+      raw_output: raw,
+    });
+    assert.equal(r.schema_validation.ok, true);
+    assert.equal(r.findings?.length, 1);
+    assert.equal(r.findings?.[0]?.severity, "blocking");
+  });
+
+  // Severity synonyms normalize to the canonical codomain rather than
+  // hard-rejecting (high→blocking, medium→warn, low→info).
+  it("normalizes severity synonyms", () => {
+    const raw = "```json\n" + JSON.stringify({
+      verdict: "REQUEST_CHANGES",
+      findings: [
+        { severity: "HIGH", category: "a", summary: "1" },
+        { severity: "medium", category: "b", summary: "2" },
+        { severity: "Low", category: "c", summary: "3" },
+      ],
+    }) + "\n```";
+    const r = buildAgentResult({
+      agent: "security",
+      agent_run_id: "ar-syn",
+      output_kind: "reviewer",
+      raw_output: raw,
+    });
+    assert.equal(r.schema_validation.ok, true);
+    assert.deepEqual(
+      r.findings?.map((f) => f.severity),
+      ["blocking", "warn", "info"],
+    );
+  });
+
+  it("distinguishes json-parse failure from no-json", () => {
+    const raw = "```json\n{ not valid json ,, }\n```";
+    const r = buildAgentResult({
+      agent: "reviewer-jp",
+      agent_run_id: "ar-jp",
+      output_kind: "reviewer",
+      raw_output: raw,
+    });
+    assert.equal(r.schema_validation.ok, false);
+    if (r.schema_validation.ok === false) {
+      assert.equal(r.schema_validation.detail?.kind, "json-parse");
+      assert.match(r.schema_validation.reason, /json-parse/);
+    }
   });
 });
 
@@ -477,8 +591,8 @@ describe("persistAgentResult — four output_kind paths", () => {
     assert.equal(state.agent_verdicts[0]?.verdict, "REQUEST_CHANGES");
     assert.equal(state.agent_verdicts[0]?.blocking_issues, 1);
     const findings = await withStateTransaction(projectDir, captureNow(), async (tx) => {
-      const rows = await tx.queryAll<{ severity: string; category: string; agent: string; status: string }>(
-        "SELECT severity, category, agent, status FROM findings",
+      const rows = await tx.queryAll<{ severity: string; category: string; agent: string; status: string; origin: string }>(
+        "SELECT severity, category, agent, status, origin FROM findings",
       );
       return rows;
     });
@@ -487,6 +601,37 @@ describe("persistAgentResult — four output_kind paths", () => {
     assert.equal(findings[0]?.category, "unparseable-output");
     assert.equal(findings[0]?.agent, "rev-agent");
     assert.equal(findings[0]?.status, "open");
+    // The synthesized blocker is HARNESS-origin: a plumbing failure, not a
+    // code defect, so a gate routes it to a human instead of the rework loop.
+    assert.equal(findings[0]?.origin, "harness");
+  });
+
+  it("a clean reviewer finding is recorded with origin 'code'", async () => {
+    await seedBaseline(projectDir);
+    await seedPending(projectDir, "ar-rev-ok", "rev-agent");
+
+    const raw =
+      "```json\n" +
+      JSON.stringify({
+        verdict: "REQUEST_CHANGES",
+        summary: "one issue",
+        findings: [{ severity: "blocking", category: "correctness", summary: "off-by-one" }],
+      }) +
+      "\n```";
+    const result = buildAgentResult({
+      agent: "rev-agent",
+      agent_run_id: "ar-rev-ok",
+      output_kind: "reviewer",
+      raw_output: raw,
+    });
+    await withStateTransaction(projectDir, captureNow(), (tx) =>
+      persistAgentResult(tx, { result, output_kind: "reviewer", phase: "p1", model: null }),
+    );
+
+    const origin = await withStateTransaction(projectDir, captureNow(), async (tx) =>
+      (await tx.queryRow<{ origin: string }>("SELECT origin FROM findings"))?.origin,
+    );
+    assert.equal(origin, "code");
   });
 
   it("schema-invalid review with retry available: first failure re-issues (no finding), second failure blocks", async () => {

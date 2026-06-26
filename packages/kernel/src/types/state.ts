@@ -14,6 +14,15 @@ import type {
   PhaseRow,
 } from "./row-types.js";
 
+// The WORK signal, orthogonal to the orchestration `verdict`. `verdict`
+// says how the orchestration ended; `work_result` says whether the work
+// itself is clean. A task can be `failed_force_closed` (orchestration) yet
+// `clean` (work) — green code that an operator force-closed past a stuck
+// harness loop. Generic + domain-blind: `clean` ⇔ no open blocking CODE
+// finding remains; `blocked` ⇔ at least one does; `unknown` ⇔ not yet
+// evaluated (still in progress, or no terminal boundary reached).
+export type WorkResult = "clean" | "blocked" | "unknown";
+
 export interface PipelineState {
   schema_version: string;
   task_id: string | null;
@@ -25,6 +34,9 @@ export interface PipelineState {
   owner_id: string | null;
   status: "in_progress" | "completed" | "abandoned";
   verdict: "accepted" | "rejected" | "failed_force_closed" | null;
+  // Orthogonal to `verdict`: the WORK signal (null until a terminal
+  // boundary computes it). See `WorkResult`.
+  work_result: WorkResult | null;
   started_at: NowToken;
   ended_at: NowToken | null;
   // Wire-form PolicyName strings — closures are resolved at call time

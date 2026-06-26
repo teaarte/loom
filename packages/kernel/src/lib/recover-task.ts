@@ -37,6 +37,7 @@
 // exception) by the caller and threaded in here.
 
 import { resolveSpawnModel } from "../resolve-spawn-model.js";
+import { computeWorkResult } from "./work-result.js";
 import { KernelError } from "../state/db.js";
 import type { RecoveryChoice } from "../types/continue-task.js";
 import type { ProviderShuttleIntent } from "../types/provider.js";
@@ -252,9 +253,13 @@ function reShuttlePromptStub(
 async function applyAbandon(tx: Transaction, status: string): Promise<RecoveryOutcome> {
   if (status !== "in_progress") return "idempotent";
   await drainPending(tx);
+  // Capture the work signal at the abandon boundary too — an operator can
+  // see whether the work was clean when they walked away.
+  const workResult = await computeWorkResult(tx);
   await tx.exec(
-    "UPDATE pipeline_state SET status = 'abandoned', verdict = NULL, ended_at = ? WHERE id = 1",
-    [tx.now],
+    "UPDATE pipeline_state SET status = 'abandoned', verdict = NULL, " +
+      "work_result = ?, ended_at = ? WHERE id = 1",
+    [workResult, tx.now],
   );
   return "applied";
 }
@@ -271,10 +276,15 @@ async function applyForceClose(tx: Transaction, status: string): Promise<Recover
       "WHERE status NOT IN ('completed', 'skipped')",
     [tx.now],
   );
+  // The verdict records the ORCHESTRATION outcome (force-closed); work_result
+  // records whether the WORK was clean. The whole point of the split: green
+  // code force-closed past a stuck loop reads as failed_force_closed + clean,
+  // not a bare "failed".
+  const workResult = await computeWorkResult(tx);
   await tx.exec(
     "UPDATE pipeline_state SET status = 'completed', verdict = 'failed_force_closed', " +
-      "pipeline_violation = 'force-close', ended_at = ? WHERE id = 1",
-    [tx.now],
+      "work_result = ?, pipeline_violation = 'force-close', ended_at = ? WHERE id = 1",
+    [workResult, tx.now],
   );
   return "applied";
 }

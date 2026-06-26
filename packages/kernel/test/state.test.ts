@@ -108,6 +108,8 @@ describe("openDb", () => {
       "003-bypass-markers",
       "004-finding-supersede",
       "005-drop-stack-column",
+      "006-finding-origin",
+      "007-work-result",
     ]);
     for (const r of rows) assert.equal(r.version, "3.1.0");
   });
@@ -139,6 +141,8 @@ describe("migration runner — idempotent", () => {
       "003-bypass-markers",
       "004-finding-supersede",
       "005-drop-stack-column",
+      "006-finding-origin",
+      "007-work-result",
     ]);
   });
 });
@@ -157,9 +161,11 @@ describe("migration 005 — drop stack column", () => {
 
   it("migrates a pre-005 store forward: drops stack, preserves the row's other data", () => {
     // Hand-build a store at the pre-005 schema (pipeline_state carries the
-    // stack column) with 001–004 already recorded, so the runner applies
-    // ONLY 005 when the pool opens it. A populated stack value is discarded;
-    // every other column survives the drop.
+    // stack column) with 001–004 already recorded, so the runner applies the
+    // pending 005 + 006 when the pool opens it. A populated stack value is
+    // discarded; every other column survives the drop. A minimal `findings`
+    // table stands in for the one 001 created so 006 (ALTER TABLE findings)
+    // applies against the existing store.
     const dbPath = join(projectDir, ".loom", "state.db");
     mkdirSync(join(projectDir, ".loom"), { recursive: true });
     const raw = new DatabaseSync(dbPath);
@@ -184,6 +190,8 @@ describe("migration 005 — drop stack column", () => {
         "stack TEXT CHECK (stack IS NULL OR json_valid(stack)), " +
         "force_used INTEGER NOT NULL DEFAULT 0)",
     );
+    // Stand-in for the findings table 001 created; 006 alters it.
+    raw.exec("CREATE TABLE findings (id TEXT PRIMARY KEY)");
     raw
       .prepare(
         "INSERT INTO pipeline_state (id, schema_version, task_id, task, bundle, stack, force_used) " +

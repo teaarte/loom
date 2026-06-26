@@ -166,6 +166,7 @@ function buildState(projectDir: string, now: NowToken): PipelineState {
     owner_id: null,
     status: "in_progress",
     verdict: null,
+    work_result: null,
     started_at: now,
     ended_at: null,
     // Operator-override tier empty: every role resolves through the

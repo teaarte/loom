@@ -388,6 +388,7 @@ function inMemoryState(dir: string): PipelineState {
     owner_id: null,
     status: "in_progress",
     verdict: null,
+    work_result: null,
     started_at: NOW,
     ended_at: null,
     gate_policies: {} as Record<GateRole, PolicyName>,

@@ -20,7 +20,7 @@
 //
 // Ambient runtime: this is transport OUTSIDE the kernel's replay graph.
 
-import { cpSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { ProviderShuttleIntent } from "@loomfsm/kernel";
@@ -90,6 +90,34 @@ function writeSandboxDiff(dir: string, baseline: string): void {
   } catch {
     /* best-effort — the worktree itself is always readable */
   }
+}
+
+// Sandbox-relative path the transport seeds the persistent repo-brief to — the
+// same `.loom/work/` work area this shell already writes `diff.txt` into. When a
+// spawn opts in (`intent.extras.repo_brief`), the brief's TEXT is folded into
+// the spawn's system prompt so the structural map is unavoidably in-context,
+// rather than a file the model is merely TOLD to open (and, in practice, skips).
+// Best-effort: a run with the brief disabled / not seeded finds no file and the
+// intent passes through unchanged.
+const REPO_BRIEF_REL = join(".loom", "work", "repo-brief.md");
+
+function withInlinedRepoBrief(
+  intent: ProviderShuttleIntent,
+  worktreeDir: string,
+): ProviderShuttleIntent {
+  if (intent.extras?.["repo_brief"] !== true) return intent;
+  let brief: string;
+  try {
+    brief = readFileSync(join(worktreeDir, REPO_BRIEF_REL), "utf8").trim();
+  } catch {
+    return intent; // not seeded (brief off, or a degraded un-isolated run)
+  }
+  if (brief === "") return intent;
+  const prefix =
+    intent.system_prompt !== undefined && intent.system_prompt !== ""
+      ? `${intent.system_prompt}\n\n`
+      : "";
+  return { ...intent, system_prompt: `${prefix}${brief}` };
 }
 
 // What a backend run returns: the agent's text output, optionally paired with
@@ -216,7 +244,13 @@ export function createSandboxedExecutor(opts: SandboxedExecutorOptions): Executo
       // (a host's graceful-shutdown / per-drive deadline) or the per-spawn one
       // the loop passes (a wall-time budget breach / cancel). Both reach the
       // child via `runSpawn` → `spawnCapture`.
-      const ran = await opts.runSpawn(intent, wt.dir, combineSignals(opts.signal, signal));
+      // Fold the seeded repo-brief into the system prompt for an opted-in spawn
+      // (isolated trees only — the brief is seeded only when isolated). The rest
+      // of the method keeps using the original `intent` (agent / model / the
+      // edit-predicate are unchanged); only the prompt the backend receives
+      // gains the brief.
+      const runIntent = wt.isolated ? withInlinedRepoBrief(intent, wt.dir) : intent;
+      const ran = await opts.runSpawn(runIntent, wt.dir, combineSignals(opts.signal, signal));
       const agent_output = typeof ran === "string" ? ran : ran.output;
       const usage = typeof ran === "string" ? undefined : ran.usage;
 

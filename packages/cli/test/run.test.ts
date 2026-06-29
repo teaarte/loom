@@ -259,6 +259,49 @@ describe("loom run", () => {
     assert.ok(err.some((l) => /loom daemon stop|wait/.test(l)));
   });
 
+  it("prints help and does NOT drive when given --help", async () => {
+    const { env, out } = makeEnv();
+    let drove = false;
+    const code = await runTask(["--help"], env, {
+      resolveRegistry: () => ({}) as unknown as Registry,
+      buildExecutor: () => stubExecutor,
+      driveImpl: async () => {
+        drove = true;
+        return { kind: "complete", task_id: "t", verdict: "accepted", summary: "" };
+      },
+      acquireRunLock: noLock,
+    });
+    assert.equal(code, 0);
+    assert.equal(drove, false, "--help must not spawn a task");
+    assert.ok(out.some((l) => /--complexity/.test(l)), "help lists the run flags");
+  });
+
+  it("resumes the active task (no task text) when given --resume", async () => {
+    const { env } = makeEnv();
+    let sawTask: string | undefined = "SENTINEL";
+    const code = await runTask(["--resume"], env, {
+      resolveRegistry: () => ({}) as unknown as Registry,
+      buildExecutor: () => stubExecutor,
+      driveImpl: async (_dir, opts) => {
+        sawTask = opts.task;
+        return { kind: "complete", task_id: "t", verdict: "accepted", summary: "" };
+      },
+      acquireRunLock: noLock,
+    });
+    assert.equal(code, 0);
+    assert.equal(sawTask, undefined, "a resume omits the task so the drive attaches to the active one");
+  });
+
+  it("'loom resume' routes through the dispatcher without hitting the 'task required' guard", async () => {
+    const { env, err } = makeEnv();
+    // The dispatcher injects --resume → runTask. At the fake cwd the pipeline
+    // fails to load (exit 1), but crucially it must NOT refuse with "task is
+    // required" — that guard is what the dangling `loom resume` reference hit.
+    const code = await run(["resume"], env);
+    assert.notEqual(code, 0);
+    assert.ok(!err.some((l) => /task is required/.test(l)), "resume must not demand a task");
+  });
+
   it("releases the lock on every exit (complete, paused, error)", async () => {
     let released = 0;
     const lock = (): DaemonHandle => ({ update() {}, release() { released += 1; } });

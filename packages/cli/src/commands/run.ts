@@ -50,6 +50,29 @@ import type { CliEnv } from "../lib/env.js";
 const COMPLEXITY_LEVELS = ["trivial", "simple", "medium", "complex", "question"] as const;
 type ComplexityLevel = (typeof COMPLEXITY_LEVELS)[number];
 
+const RUN_HELP = `loom run "<task>" — drive a task to completion non-interactively
+
+Runs the task through the Claude Code CLI (claude -p) in an isolated git
+worktree, on your existing Claude Code login (subscription; no API key). Pauses
+and prints a human gate rather than answering it; re-run to resume.
+
+Usage:
+  loom run "<task>"
+  loom resume                 resume the active task (alias for a no-task run)
+
+Flags:
+  --complexity <level>        pin complexity (trivial|simple|medium|complex|
+                              question), skipping the classifier so the flow and
+                              cost are stable run-to-run
+  --replace                   discard the in-progress task and start fresh (it is
+                              archived to history, not destroyed)
+  --docker | --no-docker      run each spawn in a per-task container (or force off)
+  --resume                    resume the active task without giving a new one
+
+Policy presets (a single leading flag, before the task text):
+  --supervised  --auto  --review-plan  --review-final  --gates-on-blockers
+`;
+
 // Seams for tests: a suite injects a ready registry / stub executor / fake
 // drive / CLI-presence probes so it can assert the command's parsing +
 // reporting without standing up a real store, the Claude Code CLI, or Docker.
@@ -76,6 +99,12 @@ export async function runTask(
   env: CliEnv,
   overrides: RunOverrides = {},
 ): Promise<number> {
+  // Intercept the help flag BEFORE the rest of argv becomes the task string —
+  // otherwise `loom run --help` is parsed as a one-word task and spawns a run.
+  if (argv.includes("--help") || argv.includes("-h")) {
+    env.out(RUN_HELP);
+    return 0;
+  }
   // Pull the container toggle out before the rest of argv becomes the task
   // string (the CLI interprets nothing else about the task — it rides verbatim).
   const dockerFlag = argv.includes("--docker");
@@ -85,6 +114,10 @@ export async function runTask(
   // start over" case). The incumbent is force-archived (kept in history), not
   // destroyed.
   const replaceFlag = argv.includes("--replace");
+  // `--resume`: drive the ACTIVE task with no new one (what `loom resume`
+  // injects). It lifts the "a task is required" guard so a bare resume after a
+  // dropped transport picks the in-flight task back up.
+  const resumeFlag = argv.includes("--resume");
   const modeResult = containerModeFrom({ docker: dockerFlag, noDocker: noDockerFlag });
   if ("error" in modeResult) {
     env.err(`loom run: ${modeResult.error}`);
@@ -101,7 +134,7 @@ export async function runTask(
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === undefined) continue;
-    if (a === "--docker" || a === "--no-docker" || a === "--replace") continue;
+    if (a === "--docker" || a === "--no-docker" || a === "--replace" || a === "--resume") continue;
     let value: string | undefined;
     if (a === "--complexity") value = argv[++i];
     else if (a.startsWith("--complexity=")) value = a.slice("--complexity=".length);
@@ -116,15 +149,24 @@ export async function runTask(
     taskTokens.push(a);
   }
   const raw = taskTokens.join(" ").trim();
-  if (raw.length === 0) {
+  if (raw.length === 0 && !resumeFlag) {
     env.err('loom run: a task is required — e.g. loom run "add a health check route"');
     return 1;
   }
 
   const target = env.cwd;
-  const { parseTaskArgs } = await import("@loomfsm/mcp-server/parse-task-args");
-  const { task, policy_preset, warnings } = parseTaskArgs(raw);
-  for (const w of warnings) env.err(`loom run: ${w}`);
+  // A resume (`loom resume` / `--resume` with no text) leaves `task` undefined
+  // so the drive picks up the active task instead of starting a new one. With
+  // task text present we parse a leading policy flag off it, as a normal run.
+  let task: string | undefined;
+  let policy_preset: string | undefined;
+  if (raw.length > 0) {
+    const { parseTaskArgs } = await import("@loomfsm/mcp-server/parse-task-args");
+    const parsed = parseTaskArgs(raw);
+    task = parsed.task;
+    policy_preset = parsed.policy_preset;
+    for (const w of parsed.warnings) env.err(`loom run: ${w}`);
+  }
 
   // Resolve the pipeline once, build the executor from it, and pin it for
   // the whole drive (the registry is a static product of bundle + config).
@@ -179,7 +221,7 @@ export async function runTask(
 
   try {
     return await drive_(target, env, overrides, cfgEnv, registry, resolveRegistry, {
-      task,
+      ...(task !== undefined ? { task } : {}),
       ...(policy_preset !== undefined ? { policy_preset } : {}),
       replaceFlag,
       ...(complexity !== undefined ? { complexity } : {}),
@@ -200,7 +242,7 @@ export async function runTask(
 // `runTask`; the only addition is that `signal` now reaches the executor and the
 // drive so a cancel tears spawns down.
 interface DriveParams {
-  task: string;
+  task?: string;
   policy_preset?: string;
   replaceFlag: boolean;
   complexity?: ComplexityLevel;
@@ -302,7 +344,9 @@ async function drive_(
     // pinned resolver would hand back a registry without re-reconciling, and the
     // replacement task would refuse with "no enabled bundle".
     resolveRegistry,
-    task,
+    // Omit `task` entirely on a resume (`loom resume`) so the drive attaches to
+    // the active task; an empty string would read as "start a blank task".
+    ...(task !== undefined ? { task } : {}),
     // Hard total-spawn ceiling (LOOM_MAX_SPAWNS, default 40; 0 disables) so a
     // non-converging revise loop stops before it runs up the bill.
     max_total_spawns: resolveSpawnCap(cfgEnv),

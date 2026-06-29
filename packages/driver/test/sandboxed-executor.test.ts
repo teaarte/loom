@@ -364,6 +364,77 @@ describe("createSandboxedExecutor — seeds static files into the sandbox", () =
   });
 });
 
+describe("createSandboxedExecutor — inlines the seeded repo-brief into the system prompt", () => {
+  const BRIEF = "# Repo structural brief\n- src/client.ts (14 dependents)\n";
+
+  // Seed the brief at the convention path + run one spawn; return the
+  // system_prompt the backend actually received.
+  async function systemPromptSeenFor(
+    extras: Record<string, unknown> | undefined,
+    baseSystemPrompt: string | undefined,
+  ): Promise<string | undefined> {
+    const projectDir = freshGitProject();
+    const briefSrc = mkdtempSync(join(tmpdir(), "loom-brief-inline-"));
+    writeFileSync(join(briefSrc, "repo-brief.md"), BRIEF, "utf8");
+    try {
+      let seen: string | undefined = "UNSET";
+      const executor = createSandboxedExecutor({
+        project_dir: projectDir,
+        sandbox_seed: [{ src: join(briefSrc, "repo-brief.md"), rel: ".loom/work/repo-brief.md" }],
+        runSpawn: async (i) => {
+          seen = i.system_prompt;
+          return "ok";
+        },
+      });
+      await executor.execute(
+        intent({
+          ...(extras !== undefined ? { extras } : {}),
+          ...(baseSystemPrompt !== undefined ? { system_prompt: baseSystemPrompt } : {}),
+        }),
+      );
+      return seen;
+    } finally {
+      cleanup(projectDir);
+      rmSync(briefSrc, { recursive: true, force: true });
+    }
+  }
+
+  it("appends the brief to an opted-in spawn's system prompt, after the base", async () => {
+    const seen = await systemPromptSeenFor({ repo_brief: true }, "BASE INSTRUCTIONS");
+    assert.ok(seen?.startsWith("BASE INSTRUCTIONS"), "base instructions stay the prefix");
+    assert.ok(seen?.includes(BRIEF.trim()), "the brief text is folded in");
+  });
+
+  it("inlines the brief even when the agent has no base system prompt", async () => {
+    const seen = await systemPromptSeenFor({ repo_brief: true }, undefined);
+    assert.equal(seen, BRIEF.trim());
+  });
+
+  it("leaves the system prompt untouched when the agent did NOT opt in", async () => {
+    const seen = await systemPromptSeenFor(undefined, "BASE INSTRUCTIONS");
+    assert.equal(seen, "BASE INSTRUCTIONS");
+  });
+
+  it("degrades to the base prompt when the brief was not seeded", async () => {
+    // Opted in, but no brief seeded → the intent passes through unchanged.
+    const projectDir = freshGitProject();
+    try {
+      let seen: string | undefined = "UNSET";
+      const executor = createSandboxedExecutor({
+        project_dir: projectDir,
+        runSpawn: async (i) => {
+          seen = i.system_prompt;
+          return "ok";
+        },
+      });
+      await executor.execute(intent({ extras: { repo_brief: true }, system_prompt: "BASE" }));
+      assert.equal(seen, "BASE");
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+});
+
 describe("provisionWorktree — full copy carries gitignored files + deps", () => {
   for (const forcePlainCopy of [false, true]) {
     const label = forcePlainCopy ? "plain copy (forced fallback)" : "copy-on-write";

@@ -284,6 +284,13 @@ export async function drive(projectDir: string, opts: DriveOptions): Promise<Dri
         recovery_options: [],
       };
     }
+    // A brand-new task on an EMPTY slot must not inherit a prior (reset- or
+    // archived-) task's isolated copy: a leftover dirty worktree would pollute
+    // this task's self-diff, review, and acceptance with edits that are not its
+    // own. The auto-rotate and --replace paths below already reset; the
+    // fresh-start path did not, so a `loom reset` followed by a new `loom run`
+    // silently reused a stale, half-implemented worktree. Reset it here too.
+    resetWorktree(projectDir);
     const created = await createAndStart(projectDir, createArgs(registry, uuid, opts));
     response = created.response;
     driverStateId = created.driver_state_id;
@@ -620,6 +627,10 @@ function buildExecIntents(
     };
     if (agentDef.system_prompt !== undefined) intent.system_prompt = agentDef.system_prompt;
     if (agentDef.mcp_tools !== undefined) intent.mcp_tools_available = agentDef.mcp_tools;
+    // Carry the agent's opaque passthrough so a re-shuttle keeps any
+    // transport-only spawn flag (e.g. the repo-brief inline) the first
+    // dispatch had — the kernel relays it without reading it.
+    if (agentDef.extras !== undefined) intent.extras = { ...agentDef.extras };
     return intent;
   });
 }

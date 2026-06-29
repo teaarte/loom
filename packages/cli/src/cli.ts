@@ -56,12 +56,17 @@ Usage:
       pending agents and how long they've waited. Flags a stalled task (a
       likely dropped transport) — resume it with /proceed or 'loom resume'.
 
-  loom run "<task>"
+  loom run "<task>" [--complexity <level>] [--replace] [--docker|--no-docker]
       Drive a task to its end non-interactively, executing each spawn through
       the Claude Code CLI (claude -p) in an isolated git worktree — on your
       existing Claude Code login (subscription), no API key required. Pauses
       and prints a human gate rather than answering it. Needs Claude Code
-      installed and signed in.
+      installed and signed in. --complexity (trivial|simple|medium|complex|
+      question) pins the flow and skips the classifier; 'loom run --help'
+      lists every flag.
+  loom resume
+      Resume the active task after an interruption (a dropped transport) without
+      giving a new one — equivalent to re-running 'loom run' on the same task.
 
   loom daemon start [--watch] [--detach] ["<task>"]
       Run a long-lived supervisor over this project: drive the task headless,
@@ -151,6 +156,10 @@ export function run(argv: string[], env: CliEnv = processEnv()): number | Promis
       return status(rest, env);
     case "run":
       return runTask(rest, env);
+    case "resume":
+      // Resume the active task without a new one. The status line + several
+      // help strings point operators at `loom resume`; it is a no-task run.
+      return runTask(["--resume", ...rest], env);
     case "daemon":
       return daemon(rest, env);
     case "serve":

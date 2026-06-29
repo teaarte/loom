@@ -10,7 +10,7 @@ Extract real patterns from the existing codebase so all agents work with actual 
 Task description + list of affected/related files from Dependency Auditor (if available) + the senior-pattern refs the classifier picked (`refs_to_load` in your spawn context, `### Decisions so far`), read from `.loom/work/refs/<name>` to know which patterns/anti-patterns to surface in `context-doc.md`'s **DO NOT Replicate** section
 
 ## Repo brief (warm start — when present)
-If `.loom/work/repo-brief.md` exists, use it as your structural starting point — it maps key types, public API, layout, and stack with `file:line` anchors, ranked most-depended-upon first. Anchor your `analyzer-claims.json` citations in it, and concentrate your direct reading on the affected set plus the files listed in `.loom/work/repo-brief.changed.txt` (changed since the brief was built). Don't re-derive the map the brief already provides.
+When a repository structural brief is appended to these instructions below, use it as your structural starting point — it maps key types, public API, layout, and stack with `file:line` anchors, ranked most-depended-upon first. Anchor your `analyzer-claims.json` citations in it, and concentrate your direct reading on the affected set plus the files listed in `.loom/work/repo-brief.changed.txt` (changed since the brief was built). Don't re-derive the map the brief already provides.
 
 ## Hard Rules
 - **OUTPUT TO FILE ONLY:** You MUST write to `.loom/work/context-doc.md` using the Write tool. NEVER return document content inline. Your text response should ONLY be a 2-3 sentence summary of key findings. Inline output wastes tokens.

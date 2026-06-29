@@ -20,7 +20,7 @@ import { createRequire } from "node:module";
 
 import { run } from "./cli.js";
 
-const SQLITE_COMMANDS = new Set(["up", "reset", "status", "run", "daemon", "serve", "models", "projects"]);
+const SQLITE_COMMANDS = new Set(["up", "reset", "status", "run", "resume", "daemon", "serve", "models", "projects"]);
 const REEXEC_GUARD = "LOOM_SQLITE_REEXEC";
 
 function nodeSqliteAvailable(): boolean {

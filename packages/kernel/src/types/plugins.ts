@@ -66,6 +66,12 @@ export interface Agent extends PluginMeta {
     soft_threshold_tokens?: number;
     hard_threshold_tokens?: number;
   };
+  // Opaque per-agent passthrough the kernel forwards verbatim onto every spawn
+  // intent (`ProviderShuttleIntent.extras`) WITHOUT reading any key — the same
+  // domain-blind channel the intent already carries. A bundle uses it to flag
+  // transport-only spawn behaviour the substrate must not name (e.g. a runtime
+  // asset the transport should fold into the prompt); the kernel only relays it.
+  extras?: Record<string, unknown>;
 }
 
 // ============================================================================

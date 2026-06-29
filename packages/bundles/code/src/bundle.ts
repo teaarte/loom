@@ -918,8 +918,8 @@ export default defineBundle({
     // premium `planner-deep` runs ONLY the complex flow, where the blast radius
     // earns the deeper model. Same template; the flow selects the tier (a static
     // default_model can't be tier-by-complexity — one agent name would span both).
-    { name: "planner", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "balanced" },
-    { name: "planner-deep", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "premium" },
+    { name: "planner", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "balanced", extras: { repo_brief: true } },
+    { name: "planner-deep", template_path: "agents/planner.md", output_kind: "nonreview", default_model: "premium", extras: { repo_brief: true } },
     // The implementer runs every round UNTIL it has stalled (two prior
     // implementation rounds blocked), at which point it self-skips and the
     // premium `implementer-escalated` below takes the third round instead.
@@ -938,14 +938,14 @@ export default defineBundle({
     // substrate's structured-output merge lands the envelope in
     // `decisions.checks`, which the `apply-checks` Step reads back.
     { name: "checks-runner", template_path: "agents/checks-runner.md", output_kind: "classifier", default_model: "fast" },
-    { name: "code-analyzer", template_path: "agents/code-analyzer.md", output_kind: "nonreview", default_model: "balanced" },
+    { name: "code-analyzer", template_path: "agents/code-analyzer.md", output_kind: "nonreview", default_model: "balanced", extras: { repo_brief: true } },
     // Fast-tier scout for the lean `simple` flow (same code-analyzer template).
     // The cheap tier produces a context doc the planner reads instead of cold-
     // reading the whole repo — the planner is the run's costliest agent, so a
     // cheap pre-read pays for itself. medium/complex keep the balanced
     // `code-analyzer` (the `enrich` stage); the flow picks the tier, since a
     // single static default_model cannot be tier-by-flow.
-    { name: "code-analyzer-light", template_path: "agents/code-analyzer.md", output_kind: "nonreview", default_model: "fast" },
+    { name: "code-analyzer-light", template_path: "agents/code-analyzer.md", output_kind: "nonreview", default_model: "fast", extras: { repo_brief: true } },
     {
       name: "architect",
       template_path: "agents/architect.md",
@@ -956,6 +956,7 @@ export default defineBundle({
       // implementer that turn the advice into code keep the premium tier.
       default_model: "balanced",
       applies_to: (s) => decisionEquals(s, "complexity", "complex"),
+      extras: { repo_brief: true },
     },
     // The always-relevant reviewers self-gate on `source_changed`: a doc-only
     // outcome (every changed file a doc) sets it false in `pre-review`, so the

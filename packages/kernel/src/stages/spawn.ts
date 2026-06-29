@@ -85,7 +85,10 @@ export async function interpretSpawn(
     agent.default_model ??
     "default";
 
-  const extras: Record<string, unknown> = { provider: provider.name };
+  // The agent's opaque passthrough rides first; the kernel's own keys
+  // (provider, template_path) are authoritative and set after, so a bundle
+  // cannot shadow them.
+  const extras: Record<string, unknown> = { ...(agent.extras ?? {}), provider: provider.name };
   if (agent.template_path.length > 0) {
     extras["template_path"] = agent.template_path;
   }

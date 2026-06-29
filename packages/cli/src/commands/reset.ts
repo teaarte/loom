@@ -74,6 +74,12 @@ export async function reset(argv: string[], env: CliEnv): Promise<number> {
       return 0;
     }
     env.out(`archived ${result.task_id ?? "(unknown)"} → ${result.history_path}`);
+    // GC the project's isolated sandbox copies too. Archiving frees the task
+    // slot but leaves the per-project worktree copy on disk; without this a
+    // `loom reset` followed by a new `loom run` reused a stale, dirty worktree
+    // and the new task's self-diff/review inherited edits that weren't its own.
+    const { resetWorktree } = await import("@loomfsm/driver");
+    resetWorktree(target);
     env.out(`slot cleared — the next task in ${target} starts fresh`);
     return 0;
   } catch (err) {
